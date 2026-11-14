@@ -378,7 +378,7 @@ The same six columns as `oddport`, with index `gate_t` on `t` and natural key `(
 | `model`, `effort` | `text` | On verifier rows, the second model and its effort |
 | `usage` | `text` | On verifier rows, JSON: its input, output and cache-read tokens |
 
-Indexes `decisions_t` on `t` and `decisions_name` on `(name, t)`. `autoblock.log_decision` appends the rows; the trigger `decisions_append_only` refuses any `UPDATE`, so a later outcome is always a new row and a rule tried twice keeps both histories. `autoblock.decisions` reads them. Rows go only with `DECISIONS_DAYS` set to a number of days ([design decision 41](../design-decisions.md#41-the-autonomy-refuses-what-it-cannot-see-and-keeps-what-it-decided)). <!-- (fin-release) --> The prune and `tvgw forget` keep the `apply` row of a re-apply AdGuard is still owed (`autoblock.owed_push_id`); forget keeps it without its rule and name.
+Indexes `decisions_t` on `t` and `decisions_name` on `(name, t)`. `autoblock.log_decision` appends the rows; the trigger `decisions_append_only` refuses any `UPDATE`, so a later outcome is always a new row and a rule tried twice keeps both histories. `autoblock.decisions` reads them. Rows go only with `DECISIONS_DAYS` set to a number of days ([design decision 41](../design-decisions.md#41-the-autonomy-refuses-what-it-cannot-see-and-keeps-what-it-decided)). <!-- (fin-release) --> The prune keeps the row that owes AdGuard a re-apply (`autoblock.owed_push_id`: an `apply` row, or the `reverted` row of a revert no push has followed). `tvgw forget` keeps the debt as one `apply` row without rule or name, and so does the sweep of late rows after it.
 
 ### `auto_queue`
 

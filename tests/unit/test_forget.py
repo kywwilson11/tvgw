@@ -408,6 +408,29 @@ def test_a_push_owed_to_adguard_outlives_the_forget_under_no_name(tree):
     assert [str(p) for p in every_file(*roots(tree)) if contains_canary(p)] == []
 
 
+def test_a_push_owed_by_a_row_written_late_stays_owed_under_no_name_when_the_late_rows_go(tree):
+    """An hourly check that began before the forget stamps its rows with its start, and with a canary
+    it runs for minutes: its revert's row is a late one. `drop_late` took the debt with the row, and
+    AdGuard kept a rule the file no longer held."""
+    from tvgw import autoblock
+
+    forget.run(tree, live=live(tree), lock=False)
+    conn = db.connect(tree.db_path)
+    autoblock.log_decision(conn, "judge", "reverted", NOW - 60, f"||{CANARY}^", CANARY)
+    assert forget.drop_late(conn, now=NOW + 600) == 1
+    (row,) = autoblock.decisions(conn)
+    assert (row["stage"], row["outcome"], row["rule"], row["name"], row["t"]) == (
+        "apply",
+        autoblock.DEFERRED,
+        None,
+        None,
+        NOW,
+    )
+    assert autoblock.push_owed(conn) and forget.drop_late(conn, now=NOW + 1200) == 0
+    assert autoblock.decisions(conn) == [row]  # kept once, however often the late rows are swept
+    conn.close()
+
+
 def test_nothing_owed_leaves_decisions_empty_after_the_forget(tree):
     from tvgw import autoblock
 

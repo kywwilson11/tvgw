@@ -1318,11 +1318,12 @@ class _Autonomy:
         autoblock.set_canary(self.conn, rule, outcome)
         if outcome == "reverted":
             autoblock.remove_rule(self.s.auto_rules, rule)
+            planned_after = autoblock.newest_decision(self.conn)
             kind, err = _push(self.apply_fn, self.sleep)
             if not kind:  # the canary's `reverted` row owed this push from the moment it was written
-                autoblock.log_decision(
-                    self.conn, "apply", autoblock.PUSHED, self.now(), rule, name, source,
-                    trial_id=trial_id, reason="the revert reached AdGuard",
+                autoblock.record_push(
+                    self.conn, planned_after, self.now(), REVERT_TOOK,
+                    rule=rule, name=name, source=source, trial_id=trial_id,
                 )  # fmt: skip
             elif kind == "deferred":  # (fin-release) the next hourly check pushes it (autoblock.push_owed)
                 why += f"; {DEFERRED_NOTE}"
@@ -1503,6 +1504,7 @@ def _push(apply_fn, sleep: Callable[[float], None]) -> tuple[str, str]:
 # the reason of a rule the hourly check found in the machine's file with no active record
 NO_RECORD = "no record of this rule: taken out of the machine's file"
 PUSH_TOOK = "the owed re-apply took"  # an `apply` row's reason, and the check's word, when AdGuard caught up
+REVERT_TOOK = "the revert reached AdGuard"  # the same row's reason when the run that reverted also pushed
 
 
 def check(
@@ -1584,6 +1586,7 @@ def check(
         if row.get("canary") == autoblock.ARMED and kind in ("passed", "reverted"):
             _unobserved(conn, row, now)
         decisions.append({"rule": row["rule"], "name": row["name"], "verdict": kind, "reason": why})
+    planned_after = autoblock.newest_decision(conn)
     kind, err = _push(apply_fn, hooks.get("sleep", time.sleep)) if (reapply or owed) else ("", "")
     reverted = [d for d in decisions if d["verdict"] == "reverted"]
     if kind == "deferred":  # (fin-release) not an error: the verdicts stand and the next check pushes
@@ -1594,8 +1597,9 @@ def check(
         for d in reverted or [{"rule": None, "name": None}]:
             autoblock.log_decision(conn, "apply", autoblock.DEFERRED, now, d["rule"], d["name"], reason=err)
     elif not kind and (reapply or owed):  # it took: these reverts, and any owed from before, are in AdGuard
-        autoblock.log_decision(conn, "apply", autoblock.PUSHED, now, reason=PUSH_TOOK)
-        if owed:  # said, so that the hour after a WARNING shows it was put right
+        # said when a push was owed, so that the hour after a WARNING shows it was put right; not said,
+        # and not recorded, when an undo came while this push waited: the next check pushes again
+        if autoblock.record_push(conn, planned_after, now, PUSH_TOOK) and owed:
             decisions.append({"rule": None, "name": None, "verdict": autoblock.PUSHED, "reason": PUSH_TOOK})
     elif kind == "failed":
         for d in reverted:
@@ -1659,10 +1663,13 @@ def _unobserved(conn: sqlite3.Connection, row: dict, now: float) -> None:
 
 
 def _owner_reverted(conn: sqlite3.Connection, row: dict, why: str, now: float) -> None:
-    autoblock.decide(conn, row["rule"], "reverted", why, now)
+    """The owner took the rule out. The row that owes AdGuard the push first, then the record's verdict:
+    stopped between the two, the record is still active with its rule gone from the file, and the next
+    check reads that as the owner's and pushes."""
     autoblock.log_decision(
         conn, "owner", "reverted", now, row["rule"], row["name"], row["source"], row.get("trial_id"), why
     )
+    autoblock.decide(conn, row["rule"], "reverted", why, now)
     if row.get("canary") == autoblock.ARMED:
         _unobserved(conn, row, now)
 
@@ -1693,10 +1700,11 @@ def undo(
         autoblock.remove_rule(s.auto_rules, row["rule"])
         _owner_reverted(conn, row, "owner undo", now)
     if chosen:
+        planned_after = autoblock.newest_decision(conn)
         try:
             adguardcfg.retry_busy(apply_fn, sleep)
             # the whole file reached AdGuard: this revert, and any push owed from before it
-            autoblock.log_decision(conn, "apply", autoblock.PUSHED, now, reason="the revert reached AdGuard")
+            autoblock.record_push(conn, planned_after, now, REVERT_TOOK)
         except adguardcfg.Deferred as e:
             _owe(conn, chosen, autoblock.DEFERRED, _deferred_text(e), now)
         except Exception as e:

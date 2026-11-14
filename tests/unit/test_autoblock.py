@@ -2243,18 +2243,24 @@ def the_hourly_check_reverts(s, key, lg, conn, fault) -> FakeAdGuard:
     return adguard
 
 
-def the_canary_reverts(s, key, lg, conn, fault) -> FakeAdGuard:
-    adguard, n = FakeAdGuard(s, fault, takes=1), iter(range(1, 99))
+def a_canary_takes_its_block_back(s, key, lg, apply, sleep=lambda seconds: None) -> None:
+    """One autonomous run that blocks tracker.example, watches the TV's traffic collapse and reverts."""
+    n = iter(range(1, 99))
 
     def collapsing():
         i = next(n)
         return autoblock.Sample(T0 + 90000 + i * 60, 60_000_000 * min(i, 2), "Active", APP)
 
-    slept = []
-    hooks = {"call": agree, "apply": adguard, "sampler": collapsing, "sleep": slept.append}
+    hooks = {"call": agree, "apply": apply, "sampler": collapsing, "sleep": sleep}
     client = FakeClient(message(proposals(block("tracker.example"))))
     assert analyst.run(s, lg, DAY, make_client=lambda k: client, key_path=key, hooks=hooks) == 0
-    assert "reverted within minutes" in md(s) and "AdGuard re-apply failed" in md(s)
+    assert "reverted within minutes" in md(s)
+
+
+def the_canary_reverts(s, key, lg, conn, fault) -> FakeAdGuard:
+    adguard, slept = FakeAdGuard(s, fault, takes=1), []
+    a_canary_takes_its_block_back(s, key, lg, adguard, slept.append)
+    assert "AdGuard re-apply failed" in md(s)
     waited = isinstance(fault, adguardcfg.Busy) * (adguardcfg.BUSY_TRIES - 1)
     assert slept.count(adguardcfg.BUSY_PAUSE) == waited  # between the tries, through the run's own sleep
     return adguard
@@ -2343,6 +2349,116 @@ def test_a_revert_whose_run_is_stopped_before_its_push_is_owed_all_the_same(auto
     conn.close()
 
 
+KEPT_RULE = "||kept.example^"
+
+
+def kept(s: Settings, conn, rule: str = KEPT_RULE) -> None:
+    """A machine rule whose trial passed: in the file, in AdGuard, and the owner's to undo."""
+    on_trial(s, conn, rule)
+    autoblock.decide(conn, rule, "passed", "no harm seen", T0 + 10)
+
+
+def met_by_an_undo(s, lg, conn, adguard: FakeAdGuard, at: int = 1):
+    """An apply for `adguard` whose `at`th call plans from the file, as `tvgw adguard apply` does, and
+    then waits for AdGuard so long that the owner's `tvgw undo --all`, made meanwhile, gives up waiting.
+    Only then does it land what it planned. The calls before it land at once."""
+    calls = iter(range(1, 99))
+
+    def apply() -> None:
+        if next(calls) != at:
+            return adguard()
+        planned = autoblock.read_rules(s.auto_rules)
+        held = FakeAdGuard(s, adguardcfg.Busy("another apply holds the lock"))
+        with pytest.raises(adguardcfg.Busy):
+            analyst.undo(conn, s, lg, True, held, now=T0 + 3700, sleep=lambda seconds: None)
+        adguard.rules = planned
+
+    return apply
+
+
+def the_hourly_check_was_pushing(s, key, lg, conn, adguard) -> None:
+    on_trial(s, conn)
+    autoblock.log_decision(conn, "apply", autoblock.DEFERRED, T0 + 60)  # and a push owed from before
+    harm = {
+        **QUIET,
+        "judge": lambda c, p, row, now: ("reverted", "harm") if row["rule"] == TRACKER_RULE else None,
+    }
+    (d,) = analyst.check(
+        conn, s, lg, now=T0 + 3600, apply_fn=met_by_an_undo(s, lg, conn, adguard), hooks=harm
+    )
+    assert d["verdict"] == "reverted"  # and no word that the owed push took: it settled nothing
+
+
+def the_canary_was_pushing(s, key, lg, conn, adguard) -> None:
+    a_canary_takes_its_block_back(s, key, lg, met_by_an_undo(s, lg, conn, adguard, at=2))
+
+
+def another_undo_was_pushing(s, key, lg, conn, adguard) -> None:
+    on_trial(s, conn)
+    analyst.undo(conn, s, lg, apply_fn=met_by_an_undo(s, lg, conn, adguard), now=T0 + 3600)
+
+
+@pytest.mark.parametrize(
+    "push", [the_hourly_check_was_pushing, the_canary_was_pushing, another_undo_was_pushing]
+)
+def test_an_undo_made_while_another_push_waited_for_adguard_is_owed_when_that_push_lands(auto, lg, push):
+    """A push is planned from the file before it waits for AdGuard, and an undo made during the wait is
+    not in its plan. Its `pushed` row once settled the undo's debt all the same: AdGuard went on
+    refusing a name the owner had taken back, the file did not hold the rule, and nothing was owed."""
+    s, key = auto
+    conn = db.connect(s.db_path)
+    kept(s, conn)
+    adguard = FakeAdGuard(s)
+    push(s, key, lg, conn, adguard)
+    assert autoblock.read_rules(s.auto_rules) == [] and adguard.rules  # AdGuard holds what the file lacks
+    assert autoblock.push_owed(conn)
+    (landed,) = analyst.check(conn, s, lg, now=T0 + 99000, apply_fn=adguard, hooks=QUIET)
+    assert landed["verdict"] == "pushed" and adguard.rules == [] and not autoblock.push_owed(conn)
+    conn.close()
+
+
+def by_an_undo(s, lg, conn, adguard) -> None:
+    analyst.undo(conn, s, lg, apply_fn=adguard, now=T0 + 3600, sleep=lambda seconds: None)
+
+
+def by_a_line_deleted_from_the_file(s, lg, conn, adguard) -> None:
+    autoblock.remove_rule(s.auto_rules, TRACKER_RULE)
+    analyst.check(conn, s, lg, now=T0 + 3600, apply_fn=adguard, hooks=QUIET)
+
+
+@pytest.mark.parametrize("taken_back", [by_an_undo, by_a_line_deleted_from_the_file])
+def test_an_owners_revert_stopped_between_its_two_writes_is_owed_all_the_same(
+    auto, lg, monkeypatch, taken_back
+):
+    """The owner's row and the record's verdict are two writes. Stopped after the first, whichever it
+    is, the revert must not be lost: with the verdict first the record was closed, no row owed the
+    push, and AdGuard kept the rule."""
+    s, _ = auto
+    conn = db.connect(s.db_path)
+    on_trial(s, conn)
+    adguard, writes = FakeAdGuard(s), iter([None, Killed()])
+
+    def stopping(write, counted=lambda *a: True):
+        def step(*a, **k):
+            if counted(*a) and (stop := next(writes, None)) is not None:
+                raise stop
+            return write(*a, **k)
+
+        return step
+
+    with monkeypatch.context() as m:
+        m.setattr(autoblock, "decide", stopping(autoblock.decide))
+        m.setattr(
+            autoblock, "log_decision", stopping(autoblock.log_decision, lambda c, stage, *a: stage == "owner")
+        )
+        with pytest.raises(Killed):
+            taken_back(s, lg, conn, adguard)
+    assert adguard.rules == [TRACKER_RULE] and autoblock.read_rules(s.auto_rules) == []
+    analyst.check(conn, s, lg, now=T0 + 7200, apply_fn=adguard, hooks=QUIET)
+    assert adguard.rules == [] and not autoblock.push_owed(conn) and autoblock.active(conn) == []
+    conn.close()
+
+
 REVERTED = [(stage, "reverted") for stage in ("judge", "owner", "canary")]
 
 
@@ -2372,6 +2488,31 @@ def test_a_push_is_owed_from_a_revert_until_a_push_is_recorded(tmp_path, rows, o
     conn.close()
 
 
+@pytest.mark.parametrize(
+    ("meanwhile", "settled"),
+    [
+        ([], True),
+        ([("apply", "applied")], True),  # a new block owes nothing, and its row keeps no debt open
+        *(([revert], False) for revert in REVERTED),
+        *(([("apply", outcome)], False) for outcome in autoblock.OWED),
+    ],
+)
+def test_a_push_settles_only_what_was_written_before_it_was_planned(tmp_path, meanwhile, settled):
+    """`record_push` writes `pushed` for a push whose plan held every revert so far. A revert written
+    after the plan was made, or a push another run still owes, is not in it and goes on owing."""
+    conn = db.connect(str(tmp_path / "s.db"))
+    assert autoblock.newest_decision(conn) == 0
+    autoblock.log_decision(conn, "owner", "reverted", T0)  # before the plan, so in it
+    planned_after = autoblock.newest_decision(conn)
+    for stage, outcome in meanwhile:
+        autoblock.log_decision(conn, stage, outcome, T0 + 1)
+    assert autoblock.record_push(conn, planned_after, T0 + 2, "took", rule=TRACKER_RULE) is settled
+    last = autoblock.decisions(conn)[-1]
+    assert ((last["outcome"], last["rule"], last["reason"]) == ("pushed", TRACKER_RULE, "took")) is settled
+    assert autoblock.push_owed(conn) is not settled
+    conn.close()
+
+
 def test_a_name_written_with_the_roots_dot_hides_nothing_it_carried(auto):
     """A flow is named as its hello wrote the name, and `dl.tracker.example.` is the same host."""
     s, _ = auto
@@ -2385,6 +2526,11 @@ def test_a_name_written_with_the_roots_dot_hides_nothing_it_carried(auto):
         == 50_000_000
     )
     assert autoblock.reach(conn, "tracker.example", (), *window, now=T0)["median_down"] == 50_000_000
+    # and a name asked about as the hello wrote it gets the same shape, under the name as asked
+    dotted, plain = "dl.tracker.example.", "dl.tracker.example"
+    alone, both = (autoblock.shapes(conn, names, *window) for names in ([dotted], [dotted, plain]))
+    assert alone[dotted]["total_down"] == 50_000_000
+    assert list(both) == [dotted, plain] and both[dotted] == both[plain] == alone[dotted]
     conn.close()
 
 

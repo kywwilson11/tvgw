@@ -162,17 +162,19 @@ def shapes(conn: sqlite3.Connection, names: list[str], since: float, until: floa
     the name was ever looked up. Never when: a shape goes to both models, and the first and last time a
     name was used is a piece of the household's day (design decision 91). A flow is named as its hello
     wrote the name, and a hello may end it with the root's dot: that dot is read past, or a name would
-    hide what it carried by writing one."""
+    hide what it carried by writing one. A name asked about with the dot gets the same shape, under
+    the name as asked."""
     names = [n for n in dict.fromkeys(names) if n]
     if not names:
         return {}
-    marks = ",".join("?" * len(names))
+    bare = sorted({n.rstrip(".") for n in names})
+    marks = ",".join("?" * len(bare))
     rows_ = conn.execute(
         f"""WITH f AS (SELECT {queries.FLOW_NAME} AS name, t_start, t_end, bytes_down, bytes_up FROM flows f
                       WHERE f.t_end >= ? AND f.t_end < ?)
             SELECT rtrim(name, '.'), t_start, t_end, COALESCE(bytes_down, 0), COALESCE(bytes_up, 0) FROM f
             WHERE rtrim(name, '.') IN ({marks})""",
-        (since, until, *names),
+        (since, until, *bare),
     ).fetchall()
     readings = conn.execute(
         f"SELECT t, COALESCE(app, '') FROM tvstate WHERE t >= ? AND t < ? AND power IN ({_AWAKE_MARKS})",
@@ -184,7 +186,7 @@ def shapes(conn: sqlite3.Connection, names: list[str], since: float, until: floa
             f"SELECT qname, COUNT(DISTINCT date(t, 'unixepoch', 'localtime')) FROM dns"
             f" WHERE qname IN ({marks})"
             " GROUP BY qname",
-            names,
+            bare,
         )
     )
     per: dict[str, list] = {}
@@ -192,7 +194,7 @@ def shapes(conn: sqlite3.Connection, names: list[str], since: float, until: floa
         per.setdefault(name, []).append((a if a is not None else b, b, down, up))
     out = {}
     for name in names:
-        flows = per.get(name, [])
+        flows, days_seen = per.get(name.rstrip("."), []), int(days.get(name.rstrip("."), 0))
         if flows:
             downs = [d for _, _, d, _ in flows]
             ups = [u for _, _, _, u in flows]
@@ -206,10 +208,10 @@ def shapes(conn: sqlite3.Connection, names: list[str], since: float, until: floa
                 median_seconds=round(statistics.median(max(0.0, b - a) for a, b, _, _ in flows), 1),
                 hours=len({int(a // 3600) for a in starts}),
                 apps=sorted({by_hour[int(a // 3600)] for a in starts if int(a // 3600) in by_hour}),
-                days_seen=int(days.get(name, 0)),
+                days_seen=days_seen,
             )
         else:
-            shape = Shape(0, 0, 0, 0, 0, 0.0, 0, [], int(days.get(name, 0)))
+            shape = Shape(0, 0, 0, 0, 0, 0.0, 0, [], days_seen)
         out[name] = dataclasses.asdict(shape)
     return out
 
@@ -687,6 +689,27 @@ def owed_push_id(conn: sqlite3.Connection) -> int | None:
     except sqlite3.OperationalError:  # a store from before schema 9
         return None
     return int(row[0]) if row is not None and row[1] != PUSHED else None
+
+
+def newest_decision(conn: sqlite3.Connection) -> int:
+    """The id of the newest `decisions` row, 0 for none. Read just before a push, it marks what the
+    push's plan can know of (`record_push`)."""
+    return conn.execute("SELECT COALESCE(MAX(id), 0) FROM decisions").fetchone()[0]
+
+
+def record_push(conn: sqlite3.Connection, planned_after: int, now: float, reason: str, **row) -> bool:
+    """Write the PUSHED row of a push that reached AdGuard, and say whether it was written. It is not
+    when a revert or an owed row came after `planned_after` (`newest_decision` before the push). A push
+    is planned from the file before it waits for AdGuard, `tvgw undo` waits for no one, and an undo made
+    during that wait is not in the plan: a PUSHED row above the undo's rows would settle a debt AdGuard
+    still holds. Unwritten, it leaves the later row owing, and the next hourly check pushes again."""
+    later = conn.execute(
+        f"SELECT 1 FROM decisions WHERE id > ? AND (({REVERTS}) OR (stage = 'apply' AND outcome IN (?, ?)))",
+        (planned_after, *OWED),
+    ).fetchone()
+    if later is None:
+        log_decision(conn, "apply", PUSHED, now, reason=reason, **row)
+    return later is None
 
 
 # ---- one at a time: the lock the hourly check and the analyst's autonomous steps share ----------------
