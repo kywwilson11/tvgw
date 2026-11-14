@@ -22,6 +22,7 @@ from __future__ import annotations
 import ipaddress
 import re
 import tomllib
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from fnmatch import fnmatchcase, translate
 from importlib import resources
@@ -87,11 +88,17 @@ NTP_POLICIES = ("any", "resolved", "none")
 # never does (design decision 79). `role` defaults to the first
 FILTER_ROLES = ("tracking", "bypass")
 TRACKING, BYPASS = FILTER_ROLES
+DOH_LIST_SUFFIX, DOH_SENTINEL = "/doh.txt", "h4g3z1-doh.web.app"  # HaGeZi's list of encrypted-DNS servers
 FILTER_KEYS = frozenset({"name", "url", "sentinel", "role"})  # an [adguard] filters entry's keys
 # (profile) a sentinel, the name a list answers with 0.0.0.0 once it is in force: a DNS name that
 # `tvgw verify` resolves, lower case, at least two labels
 _LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
 _DNS_NAME = re.compile(rf"(?=.{{1,253}}$)(?:{_LABEL}\.)+[a-z](?:[a-z0-9-]{{0,61}}[a-z0-9])?")
+
+# (decision 102) the profiles whose TV the hourly reading can read: `lgwebos` after pairing, `tizen` with
+# nothing to pair. Where setup asks about pairing and where the analyst decides whether a TV is watched
+PAIRABLE_PROFILES = ("lg-webos",)
+READ_WITHOUT_PAIRING = ("samsung-tizen",)
 
 # ---- provenance of the reference records (design decision 31) -----------------------------
 # A record is 'verified' only when it was seen on a set this project ran, and then it names the kind of
@@ -357,7 +364,11 @@ class Profile:
 
     def filter_role(self, url: str) -> str:
         """(pause) The role of the [adguard] filters entry with this URL: `bypass` where the entry says so,
-        else `tracking`."""
+        else `tracking`. (decision 102) The DoH list is `bypass` whatever its entry says, found by its
+        file name or its sentinel: a profile written before `role` existed must not make it pausable, and
+        a paused DoH list opens the filter's bypass."""
+        if url.endswith(DOH_LIST_SUFFIX) or self.filter_sentinels.get(url) == DOH_SENTINEL:
+            return BYPASS
         return self.filter_roles.get(url, TRACKING)
 
     def tracking_filters(self) -> tuple[tuple[str, str], ...]:
@@ -387,7 +398,7 @@ class Profile:
             generated.append(f"||*^$dnstype={'|'.join(self.adguard_strip_qtypes)},client={tv_ip}")
         return generated + [r for r in self.custom_rules if r not in generated]
 
-    def lint(self, lifts: frozenset[str] = frozenset()) -> list[str]:
+    def lint(self, lifts: frozenset[str] = frozenset(), strict: bool = False) -> list[str]:
         """Rules that would break the TV or defeat themselves, as sentences; empty when clean.
 
         Lore from every LG blocklist project: a block (hosts syntax included), a rewrite or a regex
@@ -405,6 +416,13 @@ class Profile:
         (listguard) The modifiers count as AdGuard counts them (`outranks`): a block covering a must-allow
         name is refused with or without `$important`, and a plain exception over a block that carries
         `$important` is refused as dead, since it lifts nothing (design decision 68).
+
+        (decision 102) `strict` adds the checks `tvgw block` has always made, so that a machine rule or a
+        contributed `.rules` file is held to them too, after today's problems: a block or rewrite that takes
+        a never-block zone whole (`||tv^` over `amagi.tv`), reaches a clock host (wildcards and parents
+        included) or meets the URL filter's names; and a regex with a POSIX class (`[:`), which Go's engine
+        reads as a class and Python's as a set. It is off for a profile's own apply, so a stricter lint never
+        strands a gateway on its old configuration.
         """
         problems: list[str] = []
         rules = self.adguard_rules()
@@ -481,7 +499,63 @@ class Profile:
             for r, (k, _) in zip(rules, targets, strict=True)
             if k == "other"
         ]
+        if strict:
+            problems += self._strict_problems(blocks, rewrites, regexes, compiled)
         return problems
+
+    def _strict_problems(
+        self,
+        blocks: list[str],
+        rewrites: list[str],
+        regexes: list[str],
+        compiled: list[tuple[str, re.Pattern[str]]],
+    ) -> list[str]:
+        """(decision 102) The strict checks of `lint`, one sentence each; see there."""
+        problems: list[str] = []
+        for kind, hosts in (("block", blocks), ("rewrite", rewrites)):
+            for b in hosts:
+                problems += [
+                    f"{kind} rule {b!r} takes the whole of {apex!r}, which mixes delivery with telemetry"
+                    for apex in self.never_block_apex
+                    if covers(b, apex) and not _at_apex(b, apex)  # the apex itself is refused above
+                ]
+                problems += [
+                    f"{kind} rule {b!r} reaches the clock host {pattern!r}"
+                    for pattern in self.clock_hosts
+                    if reaches(b, pattern)
+                ]
+                if self.url_filter:
+                    problems += [
+                        f"{kind} rule {b!r} meets {served}, which goes through the URL filter"
+                        for served in self.url_filter.hosts
+                        if covers(b, served) or covers(served, b)
+                    ]
+        for r, rx in compiled:
+            problems += [
+                f"regex rule {r!r} matches the clock host {pattern!r}"
+                for pattern in self.clock_hosts
+                if any(rx.search(name) for name in pattern_names(pattern, self.country))
+            ]
+        problems += [
+            f"regex rule {r!r} holds a POSIX class, which AdGuard reads as a class and the check as a set"
+            for r in regexes
+            if "[:" in r
+        ]
+        return problems
+
+    def added_problems(self, rule: str) -> list[str]:
+        """(decision 102) What `rule` adds to the strict lint of this profile and its own rules: the
+        problems that were not there before it. A profile that already has one is not a reason to refuse
+        every machine rule or every proposal beside it."""
+        base = Counter(self.lint(strict=True))
+        extra = replace(self, custom_rules=(*self.custom_rules, rule)).lint(strict=True)
+        seen: Counter[str] = Counter()
+        added = []
+        for problem in extra:  # counted, not as a set: a sentence names the host, so `||net^$important`
+            seen[problem] += 1  # beside `||net^` says the same thing again
+            if seen[problem] > base[problem]:
+                added.append(problem)
+        return added
 
 
 STRIPPABLE_QTYPES = ("HTTPS", "SVCB")  # the record types a profile may withhold from the TV
@@ -574,6 +648,29 @@ def covers(pattern: str, name: str) -> bool:
     if "*" in pattern:
         return fnmatchcase(name, pattern) or fnmatchcase(name, "*." + pattern)
     return name == pattern or name.endswith("." + pattern)
+
+
+def pattern_names(pattern: str, country: str = "") -> tuple[str, ...]:
+    """(decision 102) Names a host pattern matches, enough to tell what a block or a regex would take:
+    `??` as two letters the vendor uses and the TV's country, `?` as a letter, `*.` as a label and a
+    bare `*` as nothing, a digit or a letter; a pattern with none of these gives itself."""
+    twos = {"gb", "us", "zz", country} - {""} if "??" in pattern else {""}
+    names = set()
+    for two in twos:
+        filled = pattern.replace("??", two).replace("?", "a")
+        names.update(filled.replace("*.", "api.").replace("*", star) for star in ("", "0.", "1.", "x"))
+    return tuple(sorted(names))
+
+
+def reaches(host: str, pattern: str) -> bool:
+    """A block of `host` reaches a name `pattern` matches: the pattern matches the host or a name
+    above it, or the host covers a name the pattern matches (so a parent such as `lgtvsdp.com` or
+    `google.com`, and a wildcard such as `*.ntp.org`, both reach)."""
+    return (
+        fnmatchcase(host, pattern)
+        or fnmatchcase(host, "*." + pattern)
+        or any(covers(host, name) for name in pattern_names(pattern))
+    )
 
 
 def held_category(cat: str) -> bool:

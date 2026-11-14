@@ -269,10 +269,12 @@ def read_rules(path: str) -> list[str]:
 
 def admissible(path: str, prof: Profile) -> tuple[list[str], list[str]]:
     """(rules that pass the profile's lint beside its own rules, rules refused with the reason). A
-    machine rule that would cover a must-allow host is dropped here, whatever wrote it."""
+    machine rule that would cover a must-allow host is dropped here, whatever wrote it. (decision 102) The
+    lint is the strict one, and only what the rule itself adds counts: a custom profile with a problem of
+    its own does not make every machine rule fall with it."""
     ok, refused = [], []
     for rule in read_rules(path):
-        problems = dataclasses.replace(prof, custom_rules=(*prof.custom_rules, rule)).lint()
+        problems = prof.added_problems(rule)
         if problems:
             refused.append(f"{rule}: {problems[0]}")
         else:

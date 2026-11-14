@@ -243,6 +243,29 @@ def test_the_clock_support_and_wifi_tables_read_as_written():
     assert {m for m in profile.CLOCK_MODELS} == {"vendor-https", "ntp", "mixed", "none"}
 
 
+# ---- (lint) the DoH list is never a pausable tracker list, whatever its entry says (L5-4) -----------------
+DOH_URL = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/doh.txt"
+DOH_SENTINEL = "h4g3z1-doh.web.app"  # the name HaGeZi's DoH list answers with 0.0.0.0 once it is in force
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"name": "HaGeZi DoH/VPN bypass (DoH only)", "url": DOH_URL},  # no role: a profile from before `role`
+        {"name": "DoH servers", "url": "https://m.example/encrypted-dns.txt", "sentinel": DOH_SENTINEL},
+        {"name": "DoH", "url": DOH_URL, "role": "tracking"},  # the wrong role, said outright
+    ],
+    ids=["no-role", "sentinel", "role-tracking"],
+)
+def test_the_doh_list_is_not_pausable_whatever_its_entry_says(entry):
+    """`role` defaults to tracking, so the DoH list of a custom profile was switched off by `tvgw pause`,
+    which opens the bypass of the filter (decision 102)."""
+    other = {"name": "Pro", "url": "https://p.example/l"}
+    p = profile.from_dict({"adguard": {"filters": [entry, other]}})
+    assert p.filter_role(entry["url"]) == profile.BYPASS
+    assert p.tracking_filters() == (("Pro", other["url"]),)
+
+
 def test_the_support_tables_reading_words_read_as_written():
     """(samsung) What tvgw does for the TV, what its hourly reading reads and what it cannot: the facts the
     generated support tables and "what tvgw can check" blocks of the vendor pages are written from."""
