@@ -697,14 +697,22 @@ def iter_rows(scenarios: list[Scenario]) -> Iterator[tuple[Scenario, Row]]:
 
 
 COUNTER_VALUES = re.compile(r"\bpackets \d+ bytes \d+")
+SET_COUNT = re.compile(r"[ \t]+# count \d+$", re.MULTILINE)
+
+
+def uncounted(listing: str) -> str:
+    """A listing without how many elements each set holds, which nft prints after a set's size from
+    1.1.6 (`size 65536	# count 2`) and which moves as elements come and go."""
+    return SET_COUNT.sub("", listing)
 
 
 def rules_only(listing: str) -> list[str]:
-    """An `nft list ruleset` without its set elements and its counters' values: the probes move the
-    counters, and the passive feeder and the kernel's own dynamic sets add elements, while a rule, a chain
-    or a set's definition does not change when a part dies. Every other number, a port or a size, stays."""
+    """An `nft list ruleset` without its set elements, how many each set holds, and its counters' values:
+    the probes move the counters, and the passive feeder and the kernel's own dynamic sets add elements,
+    while a rule, a chain or a set's definition does not change when a part dies. Every other number, a
+    port or a size, stays."""
     out, in_elements = [], False
-    for line in listing.splitlines():
+    for line in uncounted(listing).splitlines():
         stripped = line.strip()
         if stripped.startswith("elements = {") or in_elements:
             in_elements = not stripped.endswith("}")

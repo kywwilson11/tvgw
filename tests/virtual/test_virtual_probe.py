@@ -428,7 +428,8 @@ def test_what_an_apply_keeps_as_last_good_loads_again_as_the_same_ruleset(clean,
         assert checked.returncode == 0, checked.stderr
         loaded = net.ns(net.gw, "nft", "-f", str(saved), check=False)
         assert loaded.returncode == 0, loaded.stderr
-        assert net.ns(net.gw, "nft", *how, "list", "table", family, table).stdout == listed, table
+        again = net.ns(net.gw, "nft", *how, "list", "table", family, table).stdout
+        assert vnet.uncounted(again) == vnet.uncounted(listed), table  # the elements went; the sets did not
     assert clean.tv_reaches_the_web() == f"pass:{vnet.GW_WLAN}"
     assert clean.probe()[1]["verdict"] == "pass"
 

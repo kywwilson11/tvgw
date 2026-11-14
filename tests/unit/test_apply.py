@@ -344,12 +344,14 @@ def test_the_ntp_count_is_its_own_table_that_a_reapply_keeps_and_that_refuses_no
     assert "priority filter + 20;" in ntp
 
 
-# the set as nft 1.1 lists it with -t, as this script writes it, and as the first build of the count did
+# the set as nft 1.1 lists it with -t, as this script writes it, and as the first build of the count did;
+# from 1.1.6 nft adds how many elements the set holds, after its size
 NTP_SET_NOW = (
     "table inet tvgw_ntp {\n\tset ntp4 {\n\t\ttype ipv4_addr\n\t\tsize 1024\n"
     "\t\tflags dynamic,timeout\n\t\ttimeout 10d\n\t}\n}\n"
 )
 NTP_SET_OLD = NTP_SET_NOW.replace("timeout 10d", "timeout 1d")
+NTP_SET_COUNTED = NTP_SET_NOW.replace("size 1024", "size 1024\t# count 3")
 
 
 @pytest.mark.parametrize(
@@ -357,8 +359,12 @@ NTP_SET_OLD = NTP_SET_NOW.replace("timeout 10d", "timeout 1d")
     [
         (NTP_SET_NOW, False),
         (NTP_SET_NOW.replace("flags dynamic,timeout", "flags timeout,dynamic"), False),
+        (NTP_SET_COUNTED, False),  # how many it holds is no property: before, every apply emptied it
+        (NTP_SET_COUNTED.replace("count 3", "count 1024"), False),
         (NTP_SET_OLD, True),  # the first build's day: the kernel would refuse the batch at every apply
         (NTP_SET_NOW.replace("size 1024", "size 65536"), True),
+        (NTP_SET_COUNTED.replace("size 1024", "size 65536"), True),
+        (NTP_SET_NOW.replace("size 1024", "size 1024 # of another build"), True),
         (NTP_SET_NOW.replace("\t\tflags dynamic,timeout\n", ""), True),
         (NTP_SET_NOW.replace("ipv4_addr", "ipv4_addr . inet_service"), True),
     ],

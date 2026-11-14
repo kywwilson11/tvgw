@@ -6,6 +6,11 @@
 
 ### Status
 
+### The firewall's counts survive an apply on nftables 1.1.6 (2026-11-13)
+
+- **What went wrong.** nftables 1.1.6 prints how many elements a set holds after the set's size. `tvgw-apply` compares each set it keeps (the TV's time servers, the attention count's lists) with the one it would write, and read that as a set of another size: every apply deleted the table and made it again, so the count of the TV's time requests started at zero and the attention count's lists started empty. A gateway on an older nftables, which the reference is, was not affected.
+- **Now** the comparison reads past the count. The namespace tests, which caught it when the test machines moved to 1.1.6, compare rulesets without it.
+
 ### The screen test, first stage: a dry run that plays nothing (2026-11-13)
 
 - **A way to find screen recognition without knowing its name.** The test draws a random order of picture and black, and asks whether anything the TV sends follows that order ([design decision 88](docs/design-decisions.md#88-the-screen-test-a-random-half-of-fixed-slots-an-exact-rank-test-of-each-destinations-uploads-and-a-first-stage-that-plays-nothing)). The test's false-alarm rate comes from its design, not from guesses about your traffic.
