@@ -416,6 +416,10 @@ def test_verifier_veto_and_canary_revert(auto, lg):
     assert applies == [1, 1] and autoblock.read_rules(s.auto_rules) == []  # applied, then taken out
     (row,) = autoblock.rows(conn)
     assert row["verdict"] == "reverted" and row["reason"].startswith("canary: downloads to the TV fell to 0%")
+    # the revert's own row owed AdGuard a push, and the push that took is written down: nothing is owed
+    pushed = [(d["stage"], d["outcome"]) for d in autoblock.decisions(conn, "stage IN ('apply', 'canary')")]
+    assert pushed == [("apply", "applied"), ("canary", "reverted"), ("apply", "pushed")]
+    assert not autoblock.push_owed(conn)
     md = (pathlib.Path(s.reports_dir) / "proposals" / f"{DAY}.md").read_text()
     assert "- Applied: reverted within minutes: downloads to the TV fell" in md
     conn.close()
@@ -2073,7 +2077,7 @@ def under(path: str, name: str, category: str, down: int = 300, last_seen: float
     conn.close()
 
 
-def test_the_reach_of_a_rule_is_every_name_the_store_saw_at_or_under_it_in_thirty_days(auto):
+def test_the_reach_of_a_rule_is_every_name_the_store_saw_at_or_under_it_in_thirty_days(auto, monkeypatch):
     s, _ = auto
     month = 30 * 86400
     under(s.db_path, "a.tracker.example", "Other", down=900)
@@ -2098,6 +2102,10 @@ def test_the_reach_of_a_rule_is_every_name_the_store_saw_at_or_under_it_in_thirt
         "median_down": 50_000_000,
     }
     assert list(whole["expected"]) == ["FAST", "Streaming"]  # by name, whatever order the store gave them
+    for batch in (2, 4):  # the store is asked a batch of names at a time: each name once, none left out
+        monkeypatch.setattr(autoblock, "REACH_BATCH", batch)
+        assert read("example", kept) == whole
+    monkeypatch.undo()
     # a window that began further back than thirty days is looked back from its own start
     assert autoblock.reach(conn, "tracker.example", kept, T0 - month - 1, T0, now=T0)["names"] == 4
     assert read("example", ())["expected"] == {}
@@ -2447,6 +2455,23 @@ def test_an_undo_of_every_rule_that_adguard_does_not_take_writes_one_row_for_eac
         (outcome, rule, DAY) for rule in rules
     ]
     assert all(row["reason"].startswith(why) for row in rows) and autoblock.push_owed(conn)
+    conn.close()
+
+
+def test_an_undo_that_meets_another_apply_waits_for_it_too(auto, lg):
+    s, _ = auto
+    conn = db.connect(s.db_path)
+    on_trial(s, conn)
+    held, slept, adguard = iter([adguardcfg.Busy("held")] * 2), [], FakeAdGuard(s)
+
+    def apply():
+        if (busy := next(held, None)) is not None:
+            raise busy
+        adguard()
+
+    assert analyst.undo(conn, s, lg, apply_fn=apply, now=T0 + 3600, sleep=slept.append) == [TRACKER_RULE]
+    assert slept == [adguardcfg.BUSY_PAUSE] * 2 and adguard.rules == [] and not autoblock.push_owed(conn)
+    assert autoblock.decisions(conn, "stage = 'apply'")[-1]["outcome"] == "pushed"
     conn.close()
 
 
