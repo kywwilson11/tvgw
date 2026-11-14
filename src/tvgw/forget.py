@@ -643,9 +643,12 @@ def _without_reading_times(failures: str) -> str:
     """A `verify.failures` value, a JSON list of failures, with none saying when the TV was read. Each
     failure is cleaned by itself, so that one cannot take words from the next."""
     try:
-        return json.dumps([READ_AT.sub("", failure) for failure in json.loads(failures)])
-    except (ValueError, TypeError):  # not the list verify writes: cleaned as text
-        return READ_AT.sub("", failures)
+        listed = json.loads(failures)
+    except ValueError:
+        listed = None
+    if isinstance(listed, list) and all(isinstance(failure, str) for failure in listed):
+        return json.dumps([READ_AT.sub("", failure) for failure in listed])
+    return READ_AT.sub("", failures)  # not the list of strings verify writes: cleaned as text
 
 
 def _compact(conn: sqlite3.Connection, s, out: Result) -> None:

@@ -1071,10 +1071,21 @@ def test_a_stored_failure_that_named_its_readings_time_is_rewritten_without_it(t
         (["a: (as) it (read 15:20) was", "b (read 15:30) c (read 15:40) d"], ["a: (as) it was", "b c d"]),
         (["a: (read with no end", 'b: (x) and "y"'], ["a: (read with no end", 'b: (x) and "y"']),
         ("not a list (read 15:20) of failures", "not a list of failures"),
+        ('"one failure (read 15:20) as a JSON string"', '"one failure as a JSON string"'),
+        ('{"tv_paths": "Wi-Fi (read 15:20) connected"}', '{"tv_paths": "Wi-Fi connected"}'),
+        ('["a (read 15:20) b", 7]', '["a b", 7]'),
     ],
-    ids=["each reading time, and no other bracket", "one failure takes no words from the next", "text"],
+    ids=[
+        "each reading time, and no other bracket",
+        "one failure takes no words from the next",
+        "text",
+        "a string",
+        "an object",
+        "a list of more than strings",
+    ],
 )
 def test_reading_times_are_taken_out_of_each_failure_by_itself(was, cleaned):
+    """What `tvgw verify --record` stores is a JSON list of strings; anything else is cleaned as text."""
     stored = was if isinstance(was, str) else json.dumps(was)
     got = forget._without_reading_times(stored)
     assert (got if isinstance(was, str) else json.loads(got)) == cleaned
