@@ -29,20 +29,24 @@ by an app's own measurement or by the TV. Such a name is told from an ad's by tw
 gaps are alike: within each of its runs, STEADY_SHARE of the time lies in gaps no longer than STEADY
 times the run's usual one, where an ad's name has a minute's gaps inside a break and many minutes
 between breaks. And it comes alone: under ALONE of its lookups have NEED - 1 other firms refused within
-COMPANY seconds, where an ad's firms are refused at the same moment. Neither alone will do: breaks that
-come at an even spacing make a name asked once a break look steady, and a firm that few ads call is
-often alone. Company is "at the same moment" and not "within the window" because several timers fall
-within ten seconds of one another by chance, and seldom within two. Counting the five-minute bins a
-name is in, the first rule tried, cannot tell a timer from the firms of a service that breaks every
-few minutes.
+WINDOW seconds, where an ad's name is refused with the other firms of the ad. Neither alone will do:
+breaks that come at an even spacing make a name asked once a break look steady, and a firm that few ads
+call is often alone. Counting the five-minute bins a name is in, the first rule tried, cannot tell a
+timer from the firms of a service that breaks every few minutes.
+
+**No break lasts ten minutes.** The timer test has an edge it cannot see past: enough names on timers
+(about a dozen in the tests) fall within WINDOW of one another by chance so often that none is alone,
+and then they open and carry on "breaks" for as long as the TV is on. A narrower window would cure
+that and lose the ads that call only three firms, whose names are refused seconds apart once the TV
+holds some of them. So a stretch that runs past LONG_BREAK is not counted as a break: the report sets
+it aside and says so, which is also what happens to a break carried on by one fast name that is not
+yet known for a timer (under TIMER_SPAN of it).
 
 **What it cannot see, and what it estimates.** An ad whose player calls fewer than NEED refused firms
 opens nothing, and neither does an ad the service reports from its own servers: there may be more
 breaks than it counts. A service with many hours and no break is one this rule cannot see, and the
-report says so. Three firms asked together on one beat would read as a break at each turn; none was
-seen on the reference. A name on a fast beat that is not yet known for a timer (under TIMER_SPAN of it)
-can carry a break on for as long as it beats, so the report says when a break ran past LONG_BREAK. A
-break's start is known to the second and its end to within one ad, so the
+report says so. Two or three firms asked together on one beat would read as a break at each turn;
+none was seen on the reference. A break's start is known to the second and its end to within one ad, so the
 minutes are an estimate; on a TV that asks a refused name again much sooner than a minute they run
 long, and the report says that when `hold` finds it. Nothing here has yet been checked against breaks
 marked by hand, and the report says that too.
@@ -66,16 +70,16 @@ MERGE = 5.0  # seconds a firm must be quiet before its next lookup is a new labe
 # a timer (`timers`). A name's lookups fall into runs, a gap longer than TIMER_PAUSE being an absence
 # that ends one. It is judged once it has TIMER_GAPS gaps that come to TIMER_SPAN seconds. It is steady
 # when STEADY_SHARE of that time lies in gaps of at most STEADY times the usual (median) gap of their
-# run, and alone when under ALONE of its lookups have company: other firms refused within COMPANY seconds
+# run, and alone when under ALONE of its lookups have company: other firms refused within WINDOW seconds
 TIMER_GAPS, TIMER_SPAN, TIMER_PAUSE = 20, 1800.0, 2700.0
-STEADY, STEADY_SHARE, ALONE, COMPANY = 3.0, 0.70, 0.5, 2.0
+STEADY, STEADY_SHARE, ALONE = 3.0, 0.70, 0.5
 # the hold: gaps between a name's refusals, from HOLD_OVER seconds (under it, one lookup's repeats) to
 # HOLD_UNDER (over it, another evening); a name counts with HOLD_GAPS of them
 HOLD_OVER, HOLD_UNDER, HOLD_GAPS = 5.0, 3600.0, 20
 HOLD_SHORT = 45.0  # a TV that asks again sooner than this is not the TV the rule's minutes are set for
 LISTED_HOURS = 1.0  # an app is listed with this many hours in front, or with a break
 BLIND_HOURS = 10.0  # hours in front without one break after which an app's ads "cannot be seen this way"
-LONG_BREAK = 600.0  # seconds no break lasts: one that long was carried on by a name on a beat
+LONG_BREAK = 600.0  # seconds no break lasts: a longer stretch is names on timers, and is set aside
 
 Lookup = tuple[float, str]  # when a name was refused, and the name
 Label = tuple[float, str]  # when a firm was refused, and the firm (its company's name)
@@ -131,7 +135,7 @@ def timers(refused: Sequence[Lookup], adfirms: Mapping[str, str]) -> frozenset[s
             continue  # not steady: a minute's gaps in a break, many minutes between breaks
         in_company = 0
         for t in times:
-            near = marks[bisect.bisect_left(when, t - COMPANY) : bisect.bisect_right(when, t + COMPANY)]
+            near = marks[bisect.bisect_left(when, t - WINDOW) : bisect.bisect_right(when, t + WINDOW)]
             in_company += len({firm for _t, firm in near} - {firm_of[name]}) >= NEED - 1
         if in_company < ALONE * len(times):
             regular.add(name)
@@ -210,7 +214,8 @@ def report(conn: sqlite3.Connection, tl: appfront.Timeline, a: float, b: float) 
     """The breaks of [a, b) by the app the TV said was in front when each began (`tl` is the window's
     timeline). Counts, hours and minutes only: no name and no time of day. `apps` lists an app with
     LISTED_HOURS in front or a break, most breaks first and then most hours; `unknown` is the breaks that
-    began with no app known in front, and `long` those that ran past LONG_BREAK. A break that began
+    began with no app known in front, and `long` the stretches past LONG_BREAK, which are no breaks and
+    are counted nowhere else. A break that began
     behind the screen saver is its app's all the same, though the app's hours leave that time out."""
     refused = conn.execute(
         "SELECT t, qname FROM dns WHERE blocked AND t >= ? AND t < ? ORDER BY t", (a, b)
@@ -222,10 +227,14 @@ def report(conn: sqlite3.Connection, tl: appfront.Timeline, a: float, b: float) 
     in_front = app_seconds(tl)
     tally = {app: [0, 0.0] for app, seconds in in_front.items() if seconds >= LISTED_HOURS * 3600}
     unknown = [0, 0.0]
+    long = [0, 0.0]  # stretches past LONG_BREAK: no breaks, and counted nowhere else
     for brk in found:
         session = tl.at(brk.start)[1]
         known = session is not None and session.kind == appfront.APP
-        row = tally.setdefault(session.app, [0, 0.0]) if known else unknown
+        if brk.seconds > LONG_BREAK:
+            row = long
+        else:
+            row = tally.setdefault(session.app, [0, 0.0]) if known else unknown
         row[0] += 1
         row[1] += brk.seconds
     names, floor = hold(refused)
@@ -235,8 +244,8 @@ def report(conn: sqlite3.Connection, tl: appfront.Timeline, a: float, b: float) 
         "timers": len(regular),
         "labels": len(marks),
         "firms": len({firm for _t, firm in marks}),
-        "breaks": len(found),
-        "long": sum(brk.seconds > LONG_BREAK for brk in found),
+        "breaks": len(found) - long[0],
+        "long": {"stretches": long[0], "minutes": long[1] / 60},
         "apps": [
             {
                 "app": appfront.app_label(app),
@@ -303,10 +312,11 @@ def render(r: dict) -> list[str]:
             f"  With no app known in front: {_count(r['unknown']['breaks'], 'break')},"
             f" {_ads(r['unknown']['minutes'])}"
         )
-    if r["long"]:
+    if r["long"]["stretches"]:
         lines.append(
-            f"  {_count(r['long'], 'break')} above ran past {LONG_BREAK / 60:g} minutes: a name asked on a"
-            " timer may have carried them on"
+            f"  Not counted: {r['long']['stretches']} stretch{'' if r['long']['stretches'] == 1 else 'es'} of"
+            f" such lookups that ran past {LONG_BREAK / 60:g} minutes, {r['long']['minutes']:.0f} minutes in"
+            " all. No break lasts that long: these are names asked on timers."
         )
     return [
         *lines,
