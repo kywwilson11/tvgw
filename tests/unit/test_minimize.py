@@ -322,6 +322,7 @@ DEVICE = "9f8e7d6c5b4a39281f0e9f8e7d6c5b4a"  # 32 hexadecimal characters, as a d
         ("servicegateway2b", False),
         ("servicegateway2b9", False),
         ("servicegate2b9c4x", True),
+        ("abcdefabcdefabcg", False),
     ],
     ids=[
         "32 hexadecimal",
@@ -334,6 +335,7 @@ DEVICE = "9f8e7d6c5b4a39281f0e9f8e7d6c5b4a"  # 32 hexadecimal characters, as a d
         "a word with one digit",
         "with two",
         "with three",
+        "hexadecimal but for one letter, with no digit",
     ],
 )
 def test_a_long_run_that_is_all_hexadecimal_or_holds_three_digits_reads_as_an_identifier(run, reads_as_one):
@@ -369,7 +371,7 @@ def test_an_identifier_goes_as_a_token_that_says_its_length_and_which_one_and_co
         },
         "red_lines": ["blocked_retries: <id32-1>.collect.vendor.test x40", "connectivitycheck.gstatic.com"],
     }
-    assert mask.hide(sent) == sent and DEVICE in json.dumps(pack)  # hidden once, and the pack is as it was
+    assert DEVICE in json.dumps(pack)  # the pack is as it was
     answer = {"name": "<id32-1>.collect.vendor.test", "rule": "||<id32-1>.collect.vendor.test^", "n": 1}
     assert mask.show(answer) == {
         "name": f"{DEVICE}.collect.vendor.test",
@@ -379,6 +381,29 @@ def test_an_identifier_goes_as_a_token_that_says_its_length_and_which_one_and_co
     # a token this mask never gave is some other text's: it stays, and so does one of another mask
     assert mask.show("<id32-9> and <id7-1>") == "<id32-9> and <id7-1>"
     assert minimize.IdMask().show("<id32-1>") == "<id32-1>"
+
+
+def test_the_tenth_identifier_and_the_ones_after_it_come_back_as_well():
+    """A token's number has as many digits as it needs: the mask put back only `<id16-1>` to `<id16-9>`
+    when its pattern took one digit."""
+    runs = [f"{n:016x}" for n in range(12)]
+    mask = minimize.IdMask()
+    sent = mask.hide(runs)
+    assert sent[-1] == "<id16-12>" and mask.show(sent) == runs
+
+
+def test_a_token_the_text_already_holds_is_hidden_as_a_run_of_its_own():
+    """(decision 93) The TV can look up any string, `<id32-1>` among them. Left as written, it read as the
+    token of a real run: two names became one in the request, and the model's answer about the one was
+    taken for the other."""
+    mask = minimize.IdMask()
+    sent = mask.hide({f"{DEVICE}.x.test": 12, "<id32-1>.x.test": 900})
+    assert sent == {"<id32-1>.x.test": 12, "<id8-2>.x.test": 900}
+    assert mask.show(sent) == {f"{DEVICE}.x.test": 12, "<id32-1>.x.test": 900}
+
+
+def test_a_key_that_is_not_a_string_stays_as_it_is():
+    assert minimize.IdMask().hide({5: DEVICE, (1, 2): [DEVICE]}) == {5: "<id32-1>", (1, 2): ["<id32-1>"]}
 
 
 def strings(value):
@@ -394,7 +419,16 @@ def strings(value):
             yield from strings(inner)
 
 
-TEXT = st.text(alphabet="abcdef0123456789xyz.-_ <>", max_size=60)
+# what a pack's strings are made of: plain text, identifiers (hexadecimal or mixed, 16 to 40 characters),
+# shorter words and token-shaped text of the TV's own
+PIECE = st.one_of(
+    st.text(alphabet="abcdefxyz0123456789.-_ <>i", max_size=12),
+    st.from_regex(r"[0-9a-fA-F]{16,40}", fullmatch=True),
+    st.from_regex(r"[0-9a-zA-Z]{16,40}", fullmatch=True),
+    st.from_regex(r"[0-9a-z]{4,15}", fullmatch=True),
+    st.sampled_from(["<id32-1>", "<id16-2>", "<id8-10>", "<id7-1"]),
+)
+TEXT = st.lists(PIECE, max_size=5).map("".join)
 VALUE = st.recursive(
     st.one_of(TEXT, st.integers(), st.none()),
     lambda inner: st.one_of(st.lists(inner, max_size=3), st.dictionaries(TEXT, inner, max_size=3)),
@@ -408,8 +442,4 @@ def test_whatever_is_hidden_no_string_keeps_an_identifier_and_showing_it_gives_i
     mask = minimize.IdMask()
     sent = mask.hide(value)
     left = [run for text in strings(sent) for run in minimize._RUN.findall(text) if minimize.is_id(run)]
-    assert not left and mask.show(sent) == mask.show(mask.hide(sent))
-    if "<id" not in json.dumps(
-        value
-    ):  # a value that already wrote a token of its own may get that one back changed
-        assert mask.show(sent) == value
+    assert not left and mask.show(sent) == value

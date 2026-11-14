@@ -1,9 +1,11 @@
 """The daily analyst: what leaves the Pi, how the answer is vetted, and the files it writes."""
 
+import copy
 import json
 import os
 import re
 import socket
+import sqlite3
 import stat
 from contextlib import contextmanager
 from datetime import datetime
@@ -11,11 +13,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from tvgw import analyst, cli, db, lgwebos, queries
+from tvgw import analyst, autoblock, cli, db, lgwebos, minimize, queries
 from tvgw.config import Settings
 
 DAY = "2026-10-26"
 A = 1793000000  # inside 2026-10-26 in any US zone? no: fix the day from the timestamp instead
+
+
+DEVICE_RUN = "9f8e7d6c5b4a39281f0e9f8e7d6c5b4a"  # a device's identifier, as a name carries it
 
 
 def midday(day):
@@ -464,6 +469,40 @@ def test_vet_refuses_a_rule_for_another_name_than_its_heading(lg):
     assert verdict("block", "x.example", "||x.example^$dnstype=HTTPS") == "ok"
     host = current[-1].strip("|^")
     assert verdict("unblock", host, current[-1]) == "ok"
+
+
+@pytest.mark.parametrize(
+    ("kind", "name", "rule"),
+    [
+        ("block", "<id32-9>.collect.vendor.test", "||<id32-9>.collect.vendor.test^"),
+        ("block", "<id32-9>.collect.vendor.test", "/<id32-9>/"),
+        ("watch", "<id32-9>.collect.vendor.test", "||<id32-9>.collect.vendor.test^"),
+        ("question", "<id32-9>.collect.vendor.test", "/<id32-9>/"),
+        ("watch", "<id32-9>.collect.vendor.test", ""),
+        ("block", "collect.vendor.test", "/<id32-9>/"),
+        ("watch", "collect.vendor.test", "||<id32-9>.collect.vendor.test^"),
+    ],
+    ids=["a rule", "a regex rule", "a watch", "a question", "a name alone", "a rule alone", "a watch's rule"],
+)
+def test_vet_refuses_a_token_the_run_never_gave_in_any_kind_or_rule_form(lg, kind, name, rule):
+    """(decision 93) After `IdMask.show`, a token that is left was made up by the model or came from the
+    TV's own text. A regex rule and a watch used to pass as `ok`."""
+    result = {"proposals": [{"kind": kind, "name": name, "rule": rule, "risk": "low"}]}
+    verdict = analyst.vet(result, lg, [])["proposals"][0]["vetted"]
+    assert verdict == "refused: it holds a withheld identifier this run never gave"
+
+
+def test_a_name_cut_at_the_cap_inside_an_identifier_loses_the_whole_run_and_one_cut_elsewhere_is_as_it_was():
+    """The 13 characters of a 32-character identifier that the 200-character cap used to leave were
+    shorter than the mask's threshold, so they left in the clear."""
+    name = "zz." * 62 + DEVICE_RUN + ".x.test"
+    assert len(name) > analyst.STRING_CAP
+    assert analyst.scrub(name) == "zz." * 62 + "…"
+    assert (
+        analyst.scrub("zz." * 61 + "-" + "0123456789abcdef.x.test") == "zz." * 61 + "-…"
+    )  # 15 of 16 cut off
+    assert analyst.scrub("x" * 500) == "x" * 199 + "…"  # not an identifier: cut where the cap falls
+    assert analyst.scrub("a." * 150) == "a." * 99 + "a…"  # a cut between a run and its dot
 
 
 def test_every_rule_form_the_prompt_names_vets_ok(lg):
@@ -975,11 +1014,6 @@ def test_the_pack_reaches_the_model_canonicalized(settings, lg):
 def test_what_leaves_is_the_pack_without_its_private_keys_and_with_identifiers_as_tokens(settings, lg):
     """(decision 93) The profile's section is the repository's own text and goes as it is; the pack the
     gateway goes on working from is untouched."""
-    import copy
-    import sqlite3
-
-    from tvgw import minimize
-
     device = "0123456789abcdef0123456789abcdef"
     conn = sqlite3.connect(settings.db_path)
     conn.execute(
@@ -997,13 +1031,7 @@ def test_what_leaves_is_the_pack_without_its_private_keys_and_with_identifiers_a
     assert [h["name"] for h in sent["new_hosts"] if "iot.example" in h["name"]] == ["<id32-1>.iot.example"]
     assert device not in json.dumps({k: v for k, v in sent.items() if k != "profile"})
     assert "`<id32-1>` stands for a long identifier the gateway withheld" in " ".join(analyst.SYSTEM.split())
-    assert "`<id32-1>` in a name stands for a long identifier" in " ".join(autoblock_system().split())
-
-
-def autoblock_system() -> str:
-    from tvgw import autoblock
-
-    return autoblock.VERIFIER_SYSTEM
+    assert "`<id32-1>` in a name stands for a long identifier" in " ".join(autoblock.VERIFIER_SYSTEM.split())
 
 
 def test_the_system_prompt_tells_the_truth_about_what_is_applied():

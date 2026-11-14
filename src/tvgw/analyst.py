@@ -210,9 +210,20 @@ def canonical(v: str) -> str:
     return "".join(ch for ch in v if not _hidden(ch))
 
 
+_ALNUM_END, _ALNUM_START = re.compile(r"[0-9A-Za-z]*$"), re.compile(r"[0-9A-Za-z]*")
+
+
 def _text(v: str, cap: int = STRING_CAP) -> str:
     v = _CONTROL.sub(" ", canonical(v))
-    return v if len(v) <= cap else v[: cap - 1] + "…"
+    if len(v) <= cap:
+        return v
+    head = v[: cap - 1]
+    # (decision 93) a cut inside an identifier would leave the identifier's first characters, which may
+    # be fewer than the mask's threshold and so leave as they are: cut where the run starts instead
+    stub, rest = _ALNUM_END.search(head).group(), _ALNUM_START.match(v, cap - 1).group()
+    if rest and minimize.is_id(stub + rest):
+        head = head[: len(head) - len(stub)]
+    return head + "…"
 
 
 _HOME_NETS = tuple(
@@ -560,7 +571,8 @@ def novelty(p: dict, review: bool = False) -> list[str]:
 
 def user_message(sent: dict) -> str:
     """The request's one message: the pack as `leaving` made it. `public` once more, so that a pack
-    handed over whole still goes without its `_` keys."""
+    handed over whole still goes without its `_` keys. A pack handed over unmasked goes unmasked: its
+    one caller hands it `leaving()`'s result."""
     return f"Evidence pack for {sent['day']}:\n" + json.dumps(
         public(sent), indent=1, sort_keys=True, ensure_ascii=False
     )
@@ -655,6 +667,10 @@ def vet(result: dict, prof: Profile, current_rules: list[str], owner_allows: tup
 
 def _verdict(p: dict, prof: Profile, current_rules: list[str]) -> str:
     rule, kind = p["rule"], p["kind"]
+    # (decision 93) a token left in the answer after `show` is one this run never gave: the model made
+    # it up or copied it from the TV's text. Checked first, so a regex rule and a watch are refused too
+    if minimize.ID_TOKEN.search(p["name"] + " " + rule):
+        return "refused: it holds a withheld identifier this run never gave"
     if kind in ("watch", "question"):
         return "ok"
     if not rule:
@@ -1084,9 +1100,10 @@ def autonomous(
     when the TV is watched, or an armed canary when it is not. Every step's outcome lands on the
     proposal (`applied`), in `auto_rules` and as a row in `decisions`. `in_place` is every rule AdGuard
     has (`rules_in_place`); the second model sees the pack's scrubbed copy and the proposal's structured
-    fields only. `window` is the pack's [a, b). `hooks` lets tests stand in for the API, AdGuard, the
-    TV and the clock. The steps run under `autoblock.exclusive`: while the hourly check holds it, the
-    queue is not drained and a block that clears the gates waits its turn in the queue."""
+    fields only, both with identifier-shaped runs as `mask`'s tokens (decision 93). `window` is the
+    pack's [a, b). `hooks` lets tests stand in for the API, AdGuard, the TV and the clock. The steps run
+    under `autoblock.exclusive`: while the hourly check holds it, the queue is not drained and a block
+    that clears the gates waits its turn in the queue."""
     run_ = _Autonomy.start(conn, s, prof, p, proposer, client, stem, hooks, in_place, mask)
     a, b = window if window is not None else (run_.now() - autoblock.TRIAL, run_.now())
     with autoblock.exclusive(s.state_dir) as free:

@@ -1,5 +1,6 @@
 """Minimization: the store keeps the least of a row that the detectors need, and what leaves the
-gateway holds no identifier a name happened to carry.
+gateway holds no identifier-shaped run a name carried (a run of 16 letters and digits or more, all
+hexadecimal or with three digits or more; see `is_id` for what that leaves out).
 
 Three reductions at ingest, each applied by `ingest` before a row is inserted, and once to the rows
 already stored (`rewrite_stored`), so a switch thrown today also cleans the rows of the days before it:
@@ -354,7 +355,9 @@ def _rewrite_names(conn: sqlite3.Connection, names: NameHasher) -> int:
 # entropy, tried first, took 136, most of them ordinary host names
 ID_RUN, ID_DIGITS = 16, 3
 _RUN = re.compile(rf"[0-9A-Za-z]{{{ID_RUN},}}")
-_ID_TOKEN = re.compile(r"<id\d+-\d+>")
+ID_TOKEN = re.compile(r"<id\d+-\d+>")
+# what `hide` takes: a token already written in the text goes as a run of its own, or two keys could merge
+_HIDDEN = re.compile(rf"{ID_TOKEN.pattern}|{_RUN.pattern}")
 _HEX = frozenset("0123456789abcdefABCDEF")
 
 
@@ -377,9 +380,11 @@ class IdMask:
         self._token: dict[str, str] = {}  # a run -> its token
         self._run: dict[str, str] = {}  # and back
 
-    def _hidden(self, found: re.Match[str]) -> str:
+    def _token_for(self, found: re.Match[str]) -> str:
         run = found.group()
-        if not is_id(run):
+        # a token-shaped text the pack already holds (the TV can look up any string) is hidden too, so
+        # that what is sent never holds a token this mask did not give: `show(hide(v)) == v` for any v
+        if not (ID_TOKEN.fullmatch(run) or is_id(run)):
             return run
         if run not in self._token:
             token = f"<id{len(run)}-{len(self._token) + 1}>"
@@ -387,11 +392,11 @@ class IdMask:
         return self._token[run]
 
     def hide(self, value):
-        return _in_every_string(value, lambda text: _RUN.sub(self._hidden, text))
+        return _in_every_string(value, lambda text: _HIDDEN.sub(self._token_for, text))
 
     def show(self, value):
         return _in_every_string(
-            value, lambda text: _ID_TOKEN.sub(lambda token: self._run.get(token.group(), token.group()), text)
+            value, lambda text: ID_TOKEN.sub(lambda token: self._run.get(token.group(), token.group()), text)
         )
 
 

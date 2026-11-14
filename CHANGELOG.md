@@ -8,7 +8,7 @@
 
 ### An identifier in a host's name no longer goes to the analyst (2026-11-13)
 
-- **What changed.** Some hosts carry a device's or an account's identifier in their name, as a long run of letters and digits. In what the analyst sends, each such run now goes as a token like `<id32-1>` that says only how long it is and which one it is; the same run is the same token within a request, so names can still be told apart ([design decision 93](docs/design-decisions.md#93-an-identifier-a-name-carries-goes-to-the-models-as-a-token-and-comes-back-as-itself)). On the reference this touches 11 of the 349 names of two weeks.
+- **What changed.** Some hosts carry a device's or an account's identifier in their name, as a long run of letters and digits. In what the analyst sends, a run of 16 or more that is all hexadecimal or holds three digits or more now goes as a token like `<id32-1>` that says only how long it is and which one it is; the same run is the same token within a run, so names can still be told apart ([design decision 93](docs/design-decisions.md#93-an-identifier-a-name-carries-goes-to-the-models-as-a-token-and-comes-back-as-itself)). On the reference this touches 11 of the 349 names of two weeks. Not covered: a UUID with hyphens, a run shorter than 16 characters, an identifier split over labels, and a run mostly of letters with fewer than three digits.
 - **What you see.** Nothing: the model's answer has the names put back before the gateway checks it, so your proposals, any rule and the record hold the real names. The copy of the pack kept beside each request shows what was sent, tokens and all.
 - For developers: `minimize.IdMask`, `minimize.is_id`, `analyst.leaving()`; `analyst.user_message()` takes what `leaving()` returns.
 

@@ -354,7 +354,7 @@ The analyst writes into `reports/proposals/` under the reports directory. Their 
 |---|---|---|
 | `<stem>.md` | A quiet window, a refusal, a cut-off answer, or an answer | The proposals for the owner, the refusal, the cut-off notice, or the quiet-window text |
 | `<stem>.json` | Every request the model answered: an answer, a refusal or a cut-off | The record: `window`, `since`, `until`, `model`, `effort`, `generated`, `pack_sha256_16`, `usage`, `cost_usd`, `reasons`, `autonomous`, `verifier_usage` (per second-model request: the name, the model, the usage and the cost), `never_quiet`, `summary`, `nothing_to_do`, `proposals` (each with `vetted` and any `applied`) and `vetted_ok`; `refused` with the category on a refusal, `cut_off: true` on an answer cut off at `MAX_TOKENS` |
-| `<stem>.pack.json` | `--dry-run`, and every request sent | The scrubbed pack, exactly as the user message carries it, without the `_` keys; its SHA-256 starts with the record's `pack_sha256_16` |
+| `<stem>.pack.json` | `--dry-run`, and every request sent | The pack as sent: scrubbed, identifiers as tokens, without the `_` keys; its SHA-256 starts with the record's `pack_sha256_16` |
 | `<stem>.prompt.txt` | `--dry-run` | The system prompt and the user message |
 
 The stem names the window: `<day>` (`YYYY-MM-DD`) for a day, `<YYYY-Www>` for an ISO week, and `<YYYY-MM-DDTHHMM>-<N>h` for a window of hours. A run with `--model` naming a model other than its pass's own appends `.<model>`, as in `<day>.<model>.md`, so a comparison sits beside the usual file. `tvgw analyst --show` prints the proposals file written last (`analyst.latest`, by modification time, not by name: a week's stem sorts after every day of its year).
