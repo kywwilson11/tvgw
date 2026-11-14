@@ -252,24 +252,30 @@ def test_the_held_record_is_not_readable_by_others(tmp_path):
 # ---- (dohguard) a listed network that holds an address the TV fetches from is left out (design decision 95) --
 STREAM = "192.0.2.80"  # an address the TV fetches video from
 LISTED = "192.0.2.0/24"  # a refreshed list's new entry that holds it
-MB, DAY = 2**20, 86400
+MB, DAY, HOUR = 2**20, 86400, 1 / 24  # HOUR in days
 CLOCK = time.time()  # the script's clock: conftest pins time.time() inside each test, not in the script
 RECORD = verify.DOH_SPARED  # the script writes it, tvgw verify reads it
 
 
-def flow(down: int = 60 * MB, days: float = 1, proto: str = "tcp", port: int = 443, dst: str = STREAM):
-    """One of the TV's connections in the store: what it brought down, how many days ago it ended."""
-    return CLOCK - days * DAY, proto, dst, port, down
+def flow(down=60 * MB, days=1, proto="tcp", port=443, dst=STREAM, ran: float | None = 0):
+    """One of the TV's connections in the store: what it brought down, how many days ago it ended, and for
+    how many days it had run (None: a start the store lacks)."""
+    end = CLOCK - days * DAY
+    return None if ran is None else end - ran * DAY, end, proto, dst, port, down
 
 
-STREAMED, ANSWERED = (flow(),), ((STREAM, 1),)  # 60 MB from STREAM, which the filter gave the TV, a day ago
+# 60 MiB from STREAM a day ago, in a connection begun an hour after the filter gave the TV that address
+STREAMED, ANSWERED = (flow(),), ((STREAM, 1 + HOUR),)
+NEXT = "192.0.2.81"  # the address after STREAM
 
 
 def store(root: Path, flows=STREAMED, answers=ANSWERED) -> None:
     """The gateway's store with the TV's connections and the filter's answers to it, (address, days ago)."""
     state(root).mkdir(parents=True, exist_ok=True)
     conn = db.connect(str(state(root) / "tvgw.db"))
-    conn.executemany("INSERT INTO flows(t_end, proto, dst, dport, bytes_down) VALUES (?,?,?,?,?)", flows)
+    conn.executemany(
+        "INSERT INTO flows(t_start, t_end, proto, dst, dport, bytes_down) VALUES (?,?,?,?,?,?)", flows
+    )
     conn.executemany(
         "INSERT INTO answer_ip(dns_id, t, ip) VALUES (1, ?, ?)", [(CLOCK - d * DAY, a) for a, d in answers]
     )
@@ -287,23 +293,35 @@ def in_force(root: Path) -> list[str]:
         ((flow(50 * MB),), ANSWERED, True),
         ((flow(25 * MB), flow(25 * MB)), ANSWERED, True),
         ((flow(50 * MB - 1),), ANSWERED, False),
-        ((flow(25 * MB), flow(25 * MB, dst="192.0.2.81")), (*ANSWERED, ("192.0.2.81", 1)), False),
-        ((flow(days=13.9),), ((STREAM, 13.9),), True),
-        ((flow(days=14.1),), ANSWERED, False),
-        (STREAMED, ((STREAM, 14.1),), False),
+        ((flow(25 * MB), flow(25 * MB, dst=NEXT)), (*ANSWERED, (NEXT, 1 + HOUR)), False),
+        ((flow(30 * MB), flow(30 * MB, days=5)), ANSWERED, False),
+        (STREAMED, ((STREAM, 1 + 23 * HOUR),), True),
+        (STREAMED, ((STREAM, 1 + 25 * HOUR),), False),
+        (STREAMED, ((STREAM, 1 - HOUR),), False),
+        ((flow(days=10),), ANSWERED, False),
+        ((flow(days=0.5, ran=1),), ((STREAM, 1.5 + HOUR),), True),
+        ((flow(ran=None),), ANSWERED, True),
+        ((flow(days=13.9),), ((STREAM, 13.9 + HOUR),), True),
+        ((flow(days=14.1),), ((STREAM, 14.1 + HOUR),), False),
         (STREAMED, (), False),
         ((flow(proto="udp"),), ANSWERED, False),
         ((flow(port=80),), ANSWERED, False),
         (None, (), False),
     ],
     ids=[
-        "50 MB",
-        "50 MB in two connections",
-        "a byte short of 50 MB",
-        "25 MB from it and 25 MB from the next address",
-        "fetched and answered at the window's start",
+        "50 MiB",
+        "50 MiB in two connections",
+        "a byte short of 50 MiB",
+        "25 MiB from it and 25 MiB from the next address",
+        "30 MiB after an answer and 30 MiB after none",
+        "answered 23 hours before the connection",
+        "answered 25 hours before the connection",
+        "answered an hour after the connection began",
+        "a built-in address, and one answer of another name days later",
+        "a long connection begun within a day of the answer counts whole",
+        "a connection whose start the store lacks counts from its end",
+        "fetched at the window's start",
         "fetched before the window",
-        "answered before the window only",
         "an address the filter never gave the TV",
         "over UDP, which the DoH rule never resets",
         "on another port",
@@ -315,8 +333,9 @@ def test_a_listed_network_is_left_out_only_where_the_tv_fetched_payload_from_an_
 ):
     """Reproduced: the refresh took a /24 that held an address the TV streamed from, and every new TCP 443
     connection the TV made to it was reset (no guard bounded what a refresh adds). A resolver moves tens
-    of megabytes in two weeks at the very most, and one the TV reaches by a built-in address was never an
-    answer of the filter's, so either one stays blocked."""
+    of megabytes in two weeks at the very most, and the TV reaches one by a built-in address with no answer
+    of the filter's before it: the review's case, an answer for some other name days after, spared it
+    while any answer in the window counted. Only connections begun within a day after an answer count."""
     if flows is not None:
         store(tmp_path, flows, answers)
     out = run(tmp_path, listing(*IN_FORCE, LISTED), listing(*IN_FORCE))
@@ -329,8 +348,9 @@ def test_a_listed_network_is_left_out_only_where_the_tv_fetched_payload_from_an_
 
 def test_the_networks_left_out_are_counted_beside_the_list_and_never_named(tmp_path):
     """The record says how many, for tvgw verify, and when; which ones would say what the TV fetches from.
-    It describes the list in force, which lacks them, so tvgw forget keeps it with the list. A /8 is no
-    entry the list could block, and an entry listed twice is one network."""
+    It describes the list in force, which lacks them, so tvgw forget keeps it with the list, and says that
+    the list and the hold's copy of it lack them: the review found it calling both the public list. A /8
+    is no entry the list could block, and an entry listed twice is one network."""
     store(tmp_path)
     out = run(tmp_path, listing(*IN_FORCE, LISTED, LISTED, "192.0.0.0/16", "192.0.0.0/8"), listing(*IN_FORCE))
     assert out.returncode == 0, out.stderr
@@ -342,6 +362,10 @@ def test_the_networks_left_out_are_counted_beside_the_list_and_never_named(tmp_p
     assert said["spared"] == 2 and CLOCK <= said["t"] < CLOCK + DAY
     assert oct(record.stat().st_mode & 0o777) == "0o640"
     assert forget.classify(record.name, forget.STATE_ENTRIES)[0] == forget.KEEP
+    for kept in ("doh4.txt", "doh4.base"):
+        assert (
+            "the public list less the networks the TV fetch" in forget.classify(kept, forget.STATE_ENTRIES)[1]
+        )
 
 
 @pytest.mark.parametrize(
@@ -376,6 +400,28 @@ def test_only_a_network_that_holds_the_address_is_left_out_and_its_neighbours_st
 
 
 @pytest.mark.parametrize(
+    ("local", "freed"),
+    [
+        (None, False),
+        ("", False),
+        ("192.0.2.0/33\n999.0.2.0/24\nnot an address\n", False),
+        ("# the owner's own\nnot an address\n192.0.2.0/24 the TV's streams\n", True),
+    ],
+    ids=["no file", "an empty file", "lines that hold no network", "a network among other lines"],
+)
+def test_the_owners_own_exclusions_are_read_beside_the_shipped_ones(tmp_path, local, freed):
+    """The remedy for a network the guard no longer spares: every install replaces doh-exclude.txt and
+    none touches doh-exclude.local.txt, which is read the same way, line by line, and may be missing."""
+    (tmp_path / "etc" / "tvgw").mkdir(parents=True)
+    if local is not None:
+        (tmp_path / "etc" / "tvgw" / "doh-exclude.local.txt").write_text(local)
+    out = run(tmp_path, listing(*IN_FORCE, LISTED), listing(*IN_FORCE))
+    assert out.returncode == 0, out.stderr
+    assert (LISTED in in_force(tmp_path)) is not freed
+    assert not (state(tmp_path) / RECORD).exists()  # an exclusion is not a network the TV fetches from
+
+
+@pytest.mark.parametrize(
     ("download", "kept"), [(IN_FORCE[:50], False), (IN_FORCE[:49], True)], ids=["taken", "floor"]
 )
 def test_the_record_follows_the_list_in_force(tmp_path, download, kept):
@@ -391,7 +437,7 @@ def test_the_record_follows_the_list_in_force(tmp_path, download, kept):
     "spoil",
     [
         lambda root: (state(root) / "tvgw.db").write_text("not a store"),
-        lambda root: store(root, (flow(dst="192.0.2.x"),), (("192.0.2.x", 1),)),
+        lambda root: store(root, (flow(dst="192.0.2.x"),), (("192.0.2.x", 1 + HOUR),)),
     ],
     ids=["not a store", "a row that holds no address"],
 )
@@ -406,8 +452,13 @@ def test_a_store_that_cannot_be_read_keeps_the_list_in_force(tmp_path, spoil):
     assert not (state(tmp_path) / RECORD).exists()
 
 
-def test_the_window_is_no_longer_than_the_filters_answers_are_kept():
-    """An address counts only where the filter answered it within the window, so a window longer than
-    answer_ip keeps its rows would end, unsaid, where those rows do."""
-    days = re.search(r"^USED_DAYS = (\d+)", SCRIPT.read_text(encoding="utf-8"), re.MULTILINE)
+def test_the_windows_are_the_ones_the_filters_answers_are_kept_and_judged_by():
+    """Bytes count only after an answer of the filter's, so a window longer than answer_ip keeps its rows
+    would end, unsaid, where those rows do; and "the filter gave it" is the day namebound and the address
+    gate take it to be."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    days, within = (
+        re.search(rf"^{name} = (\d+)$", text, re.MULTILINE) for name in ("USED_DAYS", "ANSWERED_WITHIN")
+    )
     assert days is not None and int(days[1]) == min(14, namebound.ANSWER_IP_DAYS)
+    assert within is not None and int(within[1]) == namebound.WINDOW

@@ -615,9 +615,14 @@ def test_while_refreshes_are_held_back_the_doh_list_ages_from_the_last_refresh_t
         (None, ""),
         ('{"spared": 2, "t": 1}', "; 2 listed networks left out: the TV fetches from them"),
         ('{"spared": 1, "t": 1}', "; 1 listed network left out: the TV fetches from it"),
+        ('{"spared": 0, "t": 1}', ""),
         ('{"t": 1}', "; doh4.spared cannot be read"),
         ("[2]", "; doh4.spared cannot be read"),
-        ('{"spared": "two"}', "; doh4.spared cannot be read"),
+        ('{"spared": 2', "; doh4.spared cannot be read"),  # cut off while written: no JSON at all
+        *(
+            (f'{{"spared": {n}}}', "; doh4.spared cannot be read")
+            for n in ('"two"', "1e999", "2.5", "-1", "true")
+        ),
     ],
 )
 def test_the_doh_list_says_how_many_networks_it_left_out_because_the_tv_fetches_from_them(lg, record, said):

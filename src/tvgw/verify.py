@@ -840,14 +840,19 @@ def doh_hold_check(path: str, read: Callable[[str], str]) -> tuple[Check, dict |
 def doh_spared(path: str, read: Callable[[str], str]) -> str:
     """(dohguard) What `doh4_loaded`'s detail adds when the last refresh of the DoH list left networks out
     because the TV fetches from them (design decision 95): their number, never a warning, since keeping
-    what the TV fetches from reachable is the point, and nothing when none was left out."""
+    what the TV fetches from reachable is the point, and nothing when none was left out. Only a whole
+    number of none or more is a count: 1e999 or 2.5 is no number of networks."""
     text = read(path).strip()
     if not text:
         return ""
     try:
-        n = int(json.loads(text)["spared"])
+        n = json.loads(text)["spared"]
     except (ValueError, TypeError, KeyError):
+        n = None
+    if type(n) is not int or n < 0:  # a bool is an int to isinstance, and no count
         return f"; {DOH_SPARED} cannot be read"
+    if n == 0:
+        return ""
     many = n > 1
     return (
         f"; {n} listed network{'s' if many else ''} left out: the TV fetches from {'them' if many else 'it'}"

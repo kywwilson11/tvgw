@@ -1,6 +1,7 @@
 #!/bin/bash
 # Refresh the DoH/DoT resolver IP set from DOH_LIST_URL, then reload rules.
-# IPs inside /etc/tvgw/doh-exclude.txt CIDRs (shared CDN edges) are never blocked.
+# IPs inside /etc/tvgw/doh-exclude.txt CIDRs (shared CDN edges) are never blocked, nor (dohguard) those inside
+# the owner's /etc/tvgw/doh-exclude.local.txt, which the installer never writes.
 # (listguard) A refresh that would drop more than DOH_DROP_MAX percent of the last refresh taken is held back
 # (design decision 68): what it would drop stays blocked and its new entries are added (less any entry the
 # exclusions now cover), the last refresh taken is kept in /var/lib/tvgw/doh4.base, and
@@ -36,7 +37,7 @@ curl -fsSL --proto '=https' --proto-redir '=https' --max-filesize 8000000 --max-
 
 rc=0
 python3 -I - "$raw" /etc/tvgw/doh-exclude.txt /var/lib/tvgw/doh4.txt "$DOH_DROP_MAX" "$accept" "$held" \
-	"$base" /var/lib/tvgw/tvgw.db "$spared" >"$tmp" <<'EOF' || rc=$?
+	"$base" /var/lib/tvgw/tvgw.db "$spared" /etc/tvgw/doh-exclude.local.txt >"$tmp" <<'EOF' || rc=$?
 import bisect, ipaddress, json, os, re, sqlite3, sys, time
 
 def entries(path):
@@ -54,20 +55,26 @@ def entries(path):
                 pass
     return out
 
-exclude = entries(sys.argv[2])
+# (dohguard) the shipped exclusions, which every install replaces, and the owner's own, which none touches
+exclude = entries(sys.argv[2]) + entries(sys.argv[10])
 
 # (dohguard) Every new TCP 443 connection to an address in the list is reset, so a list that names one the
 # TV fetches from, by its source's mistake or on purpose, takes that away. Such an address is one the TV
-# pulled USED_BYTES or more from over TCP 443 in the last USED_DAYS, summed over its connections, and that
-# the gateway's filter answered it with in that time. Two weeks of DNS over HTTPS for a TV is tens of
-# megabytes at the very most, an hour of video is hundreds; and a resolver the TV reaches by a built-in
-# address is no answer of the filter's, whose lists refuse the resolvers' names. The window is no longer
-# than answer_ip keeps its rows (namebound.ANSWER_IP_DAYS, 35 days).
+# pulled USED_BYTES or more from over TCP 443 in the last USED_DAYS, summed over the connections it began
+# within ANSWERED_WITHIN after the gateway's filter answered it with that address. Two weeks of DNS over
+# HTTPS for a TV is tens of megabytes at the very most, an hour of video is hundreds; and a resolver the TV
+# reaches by a built-in address follows no answer of the filter's, whose lists refuse the resolvers' names,
+# so another name's answer at another time does not make it in use. A day is what the address gate and
+# namebound take for "the filter gave it" (dnsgate.TTL); the second after it is the start's rounding, which
+# conntrack gives in whole seconds. The window is no longer than answer_ip keeps its rows
+# (namebound.ANSWER_IP_DAYS, 35 days). The answer is found by answer_ip's index on (ip, t).
 USED_DAYS = 14
 USED_BYTES = 50 * 2**20
+ANSWERED_WITHIN = 86400
 USED = """SELECT f.dst FROM flows f WHERE f.proto = 'tcp' AND f.dport = 443 AND f.t_end >= :since
-GROUP BY f.dst HAVING SUM(f.bytes_down) >= :bytes
-AND EXISTS (SELECT 1 FROM answer_ip a WHERE a.ip = f.dst AND a.t >= :since)"""
+AND EXISTS (SELECT 1 FROM answer_ip a WHERE a.ip = f.dst
+AND a.t BETWEEN COALESCE(f.t_start, f.t_end) - :within AND COALESCE(f.t_start, f.t_end) + 1)
+GROUP BY f.dst HAVING SUM(f.bytes_down) >= :bytes"""
 
 def in_use(path):
     """The addresses the TV fetches from, as sorted integers; none before the first hourly ingest makes
@@ -76,7 +83,8 @@ def in_use(path):
         return []
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=60)
     try:
-        rows = conn.execute(USED, {"since": time.time() - USED_DAYS * 86400, "bytes": USED_BYTES}).fetchall()
+        since = time.time() - USED_DAYS * 86400
+        rows = conn.execute(USED, {"since": since, "bytes": USED_BYTES, "within": ANSWERED_WITHIN}).fetchall()
     finally:
         conn.close()
     return sorted(int(ipaddress.IPv4Address(dst)) for (dst,) in rows)

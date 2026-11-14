@@ -16,13 +16,15 @@
 - An app id that reads like an instruction is withheld from the second model.
 - For developers: `autoblock.gate()` takes a required `reach=` (`autoblock.reach()`); `autoblock.Shape` has no `first` or `last`; `adguardcfg.retry_busy()` replaces the pause's own loop and `listpause.BUSY_TRIES`.
 
-### The daily DoH list can no longer cut off what the TV streams from (2026-11-13)
+### The daily DoH list leaves out a network the TV is streaming from, while it streams (2026-11-13)
 
 - **What went wrong.** Every day the gateway downloads a public list of the servers that answer encrypted lookups (DoH), and refuses each new secure connection the TV makes to an address on it. Nothing limited what the list could add. A list that named the network of a server the TV streams from, by its source's mistake or on purpose, would have cut the TV's new connections there from that day on, and nothing on the gateway would have said why.
-- **Now** a network on the list is left out when it holds an address the TV pulled 50 MB or more from in the last 14 days, and the gateway's own filter gave the TV that address ([design decision 95](docs/design-decisions.md#95-a-doh-list-refresh-leaves-out-a-network-that-holds-an-address-the-tv-fetches-payload-from-and-says-how-many)). An encrypted-lookup server sends tens of megabytes in two weeks at the very most. One the TV knows by a built-in address was never given by the filter. Both stay blocked.
+- **Now** a network on the list is left out while it holds an address the TV pulled 50 MiB or more from in the last 14 days, over connections it began within a day after the gateway's own filter gave it that address ([design decision 95](docs/design-decisions.md#95-a-doh-list-refresh-leaves-out-a-network-that-holds-an-address-the-tv-fetches-payload-from-and-says-how-many)). An encrypted-lookup server sends tens of megabytes in two weeks at the very most. One the TV knows by a built-in address gets no answer from the filter before the TV connects, even when the filter gives that address for another name at another time. Both stay blocked.
 - **It is said.** The update's log says how many networks it left out, and `tvgw verify`'s `doh4_loaded` adds `N listed networks left out: the TV fetches from them`. Neither names them.
+- **Your own exclusions survive an install.** The update reads `/etc/tvgw/doh-exclude.local.txt`, when it is there, beside `/etc/tvgw/doh-exclude.txt`: one network a line, in the same format. Every install replaces `doh-exclude.txt` and none touches your file.
 - **When the gateway's record cannot be read,** the update keeps the list it has and fails. After 8 days of that, `doh4_fresh` fails too.
-- **What it does not cover:** an address the TV first used in the hour before an update, the days after `tvgw forget` until the TV has pulled 50 MB again, and a listed network next to one the TV used.
+- **A network stays left out only while the TV keeps pulling from it.** After 14 days without that, after `tvgw forget`, or with `DB_DAYS` under 14, the next update blocks it again. Once blocked, it cannot come back, since the TV can pull nothing from it, and it stays blocked until the list drops it. The remedy is an exclusion: the network's line in `/etc/tvgw/doh-exclude.local.txt`.
+- **What else it does not cover:** a party whose own allowed name the filter answers, and which serves the TV 50 MiB from that address before the list names it, stays reachable for as long as that goes on, and `tvgw verify` then shows the count. An address the TV first used in the hour before an update is not yet counted, and a listed network next to one the TV used is still blocked.
 
 ### tvgw forget leaves no timeline behind (2026-11-13)
 

@@ -145,7 +145,7 @@ A re-run does disturb these:
 - AdGuard Home restarts when its config changed, and the TV's lookups fail for those seconds. The first deploy with the `--no-check-update` drop-in restarts it once more.
 - The firewall re-apply resets every rule's counters; `tvgw-apply`'s listings either side of the reload, stored by the next `tvgw verify --record`, keep the brief's counts whole ([design decision 13](../docs/design-decisions.md#13-counters-not-logs-prove-the-firewall-held)).
 - A long-running unit restarts when its file, or what it read at start, changed. What ends or passes in that moment is not recorded, and that hour's pcap is split in two.
-- `/etc/tvgw/doh-exclude.txt` and the two analyst timer drop-ins are written again. Make local edits in the repository.
+- `/etc/tvgw/doh-exclude.txt` and the two analyst timer drop-ins are written again. Make local edits in the repository; (dohguard) an exclusion of your own goes in `/etc/tvgw/doh-exclude.local.txt`, which the installer never writes.
 - `tvgw-analyze` runs once more.
 
 ## Gotchas

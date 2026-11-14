@@ -225,11 +225,21 @@ STATE_ENTRIES: tuple[tuple[str, str, str], ...] = (
     ("sni.tsv", FORGET, "retired"),
     ("http.tsv", FORGET, "retired"),
     ("querylog.json", FORGET, "a retired copy of AdGuard's query log"),
-    ("doh4.txt", KEEP, "the public DoH resolver list"),
+    (
+        "doh4.txt",
+        KEEP,
+        "the DoH resolver list in force: (dohguard) the public list less the networks the TV fetches from, so"
+        " until its next refresh a comparison with the public list shows which networks those are",
+    ),
     ("threat", KEEP, "(threats) the public threat and newly-registered-domain lists and their manifest"),
     (".doh4.*", KEEP, "the DoH list being written"),
     ("doh4.held", KEEP, "(listguard) a DoH list refresh held back: counts of public addresses, and when"),
-    ("doh4.base", KEEP, "(listguard) while a DoH refresh is held back, the public list last taken"),
+    (
+        "doh4.base",
+        KEEP,
+        "(listguard) while a DoH refresh is held back, the list last taken: (dohguard) the public list less"
+        " the networks the TV fetched from then, so until the hold ends a comparison shows which those are",
+    ),
     (
         "doh4.spared",
         KEEP,
