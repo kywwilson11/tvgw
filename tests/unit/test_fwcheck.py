@@ -631,6 +631,16 @@ def test_a_switch_keeps_its_promise(relation):
     assert differing(off, on, site, relation.of(site), relation.holds)[:10] == []
 
 
+def test_the_minted_address_shadow_changes_no_packets_end_where_its_table_loads():
+    """(mint) MINT=shadow loads its table only beside the in-path filler, which QUIET leaves passive, so
+    its promise is held where the table is there to break it."""
+    base = {**QUIET, "DNSGATE_FILL": "inpath"}
+    (off, _), (on, site) = (gateway(*sorted({**base, "MINT": value}.items())) for value in ("off", "shadow"))
+    mint = [("inet", "tvgw_mint"), "news"]
+    assert tuple(mint) in on.chains and tuple(mint) not in off.chains
+    assert differing(off, on, site, {}, fwpolicy.same_end)[:10] == []
+
+
 def test_every_counter_switched_on_at_once_behind_every_wall_still_changes_no_packets_end():
     """The same promise where it is hardest to keep: all six counting values together, on a gateway with
     the tunnel, the walls and the probe."""

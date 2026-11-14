@@ -289,14 +289,16 @@ def test_a_running_filler_is_asked_to_empty_the_minted_address_shadow(tree, monk
     where it does not, there is no memory and nothing to say."""
     stamp = tmp_path / "filler" / "mint-forget"
     monkeypatch.setattr(mintshadow, "FORGET", str(stamp))
+    on = dataclasses.replace(tree, dnsgate="count", dnsgate_fill="inpath", mint="shadow")
 
     def shadow(r):
         return [step.action for step in r.steps if step.what == forget.SHADOW_WHAT]
 
-    assert shadow(forget.run(tree, dry_run=True, live=live(tree))) == []
+    assert shadow(forget.run(on, dry_run=True, live=live(on))) == []  # no filler runs
     stamp.parent.mkdir()
-    assert shadow(forget.run(tree, dry_run=True, live=live(tree))) == ["empty"] and not stamp.exists()
-    assert shadow(forget.run(tree, live=live(tree), lock=False)) == ["empty"] and stamp.exists()
+    assert shadow(forget.run(tree, dry_run=True, live=live(tree))) == []  # MINT=off: no shadow in it
+    assert shadow(forget.run(on, dry_run=True, live=live(on))) == ["empty"] and not stamp.exists()
+    assert shadow(forget.run(on, live=live(on), lock=False)) == ["empty"] and stamp.exists()
 
 
 def test_an_unknown_file_is_kept_and_reported(tree):

@@ -1524,28 +1524,28 @@ def mint_check(
     shadow reads each answer after its verdict and the table only copies, so every finding is a WARN. The
     detail names no count; the second value is the section's counts as fw_counters series, empty unless
     the status is fresh, so a stale file never repeats an old count as a new snapshot."""
-    name = "mint_shadow"
+    name = "mint_shadow"  # held()'s key
     if getattr(s, "mint", "off") != "shadow":
-        return Check(name, True, "not in use (MINT=off): tvgw mint replay reads the store alone"), []
+        return Check("mint_shadow", True, "not in use (MINT=off): tvgw mint replay reads the store alone"), []
     if not inpath.wanted(s):
         detail = "MINT=shadow needs DNSGATE=count and DNSGATE_FILL=inpath: no filler keeps its table"
-        return Check(name, *held(name, WARN, detail)), []
+        return Check("mint_shadow", *held(name, WARN, detail)), []
     if mintshadow.COPY_RULE not in run(["nft", "list", "table", *MINT_TABLE]):
         detail = "missing: the copying rule; no connection is counted (sudo tvgw-apply)"
-        return Check(name, *held(name, WARN, detail)), []
+        return Check("mint_shadow", *held(name, WARN, detail)), []
     if mintshadow.GROUP not in log_groups(read(PROC_LOG)):
         detail = (
             f"no process holds NFLOG group {mintshadow.GROUP}: the kernel throws the copies away and no"
             f" connection is counted (systemctl status {INPATH_UNIT})"
         )
-        return Check(name, *held(name, WARN, detail)), []
+        return Check("mint_shadow", *held(name, WARN, detail)), []
     doc = _json(read(inpath.STATUS))
     section = doc.get("mint") if isinstance(doc, dict) else None
     written = _number(doc.get("t")) if isinstance(doc, dict) else None
     if not isinstance(section, dict) or written is None or not 0 <= now - written <= inpath.STATUS_STALE:
         age = "missing" if written is None else f"{_ago(max(now - written, 0))} old"
         detail = f"the filler's status file is {age}, or has no shadow (journalctl -u {INPATH_UNIT} -n 20)"
-        return Check(name, *held(name, WARN, detail)), []
+        return Check("mint_shadow", *held(name, WARN, detail)), []
 
     def n(part: str, key: str) -> int:
         counts = section.get(part)
@@ -1554,12 +1554,12 @@ def mint_check(
     series = [(rule, n(part, key), 0) for part, key, rule in mintshadow.SERIES]
     if not section.get("reading"):
         detail = f"its copies' socket failed and it reads no connection (systemctl restart {INPATH_UNIT})"
-        return Check(name, *held(name, WARN, detail)), series
+        return Check("mint_shadow", *held(name, WARN, detail)), series
     detail = (
         f"counting, its memory from {_ago(max(now - (_number(section.get('since')) or now), 0))} ago; its"
         f" counts are in the store (tvgw verify --record) and in {inpath.STATUS}"
     )
-    return Check(name, True, detail), series
+    return Check("mint_shadow", True, detail), series
 
 
 # (attention) what tvgw-apply's attention block loads into inet tvgw_attn, as the listing prints it
@@ -2888,9 +2888,10 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "The gateway's count of the connections a stage that hands the TV made-up addresses would refuse "
         "is switched on in the settings but is not working.",
         "Nothing on the TV: the count changes no answer and stops no connection. "
-        "sudo tvgw mint replay still answers the same question from the gateway's record.",
-        "Check that DNSGATE_FILL=inpath is set, run sudo tvgw-apply, then sudo systemctl restart "
-        "tvgw-dnsgate-inpath. If the warning stays, see why with journalctl -u tvgw-dnsgate-inpath -n 20.",
+        "The gateway's record still answers the same question with sudo tvgw mint replay.",
+        "Switch on the part that holds the TV's lookup answers as well. "
+        "Then run sudo tvgw-apply, then sudo systemctl restart tvgw-dnsgate-inpath. "
+        "If the warning stays, see why with journalctl -u tvgw-dnsgate-inpath -n 20.",
     ),
     "attention": (
         "The gateway's count of what the TV reaches while its screen saver is on, or an input is in front, "

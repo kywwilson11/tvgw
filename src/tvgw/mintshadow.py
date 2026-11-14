@@ -19,32 +19,38 @@ The filler reads those copies between answers, and the shadow puts each connecti
   name over its share);
 - `lapsed`: no ticket, and the newest answer that named the address is older than a ticket's lifetime;
 - `never`: no ticket, and no answer the shadow remembers named it (it remembers NEWEST_FOR);
-- `unassessed`: no ticket, and the shadow cannot vouch that it saw the answer that would explain it.
+- `unassessed`: no ticket, and the shadow cannot vouch that it saw the answer that would explain it, or
+  the table's own bound (MAX_TICKETS) left the address's pair out.
 
 `crowded`, `lapsed` and `never` are what a strict stage would refuse.
 
 Why it can neither take the TV's lookups away nor slow them: an answer reaches the shadow only once its
 verdict has been given, and every reader here is bounded and never raises, so a fault is counted and
-the filler goes on. Its cost is the time the next answer could wait in the queue, and is measured (`us`).
-Each turn of the filler's loop reads at most POLL_MAX copies, after any answer that was waiting. The
-copies are the kernel's: a copy nobody reads is thrown away, and the connection it was taken from has
-already gone on.
+the filler goes on. Its cost is the time the next answer could wait in the queue, and is measured, for
+the answers (`us`) and for the copies (`poll_us`). Each turn of the filler's loop reads at most POLL_MAX
+copies, after any answer that was waiting. The copies are the kernel's: a copy nobody reads is thrown
+away, and the connection it was taken from has already gone on.
 
-When it cannot vouch. A connection without a ticket is judged only when the shadow saw every answer that
-could explain it: its memory reaches back a lifetime (`since`), and no answer was missed in the last
-LOSS_PROTECT. At start the memory is filled from AdGuard Home's query log, the TV's answers of the last
-lifetime, as the live name count fills its own (`nametap.seed`); a start counts as a miss, since AdGuard
-Home writes its log in batches. Missed are an answer the shadow could not read, answers the kernel passed
-itself while the filler's socket was full, and the answers of an apply's quiet window, which never reach
-the queue. The filler learns of the last only when it finds its switch gone, up to inpath.LIVE_EVERY
-later, so a miss reaches back to when the switch was last seen, at most REJUDGE_FOR, and moves the
-refusals counted since then to `unassessed`. A copy the kernel dropped for want of room (ENOBUFS) is a
-connection not counted (`dropped`), not a miss: the copies carry no answer.
+When it cannot vouch. A connection without a ticket is judged only when the memory reaches back a
+lifetime (`since`) and no answer was missed in the last LOSS_PROTECT. At start the memory is filled from
+AdGuard Home's query log, the TV's answers of the last lifetime, as the live name count fills its own
+(`nametap.seed`); a start counts as a miss, since AdGuard Home writes its log in batches. Missed are an
+answer the shadow could not read, answers the kernel passed itself while the filler's socket was full, a
+pair the table's bound left out, and the answers of an apply's quiet window, which never reach the queue.
+The filler learns of the last only when it finds its switch gone, up to inpath.LIVE_EVERY later, so a miss
+reaches back to when the switch was last seen, at most REJUDGE_FOR, and moves the refusals judged since
+then to `unassessed`. A refusal is therefore counted only once REJUDGE_FOR has passed (`settle`), so that
+no count ever goes down: the store reads a count that went down as a restart. A missed answer can still
+explain a refusal judged after LOSS_PROTECT and within a ticket's lifetime of it, if the TV kept the
+address that long: such refusals are also counted as `doubtful`, so that the owner can discount them. A
+copy the kernel dropped for want of room (ENOBUFS) is a connection not counted (`dropped`), not a miss:
+the copies carry no answer.
 
 What it keeps, and for how long: the table (each pair's name and real address for a lifetime after its
-last answer), the newest answer's time for each address (NEWEST_FOR) and the connections of the last
-SEEN_FOR, all in the filler's memory, bounded; no name and no address leaves it. `tvgw forget` writes
-FORGET, and at its next status the shadow empties all three and starts its memory again from that moment.
+last answer), each address's newest answer (NEWEST_FOR), the addresses the bound left out (a lifetime) and
+the connections of the last SEEN_FOR, all in the filler's memory, bounded and trimmed at each status; no
+name and no address leaves it. `tvgw forget` writes FORGET, and at its next status the shadow empties all
+of it and starts its memory again from that moment.
 """
 
 from __future__ import annotations
@@ -74,7 +80,8 @@ MAX_SEEN = 16_384
 NEWEST_FOR = mint.REST  # seconds an address's newest answer is remembered: the week an address rests
 # The memory's bounds, so that the shadow can never take the filler's room (its unit's MemoryMax is
 # 128 MB): a table of the whole pool took about 140 MB on a laptop. The reference made 478 pairs on its
-# busiest day, so 16,384 live tickets is thirty times that, about 20 MB at most. An answer that would
+# busiest day, so 16,384 live tickets is thirty times that: about 40 MB at most, every other address
+# resting. An answer that would
 # make a ticket past it gets none, and is a miss: the shadow cannot vouch for what it did not mint
 MAX_TICKETS = 16_384
 MAX_NEWEST = 16_384  # addresses remembered, the oldest answered first out
@@ -83,7 +90,7 @@ LOSS_PROTECT = 3600.0
 # seconds a refusal stays open to a miss found after it: the filler finds its switch gone up to
 # inpath.LIVE_EVERY after an apply removed it, plus however long the apply held nf_tables' lock
 REJUDGE_FOR = 60.0
-MAX_REJUDGE = 4096  # the latest refusals kept for that; far more than a minute of the TV's connections
+MAX_REJUDGE = 4096  # refusals waiting to be counted; past it the oldest is counted at once
 US_SAMPLES = 512  # the last answers' costs kept for the status's median
 FORGET = "/run/tvgw-dnsgate-inpath/mint-forget"  # tvgw forget's stamp, in the filler's runtime directory
 COPY_RULE = "in-path: new TV connections copied to the minting table"  # tvgw-apply's mint rule
@@ -104,8 +111,10 @@ SERIES = (
     ("answers", "unread", "in-path: mint: answers not read"),
     ("seen", "missed", "in-path: mint: times an answer may have been missed"),
     ("seen", "dropped", "in-path: mint: connection copies the kernel dropped"),
+    ("seen", "doubtful", "in-path: mint: refusals within a day of a missed answer"),
 )
 NEVER_RULE = SERIES[5][2]  # the run of `tvgw status`'s counting line is read from this series
+DOUBTFUL_RULE = SERIES[-1][2]
 
 
 def wanted(s: Settings) -> bool:
@@ -121,7 +130,7 @@ class Counts:
     answers: dict[str, int] = field(default_factory=lambda: dict.fromkeys(("read", "truncated", "unread"), 0))
     seen: dict[str, int] = field(
         default_factory=lambda: dict.fromkeys(
-            ("copies", "again", "unparsed", "dropped", "missed", "full", "forgotten"), 0
+            ("copies", "again", "unparsed", "dropped", "missed", "full", "doubtful", "forgotten"), 0
         )
     )
     errors: int = 0
@@ -162,6 +171,7 @@ class Shadow:
         self.pool, self.lifetime, self.forget_path = pool, lifetime, forget_path
         self.counts = Counts()
         self.us: list[float] = []  # the last answers' costs to the loop, seconds
+        self.poll_us: list[float] = []  # the last polls' costs, of those that read a copy
         self.forgot = _mtime(forget_path)  # a stamp from before the start forgot nothing this memory holds
         self._fresh(now())
 
@@ -170,9 +180,10 @@ class Shadow:
         after it: the start of a memory is a miss."""
         self.table = mint.Minter(self.pool, lifetime=self.lifetime)
         self.newest: OrderedDict[bytes, float] = OrderedDict()  # address -> its newest answer's time
+        self.unminted: OrderedDict[bytes, float] = OrderedDict()  # address the bound left out -> until
         self.recent: OrderedDict[tuple, float] = OrderedDict()  # the connections of the last SEEN_FOR
-        # (when, class) of the latest refusals, which a miss found later may move to `unassessed`
-        self.refusals: deque[tuple[float, str]] = deque(maxlen=MAX_REJUDGE)
+        # (when, class, doubtful) of the refusals not yet counted, which a miss may move to `unassessed`
+        self.refusals: deque[tuple[float, str, bool]] = deque()
         self.since = self.last_miss = t
 
     # ---- the answers ----------------------------------------------------------------------------------
@@ -205,16 +216,24 @@ class Shadow:
                 self.table.expire(t)
             if len(self.table) >= MAX_TICKETS and (name, real) not in self.table.by_pair:
                 self.counts.seen["full"] += 1
+                self.unminted[real] = t + self.lifetime
+                self.unminted.move_to_end(real)
                 self.missed()
             else:
                 self.table.mint(name, real, t)
             self.newest[real] = t
             self.newest.move_to_end(real)
-        while self.newest:
-            oldest, at = next(iter(self.newest.items()))
-            if len(self.newest) <= MAX_NEWEST and t - at < NEWEST_FOR:
-                break
-            del self.newest[oldest]
+        self.trim(t)
+
+    def trim(self, t: float) -> None:
+        """Let go of what the memory keeps past its time or its bound, the oldest first."""
+        for kept, keep, bound in (
+            (self.newest, lambda at: t - at < NEWEST_FOR, MAX_NEWEST),
+            (self.unminted, lambda until: until > t, MAX_NEWEST),
+            (self.recent, lambda at: t - at <= SEEN_FOR, MAX_SEEN),
+        ):
+            while kept and (len(kept) > bound or not keep(next(iter(kept.values())))):
+                kept.popitem(last=False)
 
     # ---- the connections ------------------------------------------------------------------------------
     def copy(self, packet: bytes | None) -> None:
@@ -231,31 +250,40 @@ class Shadow:
             self.counts.seen["unparsed"] += 1
             return
         t = self.now()
-        while self.recent and t - next(iter(self.recent.values())) > SEEN_FOR:
-            self.recent.popitem(last=False)
+        self.trim(t)
         if head in self.recent:  # a retried opening: one connection
             self.counts.seen["again"] += 1
             return
         self.recent[head] = t
-        if len(self.recent) > MAX_SEEN:
-            self.recent.popitem(last=False)
         _proto, _src, dst, _sport, dport = head
         cls = self.judge(socket.inet_ntoa(dst), dport, t)
-        self.counts.conns[cls] += 1
-        if cls in REFUSED:
-            self.refusals.append((t, cls))
+        if cls in REFUSED:  # counted once no miss can move it any more
+            self.refusals.append((t, cls, t - self.last_miss < self.lifetime))
+            self.settle(t)
+        else:
+            self.counts.conns[cls] += 1
 
     def judge(self, dst: str, dport: int | None, t: float) -> str:
-        """The class of a connection to `dst`:`dport` at `t`, by what the table holds then."""
+        """The class of a connection to `dst`:`dport` at `t`, by what the table holds then. The caller
+        has trimmed the memory to `t`."""
         real = mintreplay.judged_address(dst, dport)
         if real is None:
             return LOCAL
-        newest = self.newest.get(real)
-        age = None if newest is None or t - newest >= NEWEST_FOR else t - newest  # older is forgotten
+        names = self.table.names_of(real, t)
+        if not names and self.unminted.get(real, t) > t:
+            return UNASSESSED  # the bound left its pair out: no strict stage's pool would have
+        newest = self.newest.get(real)  # `trim` has let go of any answered NEWEST_FOR before
+        age = None if newest is None else t - newest
         assessed = t - self.lifetime >= self.since and t - self.last_miss > LOSS_PROTECT
-        return mintreplay.class_of(
-            self.table.names_of(real, t), (dst, dport) in self.listed, assessed, age, self.lifetime
-        )
+        return mintreplay.class_of(names, (dst, dport) in self.listed, assessed, age, self.lifetime)
+
+    def settle(self, t: float) -> None:
+        """Count the refusals no miss can move any more: those judged over REJUDGE_FOR before `t`, and
+        the oldest past MAX_REJUDGE. A count never goes down."""
+        while self.refusals and (len(self.refusals) > MAX_REJUDGE or t - self.refusals[0][0] > REJUDGE_FOR):
+            _at, cls, doubtful = self.refusals.popleft()
+            self.counts.conns[cls] += 1
+            self.counts.seen["doubtful"] += doubtful
 
     def missed(self, since: float | None = None) -> None:
         """An answer may have gone unseen, from `since` (now when not known; at most REJUDGE_FOR ago) to
@@ -266,8 +294,7 @@ class Shadow:
         self.last_miss = max(self.last_miss, t)
         since = t if since is None else max(since, t - REJUDGE_FOR)
         while self.refusals and self.refusals[-1][0] >= since:
-            _at, cls = self.refusals.pop()
-            self.counts.conns[cls] -= 1
+            self.refusals.pop()
             self.counts.conns[UNASSESSED] += 1
 
     # ---- the socket, the forget and the status ----------------------------------------------------------
@@ -276,8 +303,16 @@ class Shadow:
         return () if self.sock is None else (self.sock.fileno(),)
 
     def poll(self) -> None:
-        """Read the copies waiting, at most POLL_MAX, without waiting. Never raises: copies the kernel
-        dropped are counted, and a socket that fails otherwise is closed and read no more."""
+        """Read the copies waiting, at most POLL_MAX, without waiting, and time the reads that found one.
+        Never raises: copies the kernel dropped are counted, and a socket that fails otherwise is closed
+        and read no more."""
+        start, before = self.timer(), self.counts.seen["copies"]
+        self._poll()
+        if self.counts.seen["copies"] > before:
+            self.poll_us.append(self.timer() - start)
+            del self.poll_us[:-US_SAMPLES]
+
+    def _poll(self) -> None:
         for _ in range(POLL_MAX):
             if self.sock is None:
                 return
@@ -321,23 +356,36 @@ class Shadow:
         stamp = _mtime(self.forget_path)
         if stamp is not None and (self.forgot is None or stamp > self.forgot):
             self.forgot = stamp
+            self.settle(float("inf"))  # the refusals judged go into the counts, which hold no address
             self._fresh(self.now())
             self.counts.seen["forgotten"] += 1
 
     def status(self) -> dict:
-        """The status file's `mint` section: counts and times, no name and no address."""
+        """The status file's `mint` section: counts and times, no name and no address. It runs every
+        STATUS_EVERY, so it also lets go of what the memory keeps past its time while nothing arrives."""
         t = self.now()
         self.table.expire(t)
-        ranked = sorted(self.us)
-        at = lambda q: int(ranked[min(len(ranked) - 1, int(q * len(ranked)))] * 1e6)  # noqa: E731
+        self.trim(t)
+        self.settle(t)
         return {
             "since": self.since,
             "reading": self.sock is not None,
             "pool": mint.capacity(self.pool),
             "tickets": {"live": len(self.table), **asdict(self.table.counts)},
             **asdict(self.counts),
-            "us": {"n": len(ranked), "p50": at(0.5) if ranked else 0, "p99": at(0.99) if ranked else 0},
+            "pending": len(self.refusals),
+            "us": _micros(self.us),
+            "poll_us": _micros(self.poll_us),
         }
+
+
+def _micros(samples: list[float]) -> dict[str, int]:
+    """How many costs, their median and 99th percentile, in microseconds."""
+    ranked = sorted(samples)
+    if not ranked:
+        return {"n": 0, "p50": 0, "p99": 0}
+    at = lambda q: int(ranked[min(len(ranked) - 1, int(q * len(ranked)))] * 1e6)  # noqa: E731
+    return {"n": len(ranked), "p50": at(0.5), "p99": at(0.99)}
 
 
 def _mtime(path: str) -> float | None:

@@ -191,8 +191,9 @@ def test_with_the_probe_off_every_ruleset_is_byte_for_byte_what_the_script_befor
 ):
     """The script before the probe, kept verbatim beside this file, and today's, run on the same settings: every
     script nft is fed, every command, every routing call and the ledger's line are the same. Only
-    settings.applied differs, by the two keys verify now compares, and (namebound) NAME_BINDING, which a
-    gateway whose last apply never loaded the count adds as its one difference (design decision 70). (attention) The attention count, which
+    settings.applied differs, by the two keys verify now compares, and (namebound) NAME_BINDING and (mint)
+    MINT, which a gateway whose last apply never loaded either adds as its difference (design decisions 70
+    and 96). (attention) The attention count, which
     came after the probe, is left out of the comparison: where the live reading is off, as here, it loads
     nothing, and its calls are a listing of its table beside the others and the delete of a table that
     is not there, with its two keys in settings.applied."""
@@ -227,6 +228,7 @@ def test_with_the_probe_off_every_ruleset_is_byte_for_byte_what_the_script_befor
     )
     was = (tmp_path / "old" / "run" / "tvgw" / "settings.applied").read_text(encoding="utf-8")
     assert used.pop("NAME_BINDING") == "off"
+    assert used.pop("MINT") == "off"  # (mint) likewise: a gateway that never loaded the shadow's table
     attention = ("LIVE_READING", "ATTENTION_WALL")  # (attention)
     assert {
         k: v for k, v in used.items() if not k.startswith(("TV_PROBE", "CLOCK_PORT")) and k not in attention

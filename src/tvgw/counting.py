@@ -328,12 +328,13 @@ def _mint_judge(conn, since, until, profile, ceiling) -> Judgement:
         if part == "conns"
     }
     refused = sum(gained[cls] for cls in mintreplay.REFUSED)
+    doubtful = queries.series_gain(conn, mintshadow.DOUBTFUL_RULE, since, until)
     conns = "1 connection" if refused == 1 else f"{refused} connections"
     return Judgement(
         None,
         f"{refused} connections a strict stage would refuse ({gained[mintreplay.NEVER]} never answered,"
-        f" {gained[mintreplay.LAPSED]} lapsed, {gained[mintreplay.CROWDED]} crowded out);"
-        f" {gained[mintreplay.UNASSESSED]} not assessed",
+        f" {gained[mintreplay.LAPSED]} lapsed, {gained[mintreplay.CROWDED]} crowded out; {doubtful} within"
+        f" a day of a missed answer); {gained[mintreplay.UNASSESSED]} not assessed",
         f"{conns} went where a stage that hands the TV made-up addresses would refuse them",
     )
 

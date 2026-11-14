@@ -291,7 +291,10 @@ REPORTS_KEEP = (".from-the-store",)  # install.sh's mark that the legacy reports
 # (mint) the minted-address shadow's memory, in the in-path filler's process (design decision 96): asked
 # to empty itself through mintshadow.FORGET, which it reads at its next status
 SHADOW_WHAT = "the minted-address shadow's memory"
-SHADOW_WHY = "(mint) the in-path filler's minting table: the names and addresses of the last day's answers"
+SHADOW_WHY = (
+    "(mint) the in-path filler's minting table: the names and addresses of the last day's answers, and the"
+    " addresses of the last week's"
+)
 # (site rules) LOCAL_RULES, kept wherever the settings put it (design decision 59)
 LOCAL_RULES_WHY = "(site rules) the owner's own allow and block rules: policy, not a viewing record"
 
@@ -527,7 +530,7 @@ def run(
                 else:
                     unflushed = "there is no store to keep the count the clock port's guard reads"
                 _forget_files(s, out)
-            _forget_shadow(out, dry_run)
+            _forget_shadow(s, out, dry_run)
         finally:
             if conn is not None:
                 conn.close()
@@ -715,13 +718,13 @@ def _forget_files(s, out: Result) -> None:
             out.warnings.append(f"{step.what}: {e.strerror or e}")
 
 
-def _forget_shadow(out: Result, dry_run: bool) -> None:
-    """(mint) The minted-address shadow's memory: where the in-path filler runs (its runtime directory is
-    there), the stamp that has it empty its table at its next status, within ten seconds. Nothing when the
-    filler does not run, since then nothing holds that memory."""
+def _forget_shadow(s, out: Result, dry_run: bool) -> None:
+    """(mint) The minted-address shadow's memory: where the settings ask for the shadow and the in-path
+    filler runs (its runtime directory is there), the stamp that has it empty its table at its next status,
+    within ten seconds. Nothing otherwise, since then nothing holds that memory."""
     from tvgw import mintshadow
 
-    if not os.path.isdir(os.path.dirname(mintshadow.FORGET)):
+    if not mintshadow.wanted(s) or not os.path.isdir(os.path.dirname(mintshadow.FORGET)):
         return
     if not dry_run:
         try:

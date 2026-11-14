@@ -4,10 +4,13 @@ replay's, by what the table held then), when it cannot vouch, its socket, its me
 status, and the two places the filler hands it work. The property under all of them: no bytes make it
 raise, and it never sees an answer before the answer's verdict was given.
 
-The kernel's half (the table's rule, its copies) is tests/virtual's; the apply's and verify's are below."""
+The kernel's half is not here: tests/virtual renders the table's rule with nft -c in every variant, and no
+test there reads a real copy yet. The apply's and verify's halves are below."""
 
+import dataclasses
 import errno
 import ipaddress
+import itertools
 import json
 import os
 import re
@@ -67,7 +70,11 @@ def answered(sh: mintshadow.Shadow) -> None:
 
 
 def judged(sh: mintshadow.Shadow) -> dict[str, int]:
-    return {cls: n for cls, n in sh.counts.conns.items() if n}
+    """The classes judged so far: the counts, and the refusals still open to a miss."""
+    counts = dict(sh.counts.conns)
+    for _at, cls, _doubtful in sh.refusals:
+        counts[cls] += 1
+    return {cls: n for cls, n in counts.items() if n}
 
 
 # ---- what an answer and a copy give ----------------------------------------------------------------------
@@ -89,6 +96,8 @@ def test_the_filler_reads_the_name_beside_each_address_only_when_asked():
         ("b.example", ip4(TWO)),
     )
     assert inpath.read_packet(udp(dns([a(ONE)], qd=0)), named=True).named == ()  # no question, no name
+    essential = inpath.read_packet(udp(dns([a(ONE)], qname="tv.example")), essential=bool, named=True)
+    assert essential.essential == (ip4(ONE),) and essential.named == (("tv.example", ip4(ONE)),)
 
 
 @pytest.mark.parametrize(
@@ -159,15 +168,24 @@ def test_the_memory_stops_at_its_bounds_counts_a_miss_and_makes_room_as_tickets_
     sh = shadow(clock)
     answered(sh)  # three pairs: the third over the bound
     assert len(sh.table) == 2 and sh.counts.seen["full"] == 1 and sh.last_miss == NOW
-    sh.answer(udp(dns([a(NOBODY)], qname="left.example")))  # a third address: ONE is forgotten
-    assert list(sh.newest) == [ip4(TWO), ip4(NOBODY)] and sh.counts.seen["full"] == 2
     sh.answer(udp(dns([a(ONE)], qname="one.example")))  # a renewal needs no room
-    assert sh.counts.seen["full"] == 2 and sh.table.counts.renewed == 1
+    assert sh.counts.seen["full"] == 1 and sh.table.counts.renewed == 1
+    sh.answer(udp(dns([a(NOBODY)], qname="left.example")))  # a third address: TWO's answer is the oldest
+    assert list(sh.newest) == [ip4(ONE), ip4(NOBODY)] and sh.counts.seen["full"] == 2
+    sh.answer(udp(dns([a(TWO)], qname="right.example")))  # left out again: its mark moves to the end
+    assert list(sh.unminted) == [ip4(NOBODY), ip4(TWO)] and sh.counts.seen["full"] == 3
+    clock.t += mintshadow.LOSS_PROTECT + 1  # the miss no longer stops judging, but the bound left it out
+    sh.copy(opening(NOBODY))
+    assert judged(sh) == {UNASSESSED: 1}
+    clock.t -= mintshadow.LOSS_PROTECT + 1
     clock.t += LIFE  # every ticket has ended: room again
     sh.answer(udp(dns([a(TWO)], qname="right.example")))
-    assert len(sh.table) == 1 and sh.counts.seen["full"] == 2
+    assert len(sh.table) == 1 and sh.counts.seen["full"] == 3
     sh.copy(opening(TWO))
-    assert judged(sh) == {TICKET: 1}
+    assert judged(sh) == {UNASSESSED: 1, TICKET: 1} and not sh.unminted  # left out for a lifetime only
+    clock.t += mintshadow.NEWEST_FOR
+    sh.answer(udp(dns([a(ONE)], qname="one.example")))
+    assert list(sh.newest) == [ip4(ONE)]  # an address answered a week before is forgotten
 
 
 def test_a_retried_opening_is_one_connection_until_two_minutes_have_passed(monkeypatch):
@@ -195,7 +213,9 @@ def test_a_retried_opening_is_one_connection_until_two_minutes_have_passed(monke
         pytest.param(
             -LIFE, -mintshadow.LOSS_PROTECT - 1, NEVER, id="a memory of a lifetime, no miss in an hour"
         ),
-        pytest.param(-LIFE + 1, -mintshadow.LOSS_PROTECT - 1, UNASSESSED, id="a memory a second short"),
+        pytest.param(
+            -LIFE + 0.5, -mintshadow.LOSS_PROTECT - 1, UNASSESSED, id="a memory half a second short"
+        ),
         pytest.param(-LIFE, -mintshadow.LOSS_PROTECT, UNASSESSED, id="a miss an hour ago"),
     ],
 )
@@ -246,6 +266,60 @@ def test_a_miss_moves_the_refusals_since_it_to_unassessed_and_no_further_back():
     sh.missed(NOW - 3600)  # however far back the switch was seen, a miss reaches back REJUDGE_FOR
     assert judged(sh) == {NEVER: 1, UNASSESSED: 3}
     assert clock.t - (NOW + 30) <= mintshadow.REJUDGE_FOR < clock.t - NOW
+    clock.t += mintshadow.LOSS_PROTECT + 1
+    sh.copy(opening(NOBODY, sport=9))
+    clock.t += mintshadow.REJUDGE_FOR + 1  # nothing arrived to count it yet
+    sh.missed(NOW - 3600)
+    assert judged(sh) == {NEVER: 2, UNASSESSED: 3}
+
+
+def test_a_refusal_is_counted_once_no_miss_can_move_it_and_no_count_goes_down(monkeypatch):
+    """The store reads a count that went down as a restart and adds the whole of it again: a refusal is
+    counted only once REJUDGE_FOR has passed, or once MAX_REJUDGE more wait behind it."""
+    clock = Clock(NOW)
+    sh = shadow(clock)
+    seen: list[dict] = []
+
+    def snapshot():
+        seen.append(sh.status()["conns"])
+
+    sh.copy(opening(NOBODY))
+    snapshot()
+    clock.t += mintshadow.REJUDGE_FOR
+    snapshot()
+    assert seen[-1][NEVER] == 0 and sh.status()["pending"] == 1  # still open to a miss
+    clock.t += 0.5
+    snapshot()
+    assert seen[-1][NEVER] == 1 and sh.status()["pending"] == 0
+    sh.copy(opening(NOBODY, sport=1))
+    snapshot()
+    sh.missed(NOW)  # reaches back to the first, which is counted: only the second moves
+    snapshot()
+    assert seen[-1] == {**seen[0], NEVER: 1, UNASSESSED: 1}
+    assert all(a[k] <= b[k] for a, b in itertools.pairwise(seen) for k in a)
+    monkeypatch.setattr(mintshadow, "MAX_REJUDGE", 1)
+    clock.t += mintshadow.LOSS_PROTECT + 1  # the miss no longer stops judging
+    sh.copy(opening(NOBODY, sport=2))
+    sh.copy(opening(NOBODY, sport=3))
+    assert sh.counts.conns[NEVER] == 2 and len(sh.refusals) == 1
+
+
+@pytest.mark.parametrize(
+    ("last_miss", "doubtful"),
+    [
+        pytest.param(-LIFE, 0, id="a miss a ticket's lifetime ago"),
+        pytest.param(-LIFE + 0.5, 1, id="a miss half a second less than that"),
+    ],
+)
+def test_a_refusal_within_a_lifetime_of_a_miss_is_counted_doubtful(last_miss, doubtful):
+    """A miss stops judging for an hour, but a ticket lives a day: an answer missed then may be the one a
+    later refusal used. The owner can discount such refusals."""
+    clock = Clock(NOW)
+    sh = shadow(clock)
+    sh.last_miss = NOW + last_miss
+    sh.copy(opening(NOBODY))
+    sh.settle(clock.t + mintshadow.REJUDGE_FOR + 1)
+    assert sh.counts.conns[NEVER] == 1 and sh.counts.seen["doubtful"] == doubtful
 
 
 def test_no_bytes_make_the_shadow_raise_and_a_fault_costs_one_answer():
@@ -294,7 +368,8 @@ def test_a_poll_reads_the_waiting_copies_and_no_more_than_its_bound():
     assert sh.counts.seen["dropped"] == 1 and sh.counts.seen["missed"] == 0  # a copy carries no answer
     sh.poll()
     sh.poll()  # nothing waits: the read ends at once
-    assert sh.counts.conns[NEVER] == mintshadow.POLL_MAX
+    assert sh.counts.conns[NEVER] + len(sh.refusals) == mintshadow.POLL_MAX
+    assert sh.status()["poll_us"]["n"] == 2  # the reads that found a copy are timed
 
 
 def test_a_socket_that_fails_is_closed_and_waited_on_no_more():
@@ -326,12 +401,14 @@ def test_a_forget_empties_the_memory_at_the_next_status_and_an_older_stamp_does_
     clock = Clock(NOW)
     sh = shadow(clock, forget_path=str(stamp))
     answered(sh)
+    sh.copy(opening(NOBODY))
     sh.tick()
     assert len(sh.table) == 3 and sh.counts.seen["forgotten"] == 0  # the stamp came before this memory
     clock.t += 5
     os.utime(stamp, (NOW + 5, NOW + 5))
     sh.tick()
-    assert len(sh.table) == 0 and not sh.newest and sh.since == sh.last_miss == NOW + 5
+    assert len(sh.table) == 0 and not sh.newest and not sh.recent and sh.since == sh.last_miss == NOW + 5
+    assert sh.counts.conns[NEVER] == 1 and not sh.refusals  # what was judged is counted: a count, no address
     assert sh.counts.seen["forgotten"] == 1
     sh.tick()
     assert sh.counts.seen["forgotten"] == 1
@@ -377,7 +454,21 @@ def test_the_status_holds_counts_and_times_and_no_name_or_address():
     answered(sh)
     sh.copy(opening(ONE))
     doc = sh.status()
-    assert set(doc) == {"since", "reading", "pool", "tickets", "conns", "answers", "seen", "errors", "us"}
+    assert set(doc) == {
+        *(
+            "since",
+            "reading",
+            "pool",
+            "tickets",
+            "conns",
+            "answers",
+            "seen",
+            "errors",
+            "pending",
+            "us",
+            "poll_us",
+        )
+    }
     assert doc["tickets"]["live"] == doc["tickets"]["minted"] == 3 and doc["pool"] == 130_048
     assert doc["conns"][TICKET] == 1 and set(doc["conns"]) == {LOCAL, *mintreplay.JUDGED}
     assert doc["us"] == {"n": 3, "p50": 3_000_000, "p99": 3_000_000}
@@ -391,6 +482,9 @@ def test_the_status_holds_counts_and_times_and_no_name_or_address():
     assert shadow().status()["us"] == {"n": 0, "p50": 0, "p99": 0}
     clock.t += LIFE
     assert sh.status()["tickets"]["live"] == 0  # the tickets that ended are not counted alive
+    clock.t += mintshadow.NEWEST_FOR
+    sh.status()
+    assert not sh.newest and not sh.recent  # let go of at a status, though nothing arrived
 
 
 # ---- where the filler hands it work ----------------------------------------------------------------------
@@ -515,7 +609,11 @@ def test_the_start_binds_its_group_and_seeds_or_leaves_the_filler_alone(monkeypa
             bound.append("closed")
 
     monkeypatch.setattr(nametap, "LogSocket", Sock)
-    settings = config.Settings(**ON, adguard_querylog=str(tmp_path / "none.json"))
+    from conftest import DNS_ALLOWED
+
+    log = tmp_path / "querylog.json"  # one answer, older than a ticket's lifetime: the read reached back
+    log.write_text(DNS_ALLOWED, encoding="utf-8")
+    settings = config.Settings(**ON, adguard_querylog=str(log))
     assert mintshadow.start(config.Settings()) is None and bound == []
     result = errno.EBUSY
     assert mintshadow.start(settings) is None and bound == [9, "closed"]
@@ -523,6 +621,7 @@ def test_the_start_binds_its_group_and_seeds_or_leaves_the_filler_alone(monkeypa
     result = 0
     sh = mintshadow.start(settings)
     assert isinstance(sh.sock, Sock) and "0 answers remembered" in capsys.readouterr().out
+    assert sh.since <= sh.now() - LIFE  # the memory reaches back a lifetime from the start
 
 
 # ---- verify, the counting line, forget ---------------------------------------------------------------------
@@ -562,12 +661,26 @@ def test_verify_says_not_in_use_when_off_and_warns_at_most_otherwise():
     assert "MINT" in verify.APPLY_KEYS
 
 
+def test_a_run_of_verify_stores_the_shadows_counts_with_the_firewalls(lg):
+    from test_verify import S, gateway, resolver
+
+    host = gateway(
+        overrides={("nft", "list", "table", *verify.MINT_TABLE): TABLE},
+        files={verify.PROC_LOG: PROC, inpath.STATUS: status_doc(NOW - 5)},
+    )
+    r = verify.check(
+        dataclasses.replace(S, dnsgate_fill="inpath", mint="shadow"), lg, **host, resolve=resolver()
+    )
+    assert (mintshadow.NEVER_RULE, 3, 0) in r.counters
+    assert next(c for c in r.checks if c.name == "mint_shadow").detail.startswith("counting")
+
+
 def test_the_counting_line_follows_the_never_series_and_the_owner_judges(tmp_path):
     conn = db.connect(str(tmp_path / "tvgw.db"))
     since = NOW - 15 * 86400
     rules = {key: rule for _part, key, rule in mintshadow.SERIES}
     for t, n in ((since, 0), (NOW - 3600, 3)):
-        for key in (NEVER, LAPSED, UNASSESSED):
+        for key in (NEVER, LAPSED, CROWDED, UNASSESSED, "doubtful"):
             conn.execute(
                 "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?, ?, ?, 0)", (t, rules[key], n)
             )
@@ -578,13 +691,14 @@ def test_the_counting_line_follows_the_never_series_and_the_owner_judges(tmp_pat
     conn.commit()
     obs = counting.Observation(config.Settings(**ON), {mintshadow.NEVER_RULE})
     assert counting.observe(conn, obs, NOW)["mint"]["since"] == since
-    assert not counting.MECHANISMS[[m.key for m in counting.MECHANISMS].index("mint")].active(
-        counting.Observation(config.Settings(), {mintshadow.NEVER_RULE})
-    )
+    mechanism = counting.MECHANISMS[[m.key for m in counting.MECHANISMS].index("mint")]
+    assert not mechanism.active(counting.Observation(config.Settings(), {mintshadow.NEVER_RULE}))
+    assert not mechanism.active(counting.Observation(config.Settings(**ON), set()))  # no series: not running
     (row,) = [r for r in counting.status(conn, NOW) if r.key == "mint"]
     assert row.state == counting.REACHED and row.judgement.clean is None
     assert row.judgement.found == (
-        "6 connections a strict stage would refuse (3 never answered, 3 lapsed, 0 crowded out); 3 not assessed"
+        "9 connections a strict stage would refuse (3 never answered, 3 lapsed, 3 crowded out; 3 within a day"
+        " of a missed answer); 3 not assessed"
     )
     lines = counting.status_lines(counting.file_text(counting.status(conn, NOW, judge=False)), NOW)
     assert any(line.startswith("  connections a stage that hands the TV made-up addresses") for line in lines)

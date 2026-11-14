@@ -1101,9 +1101,11 @@ def main(s: Settings, queue_num: int = QUEUE, status_path: str = STATUS, profile
         essential = attention.platform_check(profile) if attention.wanted(s) else None
     # (mint) the minted-address shadow, where MINT=shadow asks for it (design decision 96): None when its
     # copies' group cannot be bound, and the filler holds the answers as before
-    from tvgw import mintshadow
+    shadow = None
+    if getattr(s, "mint", "off") == "shadow":
+        from tvgw import mintshadow
 
-    shadow = mintshadow.start(s, profile)
+        shadow = mintshadow.start(s, profile)
     adder = Adder(nft.add, add_essential=nft.add_essential)
     filler = Filler(lambda packet_id: loop.release(packet_id), adder, essential=essential, shadow=shadow)
     loop = Loop(

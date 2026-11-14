@@ -37,6 +37,9 @@ ACCEPT_COUNTERS = {
     "names: DNS answers to the TV, copied",
     "names: DNS answers to the TV over TCP, copied",
     "names: first packets of the TV's TLS connections, copied",
+    # (mint) the copies the minted-address shadow reads (design decision 96): a measure of that count, kept
+    # out of Firewall held with the in-path filler's own (queries.INPATH_RULE)
+    "in-path: new TV connections copied to the minting table",
     # (attention) the attention count (design decision 69): what a wall keyed to the TV's state would have
     # refused, counted and refused by nothing, shown in the brief's Attention section (attention.RULE_PREFIX)
     "attention: outside the essentials, screen saver on",

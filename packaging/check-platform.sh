@@ -56,11 +56,12 @@ WAN_GW=198.51.100.1 URL_FILTER_RESOLVER=1.1.1.1
 # (inpath) DNSGATE_FILL=inpath has a variant of its own, so headers is still rendered passive as it always
 # was: its queue rules are read by this distribution's nft and the runner's kernel, which loads nft_queue.
 # (namebound) NAME_BINDING=count rides with headers, the other variant whose rules copy to NFLOG
+# (mint) MINT=shadow rides with inpath, the only variant whose filler keeps its table
 VARIANTS='default:
 vpn:UPLINK=vpn
 headers:CAPTURE_MODE=headers TV_PROBE=on NAME_BINDING=count
 open:BLOCK_QUIC=no STRICT_PORTS=yes DNSGATE=off ADTECH_PORT_WALL=no
-inpath:DNSGATE_FILL=inpath LIVE_READING=on'
+inpath:DNSGATE_FILL=inpath LIVE_READING=on MINT=shadow'
 # The findings `systemd-analyze verify` may report on a tvgw file on one distribution, each with the reason
 # it is accepted there, one per line: <ID>-<VERSION_ID>|<the finding's text>|<why>
 ALLOWED="debian-12|Unknown key 'RestartSteps' in section [Service], ignoring.|systemd 252 predates RestartSteps (254): tvgw-dnsgate restarts every 5 s instead of backing off to 5 min
