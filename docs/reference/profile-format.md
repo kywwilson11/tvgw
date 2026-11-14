@@ -72,7 +72,7 @@ The must-allow hosts are also read by the lint, by `tvgw verify`, by the brief's
 
 | Key | Type | Default | Meaning | Refused at load when |
 |---|---|---|---|---|
-| `filters` | list of `{ name = "...", url = "...", sentinel = "...", role = "..." }` | `[]` | Blocklists that `tvgw adguard apply` makes sure exist and are enabled, matched by URL, with the name set. `sentinel` is optional: a name the list blocks and that answers `0.0.0.0` once the list is in force. (pause) `role` is `tracking`, the default, for a list of trackers, which `tvgw pause` switches off for its minutes, or `bypass` for a list that closes a way around the filter (the list of encrypted-DNS servers), which no pause touches ([design decision 79](../design-decisions.md#79-a-pause-lifts-only-the-shared-tracker-lists-for-at-most-an-hour-through-the-plan-ends-on-its-own-two-ways-and-then-names-what-the-lists-were-stopping)). Every bundled profile marks its DoH list `bypass`. | an entry lacks a string `name` or `url`, its `sentinel` is not a lower-case DNS name of two labels or more, its `role` is neither `tracking` nor `bypass`, or it has a key other than these four |
+| `filters` | list of `{ name = "...", url = "...", sentinel = "...", role = "..." }` | `[]` | Blocklists that `tvgw adguard apply` makes sure exist and are enabled, matched by URL, with the name set. `sentinel` is optional: a name the list blocks and that answers `0.0.0.0` once the list is in force. (pause) `role` is `tracking`, the default, for a list of trackers, which `tvgw pause` switches off for its minutes, or `bypass` for a list that closes a way around the filter (the list of encrypted-DNS servers), which no pause touches ([design decision 79](../design-decisions.md#79-a-pause-lifts-only-the-shared-tracker-lists-for-at-most-an-hour-through-the-plan-ends-on-its-own-two-ways-and-then-names-what-the-lists-were-stopping)). Every bundled profile marks its DoH list `bypass`, and the list is `bypass` whatever its entry says: found by a URL that ends `/doh.txt` or by the sentinel `h4g3z1-doh.web.app`, so an entry written without a `role` does not make it pausable ([design decision 102](../design-decisions.md#102-the-machines-and-the-proposals-lint-is-the-one-tvgw-block-runs-autonomy-needs-a-tv-that-is-watched-and-the-doh-list-is-never-pausable)). | an entry lacks a string `name` or `url`, its `sentinel` is not a lower-case DNS name of two labels or more, its `role` is neither `tracking` nor `bypass`, or it has a key other than these four |
 | `strip_qtypes` | list of strings | `[]` | Record types withheld from the TV. | an entry is not in `STRIPPABLE_QTYPES = ("HTTPS", "SVCB")` in src/tvgw/profile.py |
 
 `tvgw adguard apply` leaves lists the profile does not name as they are, and removing a list from `filters` does not disable it in AdGuard.
@@ -374,9 +374,21 @@ An exception above a blocked name unblocks it, and one equal to it leaves the bl
 
 The lint does not see one thing: AdGuard matches rules against CNAME targets as well as the queried name, so a clean lint can still block a must-allow host through its CNAME; the brief's red line catches that ([red lines](../use/daily-brief.md#red-lines)).
 
+A second set of checks, the strict lint (`Profile.lint(strict=True)`, [design decision 102](../design-decisions.md#102-the-machines-and-the-proposals-lint-is-the-one-tvgw-block-runs-autonomy-needs-a-tv-that-is-watched-and-the-doh-list-is-never-pausable)), holds a rule being written or judged to what `tvgw block` already refuses. Its problems come after the others:
+
+| Problem | Message starts with |
+|---|---|
+| A block or `$dnsrewrite` rule that takes the whole of a `never_block_apex` zone without being at its apex: a parent such as `\|\|tv^`, or a leading `*` such as `\|\|*amagi.tv^` | `block rule` or `rewrite rule`, then `takes the whole of` |
+| A block or rewrite that reaches a `clock_hosts` name: it covers it, sits above its literal tail, or is a wildcard or parent over a name the pattern matches | `block rule` or `rewrite rule`, then `reaches the clock host` |
+| A `/regex/` that matches a name a clock host pattern fills (`??` as `gb`, `us`, `zz` and the TV's country, `?` as a letter, `*` as a label, a digit or a letter) | `regex rule`, then `matches the clock host` |
+| A block or rewrite that covers or sits under a URL-filter host | `block rule` or `rewrite rule`, then `meets` |
+| A `/regex/` holding `[:`, which Go reads as a POSIX class where Python reads a set, so the lint's own probes of the zone cannot be trusted | `regex rule`, then `holds a POSIX class` |
+
+The strict checks run in the machine's file (`autoblock.admissible`) and in the analyst's vetting, where only what the added rule brings counts (`Profile.added_problems`), and in the unit tests over every bundled profile and each country of its `[regions]`. `tvgw profile`, `tvgw adguard diff` and `apply` do not run them, so a profile's own apply never changes.
+
 The same lint runs in four places:
 
 - `tvgw profile`.
 - `tvgw adguard diff` and `tvgw adguard apply`, which refuse a profile that does not lint before they read AdGuard's file. A profile loaded from a path is never applied unlinted.
 - The unit tests, so `make gate` and CI fail on a profile that does not lint.
-- Each rule the gateway adds on its own, linted beside the profile before it reaches AdGuard.
+- Each rule the gateway adds on its own, linted beside the profile before it reaches AdGuard (strict, as above).

@@ -447,15 +447,15 @@ def test_vet_refuses_modifiers_that_bend_or_remove_policy(lg):
 
 def test_vet_refuses_a_rule_for_another_name_than_its_heading(lg):
     """The owner reads `## n. block: name`, and the autonomous gate judges that name's traffic shape:
-    a rule for another host under the heading (the firmware host the URL filter serves, say) would
-    pass both. The rule must act on the name; a wildcard or a parent zone does."""
+    a rule for another host under the heading would pass both (the firmware host the URL filter serves
+    is refused earlier, by the strict lint). The rule must act on the name; a wildcard or a parent zone does."""
     current = lg.adguard_rules("10.10.10.1", "10.10.10.17")
 
     def verdict(kind, name, rule):
         result = {"proposals": [{"kind": kind, "name": name, "rule": rule, "risk": "low"}]}
         return analyst.vet(result, lg, current)["proposals"][0]["vetted"]
 
-    assert verdict("block", "newtracker.example", "||ngfts.lge.com^") == (
+    assert verdict("block", "newtracker.example", "||other.example^") == (
         "refused: the rule does not act on 'newtracker.example', the name it is headed with"
     )
     assert verdict("block", "news.example", "/^ads[0-9]+\\.example$/").startswith(
@@ -585,6 +585,100 @@ def test_a_cut_off_answer_has_room_and_its_spend_is_recorded(settings, lg, tmp_p
     assert record["cost_usd"] == round((12000 * 4 + 900 * 20) / 1e6, 4)
     md = (tmp_path / "reports" / "proposals" / f"{DAY}.md").read_text()
     assert "cut off" in md and "Tokens in 12000, out 900" in md
+
+
+# ---- (models) a model the table lacked, and stops it handled thinly (L5-17, decision 102) -----------------
+@pytest.mark.parametrize(
+    "model", ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-2"]
+)
+def test_every_current_model_has_a_price(model):
+    """claude-fable-5-2 had none, so a run on it printed "price unknown" and recorded no cost."""
+    assert isinstance(analyst.cost({"input_tokens": 1000, "output_tokens": 100}, model), float)
+
+
+def test_fable_5_2_costs_8_and_40_dollars_a_million_tokens():
+    assert analyst.cost({"input_tokens": 1_000_000, "output_tokens": 1_000_000}, "claude-fable-5-2") == 48.0
+
+
+def test_a_stop_for_the_context_window_is_billed_and_recorded_not_parsed(settings, lg, tmp_path, capsys):
+    """A stop other than end_turn, refusal or max_tokens reached `json.loads` with no text, and the run
+    died with a JSONDecodeError and no record of the billed tokens."""
+    with pytest.raises(analyst.CutOff) as e:
+        analyst.call(FakeClient(message("", stop="model_context_window_exceeded")), "s", "u")
+    assert e.value.usage["input_tokens"] == 12000 and e.value.reason == "model_context_window_exceeded"
+    key = tmp_path / "k"
+    key.write_text("sk-ant-test\n")
+    key.chmod(0o600)
+    client = FakeClient(message("", stop="model_context_window_exceeded"))
+    assert analyst.run(settings, lg, DAY, make_client=lambda k: client, key_path=str(key), force=True) == 1
+    assert "model_context_window_exceeded" in capsys.readouterr().out
+    record = json.loads((tmp_path / "reports" / "proposals" / f"{DAY}.json").read_text())
+    assert record["cut_off"] and record["usage"]["input_tokens"] == 12000 and record["proposals"] == []
+    assert "model_context_window_exceeded" in record["summary"]
+
+
+# ---- (autonomy) no automatic block for a TV nothing reads (L5-7, decision 102) -------------------------
+@pytest.mark.parametrize(
+    ("prof", "rows", "watched"),
+    [
+        ("lg-webos", True, True),
+        ("samsung-tizen", True, True),
+        ("lg-webos", False, False),  # never paired: the reader exists and has read nothing
+        ("roku", True, False),  # no reader for it
+        ("vizio-smartcast", False, False),
+        ("generic-tv", False, False),
+    ],
+)
+def test_a_tv_is_watched_when_its_profile_has_a_reader_and_the_store_has_readings(
+    settings, prof, rows, watched
+):
+    import sqlite3
+    from dataclasses import replace
+
+    conn = sqlite3.connect(settings.db_path)
+    if not rows:
+        conn.execute("DELETE FROM tvstate")
+    s = replace(settings, profile=prof)
+    assert analyst.watched(conn, s, midday(DAY) + 86400) is watched
+    assert not analyst.watched(conn, s, midday(DAY) - 3600)  # the readings come after the window
+    assert not analyst.watched(conn, s, midday(DAY) + 4 * 86400)  # and these are more than three days old
+
+
+@pytest.mark.parametrize(("prof", "drained"), [("lg-webos", 1), ("roku", 0)])
+def test_a_quiet_day_moves_the_queue_only_for_a_tv_that_is_watched(
+    settings, lg, tmp_path, monkeypatch, prof, drained
+):
+    from dataclasses import replace
+
+    calls = []
+    monkeypatch.setattr(analyst, "novelty", lambda p, review=False: [])
+    monkeypatch.setattr(analyst, "_drain_quiet", lambda *a, **k: calls.append(1) or [])
+    s = replace(settings, analyst_apply="auto", profile=prof)
+    assert analyst.run(s, lg, DAY, make_client=lambda k: None, key_path=str(tmp_path / "k")) == 0
+    assert len(calls) == drained
+
+
+def test_autonomy_is_off_for_a_tv_nothing_reads_and_the_run_says_so(settings, lg, tmp_path, capsys):
+    """`ANALYST_APPLY=auto` on a TV without hourly readings left the canary blind and the judge without
+    demand hours, so a block that stopped everything would have stayed. The proposals are written as ever."""
+    from dataclasses import replace
+
+    key = tmp_path / "k"
+    key.write_text("sk-ant-test\n")
+    key.chmod(0o600)
+    answer = {"summary": "quiet", "nothing_to_do": True, "proposals": []}
+    client = FakeClient(message(json.dumps(answer)))
+    s = replace(settings, analyst_apply="auto", profile="roku")
+    assert analyst.run(s, lg, DAY, make_client=lambda k: client, key_path=str(key), force=True) == 0
+    assert analyst.BLIND in capsys.readouterr().out
+    record = json.loads((tmp_path / "reports" / "proposals" / f"{DAY}.json").read_text())
+    assert record["autonomy_off"] == analyst.BLIND and record["autonomous"] == []
+    off = FakeClient(message(json.dumps(answer)))
+    analyst.run(
+        replace(s, analyst_apply="off"), lg, DAY, make_client=lambda k: off, key_path=str(key), force=True
+    )
+    assert analyst.BLIND not in capsys.readouterr().out
+    assert "autonomy_off" not in json.loads((tmp_path / "reports" / "proposals" / f"{DAY}.json").read_text())
 
 
 def test_a_refused_rerun_replaces_the_record_and_keeps_its_spend(settings, lg, tmp_path):

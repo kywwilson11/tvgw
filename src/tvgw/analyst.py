@@ -36,7 +36,15 @@ from collections.abc import Callable
 
 from tvgw import autoblock, db, ledger, localrules, minimize, queries, threats
 from tvgw.config import Settings
-from tvgw.profile import STRIPPABLE_QTYPES, Profile, covers, held_twin, rule_target
+from tvgw.profile import (
+    PAIRABLE_PROFILES,
+    READ_WITHOUT_PAIRING,
+    STRIPPABLE_QTYPES,
+    Profile,
+    covers,
+    held_twin,
+    rule_target,
+)
 
 MODEL = "claude-opus-5-5"  # the default; ANALYST_MODEL and ANALYST_EFFORT in tvgw.conf override
 EFFORT = "high"
@@ -44,11 +52,14 @@ EFFORT = "high"
 # before it answers; the request is streamed, so a long answer is no timeout
 MAX_TOKENS = 64000
 KEY_PATH = "/etc/tvgw/claude.key"
-PRICES = {  # dollars per million tokens, input and output, list prices of 2026-10
+# dollars per million tokens, input and output, list prices of 2026-10 (claude-haiku-5-5's holds up to 100K
+# prompt tokens, and a pack past that costs more than `cost` says, which the pack's own caps keep far away)
+PRICES = {
     "claude-opus-5-5": (4.0, 20.0),
     "claude-sonnet-5-5": (2.0, 10.0),
     "claude-haiku-5-5": (0.10, 0.50),
     "claude-fable-5-1": (10.0, 50.0),
+    "claude-fable-5-2": (8.0, 40.0),
     "claude-opus-5": (5.0, 25.0),
 }
 REDACTED = "[redacted]"
@@ -593,19 +604,38 @@ def read_key(path: str = KEY_PATH) -> str | None:
 
 
 class CutOff(RuntimeError):
-    """The answer reached MAX_TOKENS before it was complete: billed, with no JSON to read."""
+    """The answer stopped before it was complete (MAX_TOKENS, or a stop reason this code does not read,
+    such as `model_context_window_exceeded`): billed, with no JSON to read."""
 
-    def __init__(self, usage: dict):
-        super().__init__("the answer was cut off at max_tokens")
+    def __init__(self, usage: dict, reason: str = "max_tokens"):
+        super().__init__(f"the answer was cut off: {reason}")
         self.usage = usage
+        self.reason = reason
+
+
+BLIND = "this TV cannot be watched, so the gateway does not block on its own"
+WATCHED_DAYS = 3
+
+
+def watched(conn: sqlite3.Connection, s: Settings, until: float) -> bool:
+    """(decision 102) Can the gateway see this TV? Its profile has a reader (`tizen`, or `lgwebos` once
+    paired) and the store holds a reading from the last WATCHED_DAYS before `until`. Without one, the canary
+    cannot see the TV and the judge has no demand hours, so a block that stops everything would stay:
+    autonomy is for a TV that is watched. An LG that was never paired has the reader and no reading."""
+    if s.profile not in (*PAIRABLE_PROFILES, *READ_WITHOUT_PAIRING):
+        return False
+    row = conn.execute(
+        "SELECT 1 FROM tvstate WHERE t >= ? AND t < ? LIMIT 1", (until - WATCHED_DAYS * 86400, until)
+    )
+    return row.fetchone() is not None
 
 
 def call(
     client, system: str, user: str, model: str = MODEL, effort: str = EFFORT, schema: dict | None = None
 ) -> tuple[dict, dict]:
     """One streamed request answered inside SCHEMA. Returns (parsed object, usage). A refusal comes
-    back as {"refused": category} with no proposals; a cut-off answer raises CutOff, carrying the
-    usage that was billed."""
+    back as {"refused": category} with no proposals; a cut-off answer, or any stop but `end_turn`, raises
+    CutOff, carrying the usage that was billed."""
     with client.messages.stream(
         model=model,
         max_tokens=MAX_TOKENS,
@@ -622,8 +652,8 @@ def call(
     if msg.stop_reason == "refusal":
         details = getattr(msg, "stop_details", None)
         return {"refused": getattr(details, "category", None) or "unspecified"}, usage
-    if msg.stop_reason == "max_tokens":
-        raise CutOff(usage)
+    if msg.stop_reason != "end_turn":  # max_tokens, or one this code cannot read: still billed, recorded
+        raise CutOff(usage, str(msg.stop_reason))
     text = next((b.text for b in msg.content if getattr(b, "type", "") == "text"), "")
     return json.loads(text), usage
 
@@ -689,8 +719,7 @@ def _verdict(p: dict, prof: Profile, current_rules: list[str]) -> str:
         return "refused: an allow rule starts with @@"
     if kind == "block" and rule.startswith("@@"):
         return "refused: a block rule does not start with @@"
-    problems = dataclasses.replace(prof, custom_rules=(*prof.custom_rules, rule)).lint()
-    if problems:
+    if problems := prof.added_problems(rule):  # (decision 102) the strict lint, the rule's own problems
         return "refused: " + _text(problems[0])
     return _heading(rule, p["name"]) or "ok"
 
@@ -918,6 +947,7 @@ def run(
     conn = sqlite3.connect(f"file:{s.db_path}?mode=ro", uri=True)
     try:
         p = pack(conn, a, b, label, prof, s)
+        auto = s.analyst_apply == "auto" and watched(conn, s, b)
     finally:
         conn.close()
     mask = minimize.IdMask()  # lives for this run: what it hides in the pack it shows again in the answer
@@ -933,7 +963,7 @@ def run(
         # (autonomy) a waiting block must not wait for a busy day: the queue moves on quiet days too
         drained = (
             _drain_quiet(s, prof, p, chosen_model, key_path, make_client, stem, hooks or {}, out)
-            if s.analyst_apply == "auto"
+            if auto
             else []
         )
         if drained:
@@ -972,6 +1002,9 @@ def run(
         "pack_sha256_16": digest,
         "reasons": reasons,
     }
+    if s.analyst_apply == "auto" and not auto:  # (decision 102) said once, in the record and on the screen
+        head["autonomy_off"] = BLIND
+        print(f"tvgw analyst: {BLIND}", file=out)
     # (autonomy) the exact input of every request, beside its record, so a past day can be replayed
     # and scored; the same scrubbed and masked pack a dry run writes, without the `_` keys
     _write(base + ".pack.json", json.dumps(sent, indent=1, sort_keys=True, ensure_ascii=False) + "\n")
@@ -980,8 +1013,8 @@ def run(
         result = mask.show(result)  # the names and rules as they are, for the vetting and for the owner
     except CutOff as e:  # billed all the same: the record keeps the spend, and the next run asks again
         cut = {
-            "summary": f"The answer was cut off at max_tokens ({MAX_TOKENS}) before it was complete:"
-            " nothing to propose. The next run asks again.",
+            "summary": f"The answer was cut off ({e.reason}; limit {MAX_TOKENS} tokens) before it was"
+            " complete: nothing to propose. The next run asks again.",
             "proposals": [],
         }
         _write(
@@ -989,7 +1022,7 @@ def run(
             json.dumps(_record(head, e.usage, cut_off=True, **cut), indent=1, ensure_ascii=False) + "\n",
         )
         _write(base + ".md", render(label, cut, e.usage, model=chosen_model, effort=chosen_effort))
-        print(f"tvgw analyst: the answer was cut off at max_tokens; its cost is in {base}.json", file=out)
+        print(f"tvgw analyst: the answer was cut off ({e.reason}); its cost is in {base}.json", file=out)
         return 1
     except Exception as e:
         kind = type(e).__name__
@@ -1026,7 +1059,7 @@ def run(
                 (a, b),
                 mask,
             )
-            if s.analyst_apply == "auto"
+            if auto
             else []
         )
         # a verdict is remembered for a week so the same name is not bought again; a block the gates

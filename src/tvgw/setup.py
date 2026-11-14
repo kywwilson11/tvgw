@@ -32,10 +32,8 @@ from typing import Any, TextIO
 
 from tvgw import config, lgwebos
 from tvgw.discover import Candidate, render, safe_name
+from tvgw.profile import PAIRABLE_PROFILES, READ_WITHOUT_PAIRING
 
-PAIRABLE_PROFILES = ("lg-webos",)  # profiles whose TV `lgwebos` can read; others skip pairing
-# (samsung) profiles whose TV the hourly reading reads with nothing to pair: `tizen` for samsung-tizen
-READ_WITHOUT_PAIRING = ("samsung-tizen",)
 # (samsung) what setup says for such a TV, where an LG's owner is asked to pair
 READ_WITHOUT_PAIRING_SAID = (
     "the gateway reads this TV every hour without pairing, and nothing appears on its screen: its model,\n"

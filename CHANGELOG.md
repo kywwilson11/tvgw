@@ -6,6 +6,12 @@
 
 ### Status
 
+### The machine's rules are held to the same lint as yours, and automatic blocking needs a TV it can watch (2026-11-14)
+
+- **What went wrong.** `sudo tvgw block` refused a rule that takes a whole zone the TV needs (`||tv^` over a streaming channel zone), reaches a name the TV sets its clock from, or undoes the file service's rewrite. The check for rules the gateway adds on its own did not, so it kept such a rule. Nothing was applied that way: the gateway's own blocking is off unless you set `ANALYST_APPLY=auto`, and none was ever on. A pattern with a character class (`[[:alnum:]]`) was read differently by the check and by AdGuard. With `ANALYST_APPLY=auto` on a TV the gateway cannot read (a Roku, a Vizio, an LG never paired), a block that stopped everything would have stayed. A DoH list in a profile written without a `role` could be paused. `claude-fable-5-2` had no price, and an answer that stopped for the context window left no record of its cost.
+- **Now.** The machine's rules and the analyst's proposals are held to the same checks as `tvgw block`, and a pattern with `[:` is refused ([design decision 102](docs/design-decisions.md#102-the-machines-and-the-proposals-lint-is-the-one-tvgw-block-runs-autonomy-needs-a-tv-that-is-watched-and-the-doh-list-is-never-pausable)). A rule is refused only for what it adds, so a profile of your own with one old problem keeps the good rules. Your profile, your site rules and `tvgw undo` are checked as before. With `ANALYST_APPLY=auto` on a TV that is not watched, the run writes its proposals, applies nothing and says `this TV cannot be watched, so the gateway does not block on its own`. The DoH list is never paused, whatever the profile says. The price of `claude-fable-5-2` is in the table, and an answer that stops early is recorded with its cost.
+- For developers: `Profile.lint(strict=True)`, `Profile.added_problems`, `profile.reaches`, `analyst.watched`, `analyst.BLIND`; `CutOff.reason`; the record's `autonomy_off`.
+
 ## 0.5.0 (2026-11-14)
 
 ### Highlights

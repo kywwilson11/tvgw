@@ -44,7 +44,7 @@ from fnmatch import fnmatchcase
 from tvgw import durable
 from tvgw.config import Settings
 from tvgw.names import is_public_name, normalize, registrable_domain
-from tvgw.profile import Profile, covers
+from tvgw.profile import Profile, covers, reaches
 
 ALLOW, BLOCK = "allow", "block"
 _FORMS = {
@@ -171,25 +171,6 @@ def allowed_by_owner(name: str | None, allows: tuple[str, ...]) -> str | None:
 
 
 # ---- the lint ----------------------------------------------------------------------------------------
-def _pattern_tail(pattern: str) -> str:
-    """The literal labels at the right of a host pattern: `??.lgtvsdp.com` -> `lgtvsdp.com`."""
-    labels = pattern.split(".")
-    while labels and any(ch in labels[0] for ch in "*?["):
-        labels.pop(0)
-    return ".".join(labels)
-
-
-def _reaches(host: str, pattern: str) -> bool:
-    """A block of `host` reaches a name `pattern` matches: the pattern matches the host or a name
-    under it, or the host stands at or above the pattern's literal tail."""
-    tail = _pattern_tail(pattern)
-    return (
-        fnmatchcase(host, pattern)
-        or fnmatchcase(host, "*." + pattern)
-        or bool(tail and tail != pattern and covers(host, tail))
-    )
-
-
 def _block_problem(rule: Rule, prof: Profile, others: list[Rule]) -> str | None:
     host = rule.host
     for needed, why in prof.must_allow.items():
@@ -203,7 +184,7 @@ def _block_problem(rule: Rule, prof: Profile, others: list[Rule]) -> str | None:
     for pattern in prof.clock_hosts:
         if fnmatchcase(host, pattern) or fnmatchcase(host, "*." + pattern):
             return f"the TV sets its clock from {host}"
-        if _reaches(host, pattern):
+        if reaches(host, pattern):
             return f"the TV sets its clock from names under {host}"
     if prof.url_filter:
         for served in prof.url_filter.hosts:
