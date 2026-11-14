@@ -103,9 +103,8 @@ class Reading:
 
     def __init__(self, path):
         self.path, self.state, self.speaking = path, None, True
-        self._one_writer = (
-            threading.Lock()
-        )  # write_word's temporary file is one name: the real word has one writer
+        # write_word's temporary file is one name: the real word has one writer
+        self._one_writer = threading.Lock()
         self._stop = threading.Event()
         self._t = threading.Thread(target=self._run, daemon=True)
         self._t.start()

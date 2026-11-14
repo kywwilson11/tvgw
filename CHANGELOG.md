@@ -26,9 +26,8 @@
 
 ### The firewall's counts survive an apply on nftables 1.1.6 (2026-11-13)
 
-- **What went wrong.** nftables 1.1.6 prints how many elements a set holds after the set's size. `tvgw-apply` compares each set it keeps (the TV's time servers, the attention count's lists) with the one it would write, and read that as a set of another size: every apply deleted the table and made it again, so the count of the TV's time requests started at zero and the attention count's lists started empty. A gateway on an older nftables, which the reference is, was not affected.
+- **What went wrong.** nftables 1.1.6 prints how many elements a set holds after the set's size, when it holds any (1.1.3, which the reference runs, does not). `tvgw-apply` compares each set it keeps (the TV's time servers, the attention count's lists) with the one it would write, and read that as a set of another size: every apply that found a set holding something deleted the table and made it again, so the count of the TV's time requests started at zero and the attention count's lists started empty. A gateway on an older nftables, which the reference is, was not affected.
 - **Now** the comparison reads past the count. The namespace tests, which caught it when the test machines moved to 1.1.6, compare rulesets without it.
-
 
 ### The screen test, first stage: a dry run that plays nothing (2026-11-13)
 

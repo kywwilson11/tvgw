@@ -196,6 +196,13 @@ def test_a_table_whose_sets_are_as_written_is_kept_with_its_essentials_and_sampl
     [
         ("idle_seen4", set_listing("idle_seen4", TUPLE, 4096, "dynamic,timeout", "1h")),  # another lifetime
         ("platform4", set_listing("platform4", "ipv4_addr", 1024, "timeout")),  # another size
+        ("platform4", set_listing("platform4", "ipv4_addr", 1024, "timeout", holds=41)),  # and counted
+        (
+            "platform4",  # the size, then something that is no count
+            set_listing("platform4", "ipv4_addr", 65536, "timeout").replace(
+                "size 65536", "size 65536 # of another build"
+            ),
+        ),
         ("idle4", set_listing("idle4", "ipv4_addr", 8, "interval")),  # other flags
         ("conn4", set_listing("conn4", "ipv4_addr", 65536, "dynamic,timeout", "2m")),  # another type
     ],

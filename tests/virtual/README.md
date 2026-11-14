@@ -139,7 +139,7 @@ A killed run can also leave the empty mount points it created; `sudo rmdir /etc/
 
 | File | What it is |
 |---|---|
-| `vnet.py` | The topology, the sandboxed apply, the matrix parser and the counter parser; (drills) the drills' pure parts: a ruleset without its elements and counters' values (`rules_only()`), a flow log (`conntrack_lines()`) and a deploy script that calls this checkout's `tvgw` (`wrapped_script()`). |
+| `vnet.py` | The topology, the sandboxed apply, the matrix parser and the counter parser; (drills) the drills' pure parts: a ruleset without its elements, its counters' values and how many each set holds (`rules_only()`), a flow log (`conntrack_lines()`) and a deploy script that calls this checkout's `tvgw` (`wrapped_script()`). |
 | `agent.py` | The probes and the stand-in services, run inside the namespaces. |
 | `matrix.txt` | The reachability matrix. |
 | `conftest.py` | The skip-or-fail rule and the session-wide topology. |

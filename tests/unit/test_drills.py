@@ -113,6 +113,9 @@ def test_rules_only_ignores_elements_and_counters_and_sees_a_changed_rule():
     port = LISTING.replace("ip daddr != @resolved4", "udp dport 53 ip daddr != @resolved4")
     assert vnet.rules_only(port.replace("dport 53", "dport 5353")) != vnet.rules_only(port)
     assert vnet.rules_only(LISTING.replace("size 65535", "size 1024")) != vnet.rules_only(LISTING)
+    # how many a set holds, which nft 1.1.6 prints after the size, is no rule; the size before it is
+    assert vnet.rules_only(LISTING.replace("size 65535", "size 65535\t# count 2")) == vnet.rules_only(LISTING)
+    assert vnet.rules_only(LISTING.replace("size 65535", "size 1024\t# count 2")) != vnet.rules_only(LISTING)
     assert not any("198.51.100" in line for line in vnet.rules_only(LISTING))
 
 
