@@ -6,6 +6,21 @@
 
 ### Status
 
+## 0.5.0 (2026-11-14)
+
+### Highlights
+
+- `tvgw pause` now works, and the shared lists always come back, even when an end is cut short.
+- `tvgw status` names findings that a passing run held back, and a new check watches the scheduled jobs.
+- `tvgw forget` leaves no timeline of when the TV was on.
+- What the gateway blocks on its own is one rule for one name, its reverts land, and the nightly pack carries no time of day and no identifier from a name.
+- The daily list of encrypted-lookup servers can no longer cut off a network the TV streams from.
+- Three first stages that only read and report: `tvgw mint replay`, `tvgw screen-test --dry-run` and `tvgw experiment adbreaks`. New installs start with automatic installs off.
+
+### Status
+
+Tested on the reference gateway, a Raspberry Pi 5 with an LG CX: the three first stages (`tvgw mint replay`, `tvgw screen-test --dry-run` and `tvgw experiment adbreaks`) were run there, and their results are in the design decisions that describe them. Not tested on hardware: a package install or an upgrade from 0.4.0's package. The store's schema stays at 17. Still off or not built: the gateway's own blocking is off unless you set `ANALYST_APPLY=auto`; the inventions' later stages are not built (the made-up address table, playing the screen test's pattern on the TV, and stopping anything from the ad-break report); and a new install starts with automatic installs off, while a gateway set up with 0.4.0 keeps them on until you turn them off (the maintenance page gives the line).
+
 ### tvgw status no longer says "nothing needs your attention" over a held finding, and failed jobs are checked (2026-11-13)
 
 - **`tvgw status` names what a passing check run holds back.** A new check's worst finding is printed as a warning until the check is promoted, and the run passes. Before, `tvgw status` then said "Nothing needs your attention", even with a read-only disk or a clock that is not set. Now it says the protection held, names the checks that found something, and sends you to `sudo tvgw doctor` (exit 1; exit 2 when the fix is on the TV) ([design decision 92](docs/design-decisions.md#92-a-finding-held-back-as-a-warning-still-reaches-tvgw-status-and-a-check-asks-how-the-timers-jobs-ended)). `sudo tvgw verify` itself is unchanged.
