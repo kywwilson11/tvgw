@@ -159,7 +159,7 @@ class Settings:
     update_repo: str = "kywwilson11/tvgw"  # (updates) the repository, owner/name, those checks ask about
     # (updates) off | security | all: what the gateway installs on its own, in the deploy window while the TV
     # is quiet (design decision 77). off, which a file without the key means, installs nothing, as before;
-    # the template sets all for new installs
+    # the template says off too, so a new install starts with the installs off
     update_install: str = "off"
     local_rules: str = "/etc/tvgw/local.rules"  # (site rules) read: tvgw allow and block write it
     tv_pair_manifest: str = "auto"  # auto | readonly | library: the permissions an LG pairing asks for

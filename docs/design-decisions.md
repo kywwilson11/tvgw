@@ -1391,6 +1391,8 @@ The first build measured each destination-hour by the brief's gross payload boun
 | The weekly notice on the reference | `UPDATE_CHECK` | absent, so `off`: no request |
 | Immutable releases, without which a package install never installs tvgw by itself | the repository setting of decision 53 | off |
 
+*Note (2026-11-13): new installs start with `UPDATE_INSTALL=off`.* Item 1 and the Consequences above say the template sets `all`. The template now says `off`, because the 0.4.0 release page told owners to leave the installs off while the template and the maintenance page said the gateway installs its own updates, and the first of those is the one that was meant. `UPDATE_CHECK=weekly` stays, so a new install still hears of a newer release. The change reaches new installs only: `install.sh` copies the template when no settings file exists, and nothing else writes the file, so a gateway set up with 0.4.0 keeps `all`, and the maintenance page gives its owner the line that turns the installs off. No code path changed. What this does not do: it does not turn the system's security updates on for new installs, and it does not install `unattended-upgrades`, which the page now names as what the system's updates need.
+
 ## 78. The uplink is judged passively from the gateway's own samples: no speed test, a warning at most, a plain line only when a person can act
 
 *2026-11-08, from the competitive-gaps analysis of that day (its third gap, "is the gateway why the TV buffered?"). Built: `src/tvgw/uplink.py`, the brief's Uplink section and its JSON key `uplink`, the plain brief's `Uplink:` note, `tvgw uplink` and the verify check `uplink_quality`. The thresholds are starting values, read once against the reference gateway's record (below). No schema change.*
