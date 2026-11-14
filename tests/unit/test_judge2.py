@@ -4,7 +4,9 @@ import json
 import os
 
 import pytest
-from ledger_store import CDN, H0, HDMI, HOUR, Synth
+from hypothesis import given, settings
+from hypothesis import strategies as st
+from ledger_store import APP, CDN, H0, HDMI, HOUR, Synth
 
 from tvgw import autoblock, cli, db, judge2
 
@@ -85,13 +87,21 @@ def test_hours_on_an_input_are_nodata_not_a_collapse(synth, lg):
         assert autoblock.judge(synth.conn, lg, RULE, day3(h) + 60) is None
 
 
-def test_hard_red_lines_revert_in_any_hour(synth, lg):
-    synth.conn.execute(
-        "INSERT INTO dns(t, qname, qtype, blocked) VALUES (?, 'us.lgtvsdp.com', 'A', 1)", (ADDED + 60,)
-    )
+@pytest.mark.parametrize(
+    ("name", "reason"),
+    [
+        ("us.lgtvsdp.com", "a must-allow name was blocked after this rule"),
+        ("kr.lgtvsdp.com", "clock lookups were blocked after this rule"),  # a clock host of another country
+    ],
+)
+def test_hard_red_lines_revert_in_any_hour(synth, lg, name, reason):
+    """(exposure) The kernel never disagrees with a red line: it reverts with v2, whatever the rule did."""
+    synth.conn.execute("INSERT INTO dns(t, qname, qtype, blocked) VALUES (?, ?, 'A', 1)", (ADDED + 60, name))
     synth.conn.commit()
     got = v(synth, lg, ADDED + HOUR)
-    assert (got.verdict, got.reason) == ("reverted", "a must-allow name was blocked after this rule")
+    assert (got.verdict, got.reason) == ("reverted", reason)
+    k = judge2.kernel_verdict(synth.conn, lg, RULE, ADDED + HOUR)
+    assert (k.verdict, k.reason, k.final) == ("reverted", reason, True)
 
 
 def test_the_blocked_name_asked_for_ten_times_as_often_reverts(synth, lg):
@@ -130,6 +140,7 @@ def test_shadow_writes_both_verdicts_once_an_hour_and_decides_nothing(synth, lg)
     first = judge2.shadow(synth.conn, lg, now=now)
     again = judge2.shadow(synth.conn, lg, now=now + 60)
     assert first[0]["v1"] == "watching" and first[0]["v2"] == "watching" and first[0]["hour_class"] == "clean"
+    assert json.loads(first[0]["kernel"])["verdict"] == "watching"
     assert again[0]["hour"] == first[0]["hour"] == day3(19)
     assert synth.conn.execute("SELECT COUNT(*) FROM judge_shadow").fetchone()[0] == 1
     judge2.shadow(synth.conn, lg, now=now + HOUR)
@@ -137,7 +148,9 @@ def test_shadow_writes_both_verdicts_once_an_hour_and_decides_nothing(synth, lg)
     assert autoblock.rows(synth.conn)[0]["verdict"] is None  # nothing was decided
 
 
-def test_shadow_follows_a_rule_the_shipped_judge_passed_until_v2_is_final(synth, lg):
+def test_shadow_follows_a_rule_the_shipped_judge_passed_until_v2_and_the_kernel_are_final(synth, lg):
+    """(exposure) A rule that never refused a lookup is never final for the kernel short of its ceiling, so
+    the shadow follows it after v2 has passed it."""
     insert_rule(synth.conn, "passed", ADDED + DAY)
     now = ADDED + DAY + 3 * HOUR
     out = judge2.shadow(synth.conn, lg, now=now)
@@ -145,8 +158,333 @@ def test_shadow_follows_a_rule_the_shipped_judge_passed_until_v2_is_final(synth,
     for h in range(17, 23):
         synth.stream(H0 + 4 * DAY + h * HOUR)
     out = judge2.shadow(synth.conn, lg, now=H0 + 5 * DAY)
-    assert [(r["v2"], r["final"]) for r in out] == [("passed", 1)]
-    assert judge2.shadow(synth.conn, lg, now=H0 + 5 * DAY + HOUR) == []
+    assert [(r["v2"], r["final"], json.loads(r["kernel"])["verdict"]) for r in out] == [
+        ("passed", 1, "nodata")
+    ]
+    assert [r["v2"] for r in judge2.shadow(synth.conn, lg, now=H0 + 5 * DAY + HOUR)] == ["passed"]
+    assert judge2.shadow(synth.conn, lg, now=ADDED + judge2.CEILING + HOUR) == []  # past the ceiling
+
+
+@pytest.mark.parametrize(
+    ("v2_final", "kernel", "followed"),
+    [
+        (0, None, True),
+        (1, None, True),
+        (1, '{"final": false}', True),
+        (0, '{"final": true}', True),
+        (1, '{"final": true}', False),
+    ],
+)
+def test_a_passed_rule_is_followed_while_either_verdict_can_change(synth, v2_final, kernel, followed):
+    """A row written before the kernel was (no `kernel`) is a kernel verdict still to come."""
+    insert_rule(synth.conn, "passed", ADDED + DAY)
+    synth.conn.execute(
+        "INSERT INTO judge_shadow(t, rule, added_t, hour, v2, final, kernel) VALUES (0, ?, ?, 0, 'x', ?, ?)",
+        (RULE["rule"], ADDED, v2_final, kernel),
+    )
+    assert bool(judge2.rows_to_shadow(synth.conn, ADDED + 2 * DAY)) is followed
+
+
+# ---- the exposure-gated verdict (design decision 99) ------------------------------------------------------
+YT = "youtube.leanback.v4"
+EXTRA_APP = "com.example.tv"  # a third app, for a name's shape
+
+
+def kernel(store, now, row=RULE, prof=None):
+    from tvgw import profile
+
+    return judge2.kernel_verdict(store.conn, prof or profile.load("lg-webos"), row, now)
+
+
+def refuse(store, *ts, rule=RULE["rule"], name="t.example"):
+    """The rule's own refusals of `name` at each time, as AdGuard logs a custom rule's."""
+    store.conn.executemany(
+        "INSERT INTO dns(t, qname, qtype, blocked, rule, filter_id) VALUES (?, ?, 'A', 1, ?, 0)",
+        [(t, name, rule) for t in ts],
+    )
+    store.conn.commit()
+
+
+def live(store, *stays):
+    """The live reading's record of one evening: each (app, from, to) in front, the home screen between."""
+    first, last = stays[0][1] - 300, stays[-1][2] + 300
+    rows = [(first, "conn", "up"), (first, "power", "Active"), (first, "app", "com.webos.app.home")]
+    for app, a, b in stays:
+        rows += [(a, "app", app), (b, "app", "com.webos.app.home")]
+    store.conn.executemany(
+        "INSERT INTO tv_events(t, kind, value, detail) VALUES (?, ?, ?, '')", [*rows, (last, "conn", "down")]
+    )
+    store.conn.commit()
+
+
+def used_before(store, *ats):
+    """The rule's name used at each time before the block: a connection with its hello, so its shape
+    holds the app the hour's reading had in front."""
+    for t in ats:
+        store.sport += 1
+        store.conn.execute(
+            "INSERT INTO tls(t, dst, dport, sport, sni) VALUES (?, '203.0.113.7', 443, ?, 't.example')",
+            (t, store.sport),
+        )
+        store.conn.execute(
+            "INSERT INTO flows(t_start, t_end, proto, dst, dport, sport, bytes_up, bytes_down) VALUES"
+            " (?, ?, 'tcp', '203.0.113.7', 443, ?, 700, 300)",
+            (t, t + 3, store.sport),
+        )
+    store.conn.commit()
+
+
+@pytest.fixture()
+def watched(synth):
+    """The three evenings before the block, each a live session of the app in front: its picture."""
+    for d in range(3):
+        live(synth, (APP, H0 + d * DAY + 18 * HOUR, H0 + d * DAY + 22 * HOUR))
+    return synth
+
+
+def test_a_rule_that_never_refused_a_lookup_never_passes_however_well_the_tv_streams(synth, lg):
+    """(exposure) The shipped judge and v2 pass a rule on six good evening hours whether or not it ever
+    refused a lookup; the kernel extends it to the ceiling, then leaves it untested."""
+    for h in range(17, 23):
+        synth.stream(day3(h))
+    end = ADDED + DAY + 60
+    assert autoblock.judge(synth.conn, lg, RULE, end)[0] == "passed" and v(synth, lg, end).verdict == "passed"
+    got = kernel(synth, end)
+    assert (got.verdict, got.final, got.hours, got.exposure) == ("nodata", False, 0, 0)
+    assert got.reason == "extend: 0 of 2 hours with demand in which this rule refused a lookup"
+    ceiling = ADDED + autoblock.TRIAL_CEILING
+    for t in (ceiling + 18 * HOUR, ceiling + 19 * HOUR):  # past the ceiling, nothing counts any more
+        synth.stream(t)
+        refuse(synth, t + 900)
+    late = kernel(synth, ceiling + DAY)
+    assert (late.verdict, late.final) == ("untested", True) and late.reason.startswith(
+        "ceiling reached with 0"
+    )
+    blind = kernel(
+        synth, H0 + DAY + 60, {**RULE, "added_t": H0, "trial_until": H0 + DAY}
+    )  # nothing before it
+    assert (blind.verdict, blind.final) == ("untested", False) and blind.reason == (
+        "0 TV hour(s) with demand in the 3 days before the block: nothing to compare a trial with"
+    )
+
+
+def test_it_passes_on_hours_it_refused_in_with_every_app_of_its_name_in_front_and_is_final_when_they_worked(
+    watched, lg
+):
+    used_before(watched, *(H0 + d * DAY + h * HOUR + 600 for d, h in ((1, 18), (2, 20), (2, 23))))
+    watched.reading(H0 + 2 * DAY + 20 * HOUR, "Active", EXTRA_APP)  # the name was used under two apps...
+    watched.reading(H0 + 2 * DAY + 23 * HOUR, "Active", "com.webos.app.home")  # ...and the launcher
+    for h in (18, 19):
+        watched.stream(day3(h))
+    refuse(watched, day3(18) + 900)
+    live(watched, (APP, day3(18), day3(20)))
+    end = ADDED + DAY + 60
+    one = kernel(watched, end)
+    assert (one.verdict, one.hours, one.apps_needed, one.apps_seen) == ("nodata", 1, [EXTRA_APP, APP], [APP])
+    refuse(watched, day3(19) + 900)
+    two = kernel(watched, end)
+    assert two.reason == "extend: 1 of 2 apps of its name not yet in front" and two.hours == 2
+    watched.reading(day3(20), "Active", EXTRA_APP)  # in front for an hour with demand, nothing downloaded
+    got = kernel(watched, end)
+    assert (got.verdict, got.final, got.apps_seen, got.events) == ("passed", False, [EXTRA_APP, APP], 0)
+    assert got.reason == (
+        "refused lookups in 2 TV hours with demand, streaming at 67% of the days before; 1 of 2 apps of its"
+        " name worked since"
+    )
+    assert json.loads(got.as_json())["unit"] == "starts" and got.exposure == 1
+    assert kernel(watched, ADDED + autoblock.TRIAL_CEILING + 60).final  # the watch for harm ends there
+    watched.stream(day3(21), app=EXTRA_APP)
+    live(watched, (EXTRA_APP, day3(21), day3(22)))
+    assert kernel(watched, end).final  # every app of its name has worked since: no later hour changes it
+
+
+@pytest.mark.parametrize(
+    ("name", "want"),
+    [("t.example", ("reverted", True, 1, 1)), ("pubads.g.doubleclick.net", ("nodata", False, 0, 0))],
+)
+def test_a_rule_that_breaks_an_app_is_reverted_at_its_first_failed_start_though_streaming_held(
+    watched, lg, name, want
+):
+    """(exposure) The app the rule breaks fails twice at once, the rule's refusals in those seconds, and the
+    evening goes on in another app: the shipped judge passes the rule on the volume of that evening. A known
+    tracker's refusal is never a likely cause, being refused on purpose, so a rule on one is not blamed."""
+    row = {**RULE, "rule": f"||{name}^", "name": name}
+    live(
+        watched,
+        (APP, day3(18), day3(18) + 20),
+        (APP, day3(18) + 60, day3(18) + 75),
+        (YT, day3(18) + 300, day3(22)),
+    )
+    refuse(watched, day3(18) + 2, day3(18) + 62, rule=row["rule"], name=name)
+    for h in range(18, 22):
+        watched.stream(day3(h), app=YT)
+    end = ADDED + DAY + 60
+    assert autoblock.judge(watched.conn, lg, row, end)[0] == "passed"
+    got = kernel(watched, end, row)
+    assert (got.verdict, got.final, got.events, got.exposure) == want
+    if got.events:
+        assert got.reason == "1 app start failed with this rule's refusals in its minutes"
+    assert kernel(watched, end, {**RULE, "rule": "||u.example^"}).verdict == "nodata"  # nor another rule
+
+
+@pytest.mark.parametrize(("mbytes", "want"), [(40.0, ("passed", "100%")), (15.0, ("reverted", "38%"))])
+def test_at_the_trials_end_its_hours_are_held_to_the_shipped_judges_volume_test(synth, mbytes, want):
+    """No hour is low enough to start a run at 15 MB against 40, but the trial is under half the days before."""
+    for h in (18, 19):
+        synth.stream(day3(h), mbytes=mbytes)
+        refuse(synth, day3(h) + 900)
+    got = kernel(synth, ADDED + DAY + 60)
+    assert (got.verdict, got.hours, got.final) == (
+        want[0],
+        2,
+        True,
+    ) and f" {want[1]} of the days before" in got.reason
+
+
+def test_volume_reverts_only_once_the_rule_has_refused_a_lookup(synth, lg):
+    """Two low hours with demand: the shipped judge reverts whatever the rule did; the kernel only when the
+    rule had refused a lookup by the end of the run."""
+    synth.stream(day3(18), mbytes=1.0)
+    synth.stream(day3(19), mbytes=1.0)
+    now = day3(20) + 60
+    assert autoblock.judge(synth.conn, lg, RULE, now)[0] == "reverted"
+    assert kernel(synth, now).verdict == "watching"  # nothing refused yet
+    refuse(synth, day3(20) + 30)  # after the run
+    assert kernel(synth, day3(21) + 60).verdict == "watching"
+    refuse(synth, day3(19) + 30)
+    got = kernel(synth, now)
+    assert (got.verdict, got.final) == ("reverted", True)
+    assert got.reason == (
+        "streaming volume fell to 2% and 2% of the days before in 2 TV hours running with demand, after this"
+        " rule had refused a lookup"
+    )
+
+
+def test_on_a_tv_without_readings_a_block_that_stops_every_lookup_is_reverted_within_two_hours(synth):
+    """(exposure) generic-tv: no reading ever, so the shipped judge has no hour with demand and keeps a rule
+    that stopped everything, untested. The kernel takes the TV's awake hours from its connections, and
+    reverts on its allowed lookups collapsing while the rule refuses more."""
+    from tvgw import profile
+
+    gen = profile.load("generic-tv")
+    synth.conn.execute("DELETE FROM tvstate")
+    synth.conn.commit()
+    row = {**RULE, "rule": "||*^"}
+    refuse(synth, day3(5) + 60, rule="||*^", name="cdn.example")  # once, at dawn: not a run
+    assert autoblock.demand_hours(synth.conn, gen, ADDED - 3 * DAY, ADDED) == set()
+    assert len(autoblock.demand_hours(synth.conn, gen, ADDED - 3 * DAY, ADDED, unread=True)) == 12
+    refuse(synth, *(day3(h) + 60 * i for h in (18, 19) for i in range(5)), rule="||*^", name="cdn.example")
+    assert kernel(synth, day3(19) + 60, row, gen).verdict == "watching"
+    got = kernel(synth, day3(20) + 60, row, gen)
+    assert (got.verdict, got.final) == ("reverted", True)
+    assert got.reason == (
+        "the TV's allowed lookups fell to 0% and 0% of the days before in 2 hours running while this rule"
+        " refused more"
+    )
+    assert autoblock.judge(synth.conn, gen, row, ADDED + DAY + 60)[0] == "untested"
+
+
+def test_on_a_tv_without_readings_two_low_hours_after_the_rule_refused_revert(synth):
+    """(exposure) The hours the TV opened its streaming connections in are its hours with demand, before the
+    block and after: two of them at a fortieth of the days before, the rule refusing meanwhile, revert."""
+    from tvgw import profile
+
+    synth.stream(day3(18), mbytes=1.0)
+    synth.stream(day3(19), mbytes=1.0)
+    synth.conn.execute("DELETE FROM tvstate")
+    refuse(synth, day3(18) + 900)
+    got = kernel(synth, day3(20) + 60, RULE, profile.load("generic-tv"))
+    assert got.verdict == "reverted" and got.reason.startswith(
+        "streaming volume fell to 2% and 2% of the days"
+    )
+    assert kernel(synth, day3(20) + 60).verdict == "watching"  # the same store read as a TV with a reader's
+
+
+@pytest.mark.parametrize(
+    ("allowed", "refused", "others", "cut"),
+    [
+        ((1, 1), (1, 1), 0, True),  # a twentieth of the days before's mean, the rule refusing: a cut
+        ((2, 0), (1, 1), 0, False),  # a tenth is not under a tenth
+        ((0, 0), (0, 1), 0, False),  # nothing refused in the first hour either: a TV that is off
+        ((0, 5), (1, 1), 0, False),  # one hour is not a run
+        ((0, 0), (0, 0), 9, False),  # other rules' refusals are not this rule's
+    ],
+)
+def test_the_lookups_cut_is_two_hours_under_a_tenth_with_the_rules_refusals_up(
+    synth, allowed, refused, others, cut
+):
+    """One of the 3 days before the block holds all their lookups, 60 an hour: their mean is 20 an hour."""
+    synth.conn.execute("DELETE FROM dns")
+    synth.conn.executemany(
+        "INSERT INTO dns(t, qname, qtype, blocked) VALUES (?, 'cdn.example', 'A', 0)",
+        [(ADDED - 2 * DAY + i * 60,) for i in range(1440)],
+    )
+    for h, ok, own in zip((18, 19), allowed, refused, strict=True):
+        synth.conn.executemany(
+            "INSERT INTO dns(t, qname, qtype, blocked) VALUES (?, 'cdn.example', 'A', 0)",
+            [(day3(h) + 1,)] * ok,
+        )
+        refuse(synth, *[day3(h) + 2] * own)
+        refuse(synth, *[day3(h) + 3] * others, rule="||other.example^")
+    got = judge2._lookups_cut(synth.conn, RULE["rule"], ADDED, day3(20) + 60)
+    assert got == ([(int(day3(18) // HOUR), 0.05), (int(day3(19) // HOUR), 0.05)] if cut else [])
+    assert judge2._lookups_cut(synth.conn, RULE["rule"], day3(19) + 1800, day3(21) + 60) == []  # before it
+
+
+@pytest.mark.parametrize(
+    ("name", "read"), [("lg-webos", True), ("samsung-tizen", True), ("generic-tv", False), ("roku", False)]
+)
+def test_a_tv_is_read_when_the_hourly_reading_has_a_reader_for_its_profile(name, read):
+    from tvgw import profile
+
+    assert judge2._read(profile.load(name)) is read
+
+
+@settings(max_examples=25, deadline=None)
+@given(
+    evenings=st.lists(st.tuples(st.integers(0, 6), st.integers(17, 23), st.sampled_from([0.5, 5.0, 40.0]))),
+    fired=st.booleans(),
+    after=st.integers(1, 13),
+)
+def test_with_no_hour_of_demand_and_refusal_the_kernel_never_passes(tmp_path_factory, evenings, fired, after):
+    """Any evenings after the block, and the rule refusing nothing or only at night with the TV off: never
+    passed, and with nothing refused never reverted either."""
+    x = Synth(str(tmp_path_factory.mktemp("k") / "k.db"))
+    for d in range(3):
+        for h in EVENING:
+            x.stream(H0 + d * DAY + h * HOUR)
+    for d, h, mb in evenings:
+        x.stream(H0 + (3 + d) * DAY + h * HOUR, mbytes=mb)
+    if fired:
+        refuse(x, *(H0 + d * DAY + 3 * HOUR for d in range(4, 10)))
+    got = kernel(x, ADDED + after * DAY)
+    assert got.verdict != "passed" and got.hours == 0
+    assert fired or got.verdict != "reverted"
+    x.close()
+
+
+def test_a_kernel_that_fails_costs_v2_nothing(synth, lg, monkeypatch):
+    insert_rule(synth.conn)
+    monkeypatch.setattr(judge2, "kernel_verdict", lambda *a: 1 / 0)
+    (row,) = judge2.shadow(synth.conn, lg, now=ADDED + 5 * HOUR)
+    assert row["v2"] == "watching"
+    assert json.loads(row["kernel"]) == {"verdict": "error", "reason": "ZeroDivisionError: division by zero", "final": False}  # fmt: skip
+
+
+def test_a_schema_17_store_gains_the_kernel_column_and_keeps_its_rows(tmp_path):
+    path = str(tmp_path / "old.db")
+    conn = db.connect(path)
+    conn.execute("ALTER TABLE judge_shadow DROP COLUMN kernel")
+    conn.execute(
+        "INSERT INTO judge_shadow(t, rule, added_t, hour, v2) VALUES (1, '||t.example^', 0, 0, 'nodata')"
+    )
+    conn.execute("UPDATE meta SET value = '17' WHERE key = 'schema'")
+    conn.commit()
+    conn.close()
+    conn = db.connect(path)
+    assert conn.execute("SELECT v2, kernel FROM judge_shadow").fetchall() == [("nodata", None)]
+    assert db.get_meta(conn, "schema") == str(db.SCHEMA_VERSION) and db.SCHEMA_VERSION >= 18
+    conn.close()
 
 
 # ---- the calibration ------------------------------------------------------------------------------------

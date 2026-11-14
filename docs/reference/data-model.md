@@ -52,7 +52,7 @@ This is the only column reference for the store. The tables are listed in the or
 | `fw_counters` | One firewall counter in one snapshot | `tvgw verify --record` | Yes |
 | `changes` | One change on the gateway: a deploy, an apply, a link or VPN event, an AdGuard restart, a machine rule (schema 9) | `tvgw ingest` | Yes |
 | `gw_samples` | One 10-minute sample of the gateway's own counters (schema 9) | `tvgw verify --record` | Yes |
-| `judge_shadow` | Both judges' verdicts on one machine rule in one hour (schema 9) | `tvgw autoblock check` | Yes |
+| `judge_shadow` | The judges' verdicts on one machine rule in one hour (schema 9; the kernel's, schema 18) | `tvgw autoblock check` | Yes |
 | `threat_hits` | One name the TV looked up on one local day that a downloaded threat or newly-registered list covers (threats, schema 16) | `tvgw ingest`, `tvgw threats --match` | Yes |
 | `v_ip_names` | One address and TLS name pair (a view) | Derived from `tls` | Not stored |
 
@@ -495,7 +495,7 @@ Indexes: `changes_t` on `t`; `changes_event`, unique, on `(t, source, kind, subj
 
 ### `judge_shadow`
 
-(ledger) Judge v2's verdicts beside the shipped judge's, written by `judge2.shadow()` at the end of every `tvgw autoblock check` with `LEDGER=on`, after the shipped judge has decided (`cli._shadow`, within a 120 s budget). Nothing reads it to decide.
+(ledger) Judge v2's verdicts beside the shipped judge's, and (exposure) the kernel's, written by `judge2.shadow()` at the end of every `tvgw autoblock check` with `LEDGER=on`, after the shipped judge has decided (`cli._shadow`, within a 120 s budget). Nothing reads it to decide.
 
 | Column | Type | What it holds |
 |---|---|---|
@@ -507,6 +507,7 @@ Indexes: `changes_t` on `t`; `changes_event`, unique, on `(t, source, kind, subj
 | `v2`, `v2_reason` | `text` | Judge v2: `watching`, `reverted`, `suspended`, `passed` or `nodata` |
 | `clean_hours`, `k` | `integer` | Clean demand hours so far, and the `JUDGE2_CLEAN_HOURS` they were counted against |
 | `final` | `integer`, not null | 1 once no later hour can change v2's verdict |
+| `kernel` | `text` | (exposure) The exposure-gated verdict, `judge2.kernel_verdict()`, as JSON ([design decision 99](../design-decisions.md#99-a-machine-rule-is-tried-on-its-own-refusals-in-shadow-and-a-clean-span-needs-a-start-that-met-them)): `verdict` (`watching`, `reverted`, `passed`, `nodata`, `untested`, or `error` when the kernel failed), `reason`, `final`, `hours` (hours with demand in which the rule refused a lookup), `events` (failed app starts with the rule among their likely causes), `exposure` (app starts with the rule's refusals in their minutes, worked or failed), `unit` (`starts`), `apps_needed` (the apps that could stream and were in front when the TV used the name in the 3 days before the block) and `apps_seen` (those in front since). NULL in a row written before schema 18 |
 
 Index: `judge_shadow_t` on `t`. A second run in the same hour replaces its row.
 
@@ -709,6 +710,7 @@ Changing a column's type or meaning has no mechanism: `_migrate` only adds colum
 | 15 | (namebound) `answer_ip` and its `answer_ip_ip_t` and `answer_ip_t` indexes, the addresses each answer to the TV named, with the answer's lifetime; a store that gains it at a writer's open has its stored answers turned into rows by the next ingests; a read-only reader of an older store shows no server names section. | The comment above `SCHEMA_VERSION`, CHANGELOG (Server names against the filter's answers), [design decision 70](../design-decisions.md#70-each-tls-connection-is-checked-against-the-names-the-filter-answered-with-its-address-a-report-from-the-store-a-live-count-from-copies-and-nothing-refused), `test_a_schema_13_store_gains_the_table_and_its_answers_become_rows` in `tests/unit/test_namebound.py` |
 | 16 | (threats) `threat_hits` and its `threat_hits_last` index, the TV's names on a downloaded threat or newly-registered list; a read-only reader of an older store finds no row (`threats.rows()`). | The comment above `SCHEMA_VERSION`, CHANGELOG (Known-bad names), [design decision 80](../design-decisions.md#80-threat-and-newly-registered-domain-lists-are-downloaded-and-matched-on-the-gateway-counted-only-a-red-line-when-the-filter-answered-a-known-bad-name) |
 | 17 | (attention) `attention` and its `attention_t` index, the attention count's samples | The comment above `SCHEMA_VERSION`, CHANGELOG (Attention-keyed silence), [design decision 69](../design-decisions.md#69-the-tvs-own-state-held-by-entries-that-expire-and-a-count-of-what-a-wall-keyed-to-it-would-refuse) |
+| 18 | (exposure) `judge_shadow.kernel`, the exposure-gated verdict as JSON | The comment above `SCHEMA_VERSION`, `ADDED_COLUMNS`, CHANGELOG (A third verdict on the gateway's own blocks), [design decision 99](../design-decisions.md#99-a-machine-rule-is-tried-on-its-own-refusals-in-shadow-and-a-clean-span-needs-a-start-that-met-them), `test_a_schema_17_store_gains_the_kernel_column_and_keeps_its_rows` in `tests/unit/test_judge2.py` |
 | 9 | (acr) `adport` and its `adport_t` index; (autonomy) `decisions` (with its append-only trigger), `auto_queue`, `auto_rules.canary`, `auto_rules.trial_id`; (ledger) `changes`, `gw_samples`, `judge_shadow` and their indexes ([the change ledger](../how-it-works/analyst-and-autonomy.md#the-change-ledger)) | The comment above `SCHEMA_VERSION`, `ADDED_COLUMNS`, CHANGELOG (Research pass 2), `test_a_schema_8_store_gains_the_adport_table_and_keeps_its_rows` in `tests/unit/test_acr.py`, `test_a_schema_8_store_migrates_to_9_and_keeps_its_rules` in `tests/unit/test_autoblock.py`, `test_a_schema_8_store_gains_the_ledger_tables` in `tests/unit/test_ledger_deploy.py`, and the whole path, `test_a_populated_schema_8_store_migrates_to_9_once` in `tests/unit/test_schema9.py` |
 
 On the gateway, the live schema:

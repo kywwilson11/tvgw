@@ -317,7 +317,7 @@ What uses it:
 
 ## Judge v2, in shadow
 
-(ledger) `judge2.verdict()` is the judge the research proposes, strict on passing and soft on reverting. It decides nothing yet: `tvgw autoblock check` calls `judge2.shadow()` after the shipped judge has decided and printed its decisions, so a slow or failing shadow pass can never hold up a revert. The pass has a budget of 120 s (`SHADOW_BUDGET` in `cli.py`); the rules it did not reach wait for the next hour, and the check says so. It writes both judges' verdicts on every rule on probation (and on rules the shipped judge passed, until v2 reaches its own verdict) to `judge_shadow`, one row per rule and hour. The brief's "Changes in effect" shows them side by side.
+(ledger) `judge2.verdict()` is the judge the research proposes, strict on passing and soft on reverting. It decides nothing yet: `tvgw autoblock check` calls `judge2.shadow()` after the shipped judge has decided and printed its decisions, so a slow or failing shadow pass can never hold up a revert. The pass has a budget of 120 s (`SHADOW_BUDGET` in `cli.py`); the rules it did not reach wait for the next hour, and the check says so. It writes both judges' verdicts on every rule on probation (and on rules the shipped judge passed, until v2 and the [exposure-gated verdict](#the-exposure-gated-verdict) reach their own) to `judge_shadow`, one row per rule and hour. The brief's "Changes in effect" shows them side by side.
 
 - **Hard red lines**, in any hour: a must-allow name or a clock lookup blocked since the rule, or the blocked name asked for at 10 times its rate before the block over at least 2 TV hours: `reverted`.
 - **Rates** are expected-category bytes per clean hour, the rule's hours against the clean hours of the 3 days before, which need at least 2.
@@ -332,6 +332,18 @@ What uses it:
 </picture>
 
 *The ledger marks the hours a class-A change touched, judge v2 counts only the clean demand hours and records its verdict (NODATA here; suspended, reverted or passed in other trials), and the shipped judge still decides.*
+
+### The exposure-gated verdict
+
+(exposure) The same pass writes a third verdict into each row, `judge2.kernel_verdict()`, which judges a rule on what it refused rather than on volume alone ([design decision 99](../design-decisions.md#99-a-machine-rule-is-tried-on-its-own-refusals-in-shadow-and-a-clean-span-needs-a-start-that-met-them)). It decides nothing, the brief does not show it, and a fault in it is recorded in its place. Its fields are in [the `judge_shadow` table](../reference/data-model.md#judge_shadow).
+
+- **The rule's own refusals**: the refused lookups whose rule is the machine rule's text, among AdGuard's custom rules (`autoblock.exposed_hours()`).
+- **Red lines**, in any hour: as judge v2's, `reverted`.
+- **A failed start**: an app start the [probation hook](app-in-front.md#the-probation-hook) finds failing, with one of the rule's refusals among its likely causes: `reverted`.
+- **The lookups fall**: two full hours running in which the TV's allowed lookups are under 10% (`LOOKUP_COLLAPSE = 0.1` in `src/tvgw/judge2.py`) of the hourly mean of the 3 days before, while the rule's refusals rise above theirs: `reverted`. It needs no reading and no streaming byte.
+- **Volume**: the shipped judge's two low hours with demand, once the rule has refused a lookup at or before them: `reverted`.
+- **At the end of the trial**: `passed` with 2 hours with demand in which the rule refused a lookup, every app that could stream and was in front when the TV used the name in the 3 days before in front again since the block, and the shipped judge's 50% test. With fewer, `nodata` to 14 days, then `untested`. A passed verdict is final once each of those apps has had a start that worked; until then a failed start can still revert it, and the pass keeps writing rows for a rule the shipped judge passed while v2's or the kernel's verdict is not final.
+- **A TV no reader reads** (a profile other than `lg-webos` and `samsung-tizen`): its hours with demand are the hours it opened an expected-category connection in.
 
 ## The TV's state and the 26-hour probe
 

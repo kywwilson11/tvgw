@@ -6,6 +6,12 @@
 
 ### Status
 
+### A third verdict on the gateway's own blocks, from what the block itself refused (shadow) (2026-11-14)
+
+- **What went wrong.** The hourly judge of a block the gateway made on its own compares streaming volume before and after it, and never asks whether the block refused anything. In tests it passed a block that never refused a lookup (28 times in 40), and one that broke a single app while the evening went on in another (33 and 40 times in 60). The check that asks "did anything break since then?" said all was well after one app worked, whatever the others did. On a TV the gateway cannot read (a Roku, a Vizio, a TV without a profile of its own), a block that stopped everything stayed, untested.
+- **Now.** Beside the two verdicts the hourly check already records, it records a third. A block passes only after hours in which the TV was in use and the block refused lookups, with every app it was used under back in front. An app that fails to start with the block's refusals in those seconds takes it out, and so does a TV whose lookups fall away while the block refuses more. It decides nothing: the hourly judge is as it was, and you decide whether to adopt the new one after its weeks in shadow ([design decision 99](docs/design-decisions.md#99-a-machine-rule-is-tried-on-its-own-refusals-in-shadow-and-a-clean-span-needs-a-start-that-met-them)). With the gateway's own blocking off, as it is unless you set `ANALYST_APPLY=auto`, nothing is recorded. The store's schema goes to 18.
+- For developers: `judge2.kernel_verdict()` and `judge2.Kernel`, written to `judge_shadow.kernel`; `autoblock.exposed_hours()`; `demand_hours()`, `demand_rate()` and `low_run()` take `unread`; `didit.refusals()` takes `rule`; `didit.since()` is CLEAN only with an exposed start, and its verdict gains `apps_worked`, `apps_known` and `exposed`; `didit.worked()` returns the starts.
+
 ## 0.5.0 (2026-11-14)
 
 ### Highlights

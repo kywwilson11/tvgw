@@ -32,7 +32,7 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 
-from tvgw import autoblock, ledger, queries
+from tvgw import autoblock, didit, ledger, queries, rulestats
 from tvgw.profile import Profile
 
 CEILING = ledger.CEILING  # seconds: the longest a trial may extend for want of clean hours
@@ -45,6 +45,7 @@ FINAL = ("reverted", "suspended", "passed")
 # the TV readings arm B counts per hour: queries.AWAKE, the readings of a TV that is on. (fin-release) Arm A
 # counts the shipped judge's TV hours with demand instead (shipped_demand, as autoblock.demand_hours)
 SHIPPED_ON = queries.AWAKE
+_AWAKE_MARKS = ",".join("?" * len(queries.AWAKE))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -182,27 +183,197 @@ def _retry_storm(
     return None
 
 
+# ---- the exposure-gated verdict (design decision 99) ------------------------------------------------------
+# the TV's allowed lookups per hour under this share of the three days before's mean, while the rule's own
+# refusals rise, is a block that stops the TV whatever any reader or streaming byte can say (L5-7)
+LOOKUP_COLLAPSE = 0.1
+STARTS = "starts"  # the unit the kernel's exposure is counted in: app starts
+
+
+@dataclasses.dataclass(frozen=True)
+class Kernel:
+    """The exposure-gated verdict on one machine rule: judged on what the rule itself refused and on the
+    TV's own account of its apps, never on streaming volume alone. It decides nothing."""
+
+    verdict: str  # watching | reverted | passed | nodata | untested
+    reason: str
+    final: bool  # no later hour can change it
+    hours: int  # TV hours with demand in which the rule refused a lookup
+    events: int  # failed app starts with the rule among their likely causes
+    exposure: int  # app starts with the rule's refusals in their minutes, worked or failed
+    apps_seen: list[str]  # of apps_needed, those in front in an hour with demand since the block
+    apps_needed: list[str]  # the apps in front when the TV used the name in the days before the block
+    unit: str = STARTS
+
+    def as_json(self) -> str:
+        return json.dumps(dataclasses.asdict(self), sort_keys=True)
+
+
+def kernel_verdict(conn: sqlite3.Connection, prof: Profile, row: dict, now: float) -> Kernel:
+    """The exposure-gated verdict on one machine rule at `now`, from the store alone. The shipped judge
+    passes a rule that never refused a lookup and one whose refusals break an app nobody opened; this
+    one asks what the rule did, in this order:
+
+    1. the red lines (a must-allow name or a clock lookup refused) revert, as for both other judges;
+    2. a failed app start (`didit.since`) with a refusal of the rule among its likely causes reverts;
+    3. the TV's allowed lookups under LOOKUP_COLLAPSE of the days before for two hours running while the
+       rule's refusals rise revert: no reader and no streaming byte is needed to see that (`_lookups_cut`);
+    4. the shipped judge's two low hours with demand revert, but only once the rule has refused a lookup
+       at or before them, never on volume before it fired;
+    5. at the trial's end it passes only with MIN_TRIAL_TV_HOURS hours with demand in which the rule
+       refused a lookup (`autoblock.exposed_hours`), every app of its name's shape in front in an hour
+       with demand since the block, and the shipped judge's volume test; short of those it is NODATA
+       until TRIAL_CEILING, then untested;
+    6. a passed rule is final only once every app of its shape has had a start that worked; until then
+       item 2 can still revert it.
+
+    A TV no reader reads takes its hours with demand from the expected-category connections it opened
+    (`autoblock.demand_hours`'s `unread`). Nothing is kept between calls."""
+    rule, added, name = row["rule"], float(row["added_t"]), row.get("name") or ""
+    until = float(row.get("trial_until") or added + autoblock.TRIAL)
+    ceiling = added + autoblock.TRIAL_CEILING
+    upto = min(now, ceiling)
+    unread = not _read(prof)
+    # the apps that could stream that were in front when the TV used the name, in the days before
+    shape = autoblock.shapes(conn, [name], added - BASELINE, added).get(name, {}).get("apps", [])
+    needed = sorted(a for a in shape if autoblock.demand_app(a))
+    exposed = autoblock.exposed_hours(conn, row, added, upto)
+    seen = didit.since(conn, prof, added, upto, extra=didit.refusals(conn, added, upto, rule))
+    tied = [f for f in seen.failed if any(c.rule == rule for c in f.likely)]
+    # an awake reading with one of them in front is an hour with demand by itself (`demand_hours`)
+    apps = set(needed) & {
+        app
+        for (app,) in conn.execute(
+            f"SELECT DISTINCT app FROM tvstate WHERE t >= ? AND t < ? AND power IN ({_AWAKE_MARKS})",
+            (added, upto, *queries.AWAKE),
+        )
+    }
+    hours = len(autoblock.demand_hours(conn, prof, added, upto, unread) & exposed)
+
+    def out(verdict: str, reason: str, final: bool = True) -> Kernel:
+        return Kernel(
+            verdict, reason, final, hours, len(tied), seen.exposed + len(tied), sorted(apps), needed
+        )
+
+    if queries.must_allow_blocked(conn, added, upto, prof):
+        return out("reverted", "a must-allow name was blocked after this rule")
+    if queries.clock_sync(conn, added, upto, prof).get("blocked"):
+        return out("reverted", "clock lookups were blocked after this rule")
+    if tied:
+        n = len(tied)
+        return out(
+            "reverted", f"{n} app start{'s' if n > 1 else ''} failed with this rule's refusals in its minutes"
+        )
+    if cut := _lookups_cut(conn, rule, added, now):
+        shares = " and ".join(f"{share:.0%}" for _, share in cut)
+        return out(
+            "reverted",
+            f"the TV's allowed lookups fell to {shares} of the days before in {len(cut)} hours running while"
+            " this rule refused more",
+        )
+    before, n_before = autoblock.demand_rate(conn, prof, added - BASELINE, added, unread)
+    baseline = n_before >= autoblock.MIN_TRIAL_TV_HOURS and before > 0
+    run = autoblock.low_run(conn, prof, added, now, before, unread) if baseline and exposed else None
+    if run and min(exposed) <= run[-1][0]:
+        shares = " and ".join(f"{share:.0%}" for _, share in run)
+        return out(
+            "reverted",
+            f"streaming volume fell to {shares} of the days before in {len(run)} TV hours running with"
+            " demand, after this rule had refused a lookup",
+        )
+    if now < until:
+        return out(
+            "watching", f"{hours} of {autoblock.MIN_TRIAL_TV_HOURS} hours with demand and refusals", False
+        )
+    if not baseline:
+        return out(
+            autoblock.UNTESTED,
+            f"{n_before} TV hour(s) with demand in the {BASELINE // 86400} days before the block: nothing to"
+            " compare a trial with",
+            now >= ceiling,
+        )
+    missing = [a for a in needed if a not in apps]
+    if hours < autoblock.MIN_TRIAL_TV_HOURS or missing:
+        short = (
+            f"{hours} of {autoblock.MIN_TRIAL_TV_HOURS} hours with demand in which this rule refused a lookup"
+            if hours < autoblock.MIN_TRIAL_TV_HOURS
+            else f"{len(missing)} of {len(needed)} apps of its name not yet in front"
+        )
+        if now >= ceiling:
+            return out(autoblock.UNTESTED, f"ceiling reached with {short}")
+        return out(autoblock.NODATA, f"extend: {short}", False)
+    after, _ = autoblock.demand_rate(conn, prof, added, upto, unread)
+    if after < autoblock.STREAMING_COLLAPSE * before:
+        return out(
+            "reverted",
+            f"streaming volume per TV hour with demand fell to {after / before:.0%} of the days before",
+        )
+    waiting = [a for a in needed if a not in seen.apps_worked]
+    return out(
+        "passed",
+        f"refused lookups in {hours} TV hours with demand, streaming at {after / before:.0%} of the days"
+        f" before; {len(needed) - len(waiting)} of {len(needed)} apps of its name worked since",
+        not waiting or now >= ceiling,
+    )
+
+
+def _read(prof: Profile) -> bool:
+    """Whether the hourly reading reads this profile's TV, so its readings say when it was awake."""
+    from tvgw import setup  # here, not at module level: only the shadow pass needs the installer's module
+
+    return prof.name in setup.PAIRABLE_PROFILES + setup.READ_WITHOUT_PAIRING
+
+
+def _lookups_cut(conn: sqlite3.Connection, rule: str, added: float, now: float) -> list[tuple[int, float]]:
+    """LOW_HOURS_TO_REVERT full hours running, among the last LOW_RUN_LOOKBACK after the block, in each
+    of which the TV's allowed lookups fell under LOOKUP_COLLAPSE of the three days before's hourly mean
+    while the rule's own refusals rose above theirs: [(hour, share of before), ...], or empty. A TV that
+    is off asks nothing and is refused nothing, so its quiet hours are never such a run."""
+    last = int(now // 3600) - 1  # the last full hour
+    first = max(-(-int(added) // 3600), last - autoblock.LOW_RUN_LOOKBACK + 1)
+    own_ = f"blocked = 1 AND rule = ? AND {rulestats.CUSTOM}"
+    count = f"SUM(blocked = 0), SUM({own_}) FROM dns WHERE t >= ? AND t < ?"
+    ok, own = conn.execute(f"SELECT {count}", (rule, added - BASELINE, added)).fetchone()
+    base_ok, base_own = (ok or 0) / (BASELINE / 3600), (own or 0) / (BASELINE / 3600)
+    per = {
+        h: (ok, own)
+        for h, ok, own in conn.execute(
+            f"SELECT CAST(t / 3600 AS INTEGER), {count} GROUP BY 1", (rule, first * 3600, (last + 1) * 3600)
+        )
+    }
+    run: list[tuple[int, float]] = []
+    for h in range(first, last + 1):
+        ok, own = per.get(h, (0, 0))
+        run = [*run, (h, ok / base_ok)] if ok < LOOKUP_COLLAPSE * base_ok and own > base_own else []
+        if len(run) >= autoblock.LOW_HOURS_TO_REVERT:
+            return run[-autoblock.LOW_HOURS_TO_REVERT :]
+    return []
+
+
 # ---- the shadow run ---------------------------------------------------------------------------------------
 def rows_to_shadow(conn: sqlite3.Connection, now: float) -> list[dict]:
-    """The machine rules both judges should see this hour: those on probation, those decided in the last
+    """The machine rules the judges should see this hour: those on probation, those decided in the last
     two hours (so the hour the shipped judge decided is recorded beside v2's), and those the shipped
-    judge passed whose v2 verdict is not final yet and whose ceiling has not passed."""
+    judge passed whose ceiling has not passed while v2's verdict or (exposure) the kernel's is not final
+    yet: a rule the kernel passed is watched for harm until every app of its name has worked."""
     out = []
     for r in autoblock.rows(conn):
         recent = r["decided_t"] is not None and r["decided_t"] >= now - 7200
         open_pass = r["verdict"] == "passed" and r["added_t"] >= now - CEILING
-        if r["verdict"] is None or recent or (open_pass and not _v2_final(conn, r)):
+        if r["verdict"] is None or recent or (open_pass and not all(_finals(conn, r))):
             out.append(r)
     return out
 
 
-def _v2_final(conn: sqlite3.Connection, r: dict) -> bool:
-    return bool(
-        conn.execute(
-            "SELECT 1 FROM judge_shadow WHERE rule = ? AND added_t = ? AND final = 1 LIMIT 1",
-            (r["rule"], r["added_t"]),
-        ).fetchone()
-    )
+def _finals(conn: sqlite3.Connection, r: dict) -> tuple[bool, bool]:
+    """(v2's verdict is final, the kernel's is) by any row of the trial: once final, each stays so."""
+    v2 = kernel = False
+    for final, k in conn.execute(
+        "SELECT final, kernel FROM judge_shadow WHERE rule = ? AND added_t = ?", (r["rule"], r["added_t"])
+    ):
+        v2 = v2 or final == 1
+        kernel = kernel or bool(k and json.loads(k).get("final"))
+    return v2, kernel
 
 
 def shadow(
@@ -214,13 +385,14 @@ def shadow(
     budget: float | None = None,
     clock: Callable[[], float] | None = None,
 ) -> list[dict]:
-    """Both judges' verdicts on every rule `rows_to_shadow` names, written to `judge_shadow` keyed by
-    rule, trial and the last full hour, so a second call in the same hour replaces its row and decides
-    nothing. The shipped judge's verdict is its recorded one when it has decided. A rule still on
-    probation is "watching" when `after_check` (the hourly check has just run and kept it), else what
-    `autoblock.judge` would say now (a read). With a `budget` in seconds, rules not reached by then are
-    left for the next hour: the shadow pass never holds up the unit it shares with the shipped judge.
-    Each row commits on its own, so a pass cut short keeps what it wrote."""
+    """Both judges' verdicts on every rule `rows_to_shadow` names, and (exposure) the kernel's as JSON
+    (`kernel_verdict`), written to `judge_shadow` keyed by rule, trial and the last full hour, so a
+    second call in the same hour replaces its row and decides nothing. The shipped judge's verdict is
+    its recorded one when it has decided. A rule still on probation is "watching" when `after_check`
+    (the hourly check has just run and kept it), else what `autoblock.judge` would say now (a read).
+    With a `budget` in seconds, rules not reached by then are left for the next hour: the shadow pass
+    never holds up the unit it shares with the shipped judge. Each row commits on its own, so a pass
+    cut short keeps what it wrote."""
     now = now if now is not None else time.time()
     hour = int(now // 3600) * 3600 - 3600
     out = []
@@ -242,6 +414,7 @@ def shadow(
             "t": now, "rule": r["rule"], "added_t": r["added_t"], "hour": hour, "hour_class": cls[0],
             "v1": v1, "v1_reason": v1_reason[:300], "v2": v2.verdict, "v2_reason": v2.reason[:300],
             "clean_hours": v2.clean_hours, "k": k, "final": int(v2.final),
+            "kernel": _kernel(conn, prof, r, now),
         }  # fmt: skip
         conn.execute(
             f"INSERT OR REPLACE INTO judge_shadow({', '.join(rec)}) VALUES ({','.join('?' * len(rec))})",
@@ -250,6 +423,15 @@ def shadow(
         conn.commit()
         out.append(rec)
     return out
+
+
+def _kernel(conn: sqlite3.Connection, prof: Profile, r: dict, now: float) -> str:
+    """The kernel's verdict as JSON. A fault in it is written in its place, never raised: v2's row, and
+    the rules after this one, are written whatever the newer judge does."""
+    try:
+        return kernel_verdict(conn, prof, r, now).as_json()
+    except Exception as e:
+        return json.dumps({"verdict": "error", "reason": f"{type(e).__name__}: {e}"[:300], "final": False})
 
 
 # ---- the placebo calibration ------------------------------------------------------------------------------

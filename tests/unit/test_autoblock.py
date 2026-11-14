@@ -1367,6 +1367,42 @@ def test_demand_hours_leave_out_inputs_the_launcher_and_off_hours(auto, lg):
     conn.close()
 
 
+def test_a_tv_no_reader_reads_is_awake_in_the_hours_it_opened_an_expected_connection(auto, lg):
+    """(exposure) With no reading at all the shipped judge has no hour with demand, so a block that stopped
+    everything stays untested; `unread` takes the hours the TV opened an expected-category connection."""
+    s, _ = auto
+    conn = db.connect(s.db_path)
+    h = int(T0 // 3600)
+    conn.execute("UPDATE tvstate SET power = 'Active Standby' WHERE t >= ?", (T0 - 3600,))  # read as off
+    assert autoblock.demand_hours(conn, lg, T0 - 7200, T0 + 3 * 3600) == {h - 2}  # the shipped judge's
+    assert autoblock.demand_hours(conn, lg, T0 - 7200, T0 + 3 * 3600, unread=True) == {h - 2, h, h + 1}
+    conn.execute("DELETE FROM tvstate")
+    assert autoblock.demand_hours(conn, lg, T0 - 3600, T0 + 3 * 3600) == set()
+    assert autoblock.demand_hours(conn, lg, T0 - 3600, T0 + 3 * 3600, unread=True) == {h, h + 1}
+    assert autoblock.demand_rate(conn, lg, T0, T0 + 3 * 3600, unread=True) == (150_000_000, 2)
+    conn.close()
+
+
+def test_exposed_hours_are_the_hours_the_rule_itself_refused_a_lookup(auto):
+    s, _ = auto
+    conn = db.connect(s.db_path)
+    rule = "||tracker.example^"
+    conn.executemany(
+        "INSERT INTO dns(t, qname, qtype, blocked, rule, filter_id) VALUES (?, 'tracker.example', 'A', ?, ?, ?)",
+        [
+            (T0 + 10, 1, rule, 0),  # hour 0: its own refusal
+            (T0 + 3610, 1, rule, None),  # hour 1: a custom rule's, logged before AdGuard gave filter ids
+            (T0 + 7210, 1, rule, 3),  # hour 2: a downloaded list's line of the same text
+            (T0 + 10810, 1, "||example^", 0),  # hour 3: another rule's
+            (T0 + 14410, 0, rule, 0),  # hour 4: let through
+        ],
+    )
+    h = int(T0 // 3600)
+    assert autoblock.exposed_hours(conn, {"rule": rule}, T0, T0 + 5 * 3600) == {h, h + 1}
+    assert autoblock.exposed_hours(conn, {"rule": rule}, T0 + 11, T0 + 3610) == set()  # [a, b)
+    conn.close()
+
+
 def test_the_final_verdict_passes_or_reverts_only_on_enough_hours_with_demand(auto, lg):
     s, _ = auto
     conn = db.connect(s.db_path)
