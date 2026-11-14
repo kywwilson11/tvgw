@@ -100,7 +100,9 @@ How it decides (the constants are in src/tvgw/adbreaks.py, and `tests/unit/test_
 - a label within 65 seconds (`CHAIN`) of the break's last one extends it. That is longer than the minute the TV holds a refusal, since the ads of one break call many of the same firms and the TV does not ask a name again sooner;
 - the break ends 20 seconds (`TAIL`) after its last label, since a lookup marks an ad's start and not its end.
 
-A timer is a name asked whatever is on the screen, by an app's own measurement or by the TV, and it is left out (`timers()`). It is told by two things together. It keeps a steady beat: within each of its runs, 70% (`STEADY_SHARE`) or more of the time lies in gaps no longer than 3 times (`STEADY`) the run's usual gap, where an ad's name has a minute's gaps inside a break and many minutes between breaks. And it comes alone: under half (`ALONE`) of its lookups have two other firms refused within 2 seconds (`COMPANY`) of them, where the firms of an ad are refused at the same moment. A run ends when the name is absent for 45 minutes (`TIMER_PAUSE`), and a name is judged once it has 20 gaps that come to half an hour (`TIMER_GAPS`, `TIMER_SPAN`). Counting the five-minute bins a name is in, or its lookups an hour, takes the firms of a service that breaks every few minutes for timers.
+A timer is a name asked whatever is on the screen, by an app's own measurement or by the TV, and it is left out (`timers()`). It is told by two things together. It keeps a steady beat: within each of its runs, 70% (`STEADY_SHARE`) or more of the time lies in gaps no longer than 3 times (`STEADY`) the run's usual gap, where an ad's name has a minute's gaps inside a break and many minutes between breaks. And it comes alone: under half (`ALONE`) of its lookups have two other firms refused within the same 10 seconds (`WINDOW`), where an ad's name is refused with the other firms of the ad. A run ends when the name is absent for 45 minutes (`TIMER_PAUSE`), and a name is judged once it has 20 gaps that come to half an hour (`TIMER_GAPS`, `TIMER_SPAN`). Counting the five-minute bins a name is in, or its lookups an hour, takes the firms of a service that breaks every few minutes for timers.
+
+No break lasts ten minutes (`LONG_BREAK`). A stretch of labels that runs longer is not counted as a break: it is names on timers that the test above could not tell apart, about a dozen at once or one fast name with under half an hour of it in the window. The report sets such stretches aside, counts them nowhere else and says how many there were.
 
 Each break is counted under the app in front at its first label. Hours in front leave out the time behind the screen saver, and the home screen, the inputs and a cast receiver are no app. An app is listed with 1 hour in front or with a break. The report prints counts, hours and minutes only: no name and no time of day. It prints, for example (made-up apps):
 
@@ -119,7 +121,7 @@ It has not been checked against breaks marked by hand.
 This TV asks a refused name again after about 60 seconds (31 names).
 ```
 
-A line of breaks with no app known in front, a line that counts the breaks that ran past ten minutes, a note that the list of firms could not be read, and a note that the filter refused nothing in the window are the other lines it can print. The last line is the hold: how long the TV waits before it asks a refused name again, from the shortest usual gap of each name with 20 gaps or more. When that is under 45 seconds it adds that the rule is set for about a minute and that on this TV the minutes may run about a quarter long.
+A line of breaks with no app known in front, a line that counts the stretches past ten minutes that were set aside, a note that the list of firms could not be read, and a note that the filter refused nothing in the window are the other lines it can print. The last line is the hold: how long the TV waits before it asks a refused name again, from the shortest usual gap of each name with 20 gaps or more. When that is under 45 seconds it adds that the rule is set for about a minute and that on this TV the minutes may run about a quarter long.
 
 What it cannot show:
 
@@ -128,7 +130,7 @@ What it cannot show:
 - The minutes are an estimate: a break's start is known to the second and its end to within one ad.
 - The rule was set before any break was marked by hand and has not been checked against one.
 - Three firms asked together on one beat would read as a break at each turn.
-- A timer is known as one only after half an hour of it. Until then a name on a fast beat carries a break on for as long as it beats, and the report adds a line when a break ran past ten minutes.
+- A timer is known as one only after 20 gaps that come to half an hour: a name asked every five minutes takes over an hour and a half. Until then, and where about a dozen names on timers crowd one another, what they open is set aside when it runs past ten minutes and counted when it does not.
 
 Nothing is stored and nothing is refused on the strength of it.
 

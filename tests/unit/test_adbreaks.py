@@ -32,13 +32,18 @@ def test_the_rule_is_the_one_set_before_any_break_was_marked():
     """Three firms in ten seconds open a break, a label within 65 seconds extends it (longer than the
     minute a refusal is held), and it ends 20 seconds after its last. A timer keeps a steady beat (seven
     tenths of its time in gaps up to three times the usual one of their run, a run ending at 45 minutes'
-    absence) and comes alone (under half its lookups with two other firms within two seconds), judged
-    from 20 gaps and half an hour of them. These were fixed before any break was marked by hand. Change
-    one and the report's figures are no longer of the rule design decision 89 records: number a new
-    decision first."""
+    absence) and comes alone (under half its lookups with two other firms within the ten seconds),
+    judged from 20 gaps and half an hour of them. No break lasts ten minutes. These were fixed before
+    any break was marked by hand. Change one and the report's figures are no longer of the rule design
+    decision 89 records: number a new decision first."""
     assert (WINDOW, NEED, CHAIN, TAIL, adbreaks.MERGE) == (10.0, 3, 65.0, 20.0, 5.0)
     assert (adbreaks.TIMER_GAPS, adbreaks.TIMER_SPAN, adbreaks.TIMER_PAUSE) == (20, 1800.0, 2700.0)
-    assert (adbreaks.STEADY, adbreaks.STEADY_SHARE, adbreaks.ALONE, adbreaks.COMPANY) == (3.0, 0.70, 0.5, 2.0)
+    assert (adbreaks.STEADY, adbreaks.STEADY_SHARE, adbreaks.ALONE, adbreaks.LONG_BREAK) == (
+        3.0,
+        0.70,
+        0.5,
+        600.0,
+    )
 
 
 @pytest.mark.parametrize(
@@ -145,10 +150,11 @@ def judged(
         ]
     regular = adbreaks.timers(sorted(lookup for refused, _shown in nights for lookup in refused), firms)
     shown_n = called_n = found_n = shown_hit = called_hit = found_hit = 0
-    found_s = shown_s = 0.0
+    found_s = shown_s = longest = 0.0
     late = []
     for refused, shown in nights:
         got = adbreaks.breaks(adbreaks.labels(refused, firms, regular))
+        longest = max([longest, *(b.seconds for b in got)])
         spans = [(b.start, b.start + b.seconds) for b in got]
         truth = [(s.start, s.end) for s in shown]
         caught = [any(hits(span, t) for span in spans) for t in truth]
@@ -163,9 +169,10 @@ def judged(
         "of all": shown_hit / shown_n,
         "of called": called_hit / called_n,
         "are breaks": found_hit / found_n,
-        "start": statistics.median(late),
+        "start": statistics.median(late) if late else float("nan"),
         "minutes": found_s / shown_s,
         "timers": len(regular),
+        "longest": longest,
     }
 
 
@@ -242,22 +249,39 @@ def crowded(timers: int, together: int = 1) -> tuple[dict[str, str], list[tuple[
 
 @pytest.mark.parametrize(
     ("timers", "together", "known", "are_breaks"),
-    [(16, 1, 16, 0.94), (1, 2, 2, 0.94), (1, 3, 0, 0.0)],
-    ids=["sixteen more timers", "two firms on one beat", "three firms on one beat: the limit"],
+    [(3, 1, 3, 0.94), (1, 2, 2, 0.94), (1, 3, 0, 0.0)],
+    ids=["three more timers", "two firms on one beat", "three firms on one beat: a limit"],
 )
-def test_many_timers_do_not_keep_one_another_company_but_three_firms_on_one_beat_do(
+def test_a_few_more_timers_are_each_known_and_firms_on_one_beat_are_a_limit(
     timers, together, known, are_breaks
 ):
-    """Timers fall within ten seconds of one another by chance, and seldom within two: sixteen more of
-    them are each known for one (with company counted within ten seconds, four are enough to turn every
-    timer into a label and every evening into one break). Two firms on one beat are alone too. Three
-    are one another's company at every turn, and each turn reads as a break: the limit the report's
-    pages state. Measured: 97% found and 98% of found are breaks, as without them; 4% with three on one
-    beat."""
+    """Three more timers on beats of about a minute are each known for one, and so are two firms that
+    keep one beat. Three firms on one beat are one another's company at every turn, and each turn reads
+    as a break: a limit the report's pages state. Measured: 97% found and 98% of found are breaks, as
+    without them; 4% with three on one beat."""
     firms, more = crowded(timers, together)
     got = judged(hold=60.0, firms=firms, more=more)
-    assert got["timers"] == AD_TIMERS + known
-    assert got["are breaks"] >= are_breaks and (known or got["are breaks"] < 0.3)
+    assert got["timers"] == AD_TIMERS + known and got["are breaks"] >= are_breaks
+    assert got["longest"] < 300 if known else got["are breaks"] < 0.3
+
+
+def test_a_crowd_of_timers_reads_as_stretches_no_break_could_be_and_those_are_set_aside():
+    """The edge of the timer test. Sixteen more timers fall within ten seconds of one another so often
+    that no name is alone: none is known for a timer, and every evening reads as one stretch of two
+    hours. No break lasts ten minutes, so the report counts none of it and says so (LONG_BREAK). A
+    window narrow enough to tell such a crowd apart loses the ads that call only three firms."""
+    firms, more = crowded(16)
+    got = judged(hold=60.0, firms=firms, more=more)
+    assert got["timers"] == 0 and got["of all"] < 0.05 and got["longest"] > 100 * 60 > adbreaks.LONG_BREAK
+
+
+def test_an_ad_that_calls_only_three_firms_is_still_read(monkeypatch):
+    """The app's own server and two others. Once the TV holds the app's server, the two others are
+    refused seconds apart from it, not at the same moment: within the ten seconds they are in company,
+    and no timers. Measured: 91% found (with company counted within two seconds, 7%)."""
+    monkeypatch.setattr(synth, "AD_VENDORS", (2, 2))
+    got = judged(hold=60.0)
+    assert got["of all"] >= 0.87 and got["are breaks"] >= 0.90 and got["timers"] == AD_TIMERS
 
 
 def test_what_is_found_rests_on_the_apps_own_ad_server_being_a_refused_firm():
@@ -355,10 +379,10 @@ def test_a_timer_keeps_a_steady_beat(refused, is_timer):
     ("refused", "is_timer"),
     [
         (beside(at([60.0] * 119), "b.test", "c.test"), False),
-        (beside(at([60.0] * 119), "b.test", "c.test", after=adbreaks.COMPANY), False),
-        (beside(at([60.0] * 119), "b.test", "c.test", after=-adbreaks.COMPANY), False),
-        (beside(at([60.0] * 119), "b.test", "c.test", after=adbreaks.COMPANY + 0.01), True),
-        (beside(at([60.0] * 119), "b.test", "c.test", after=-adbreaks.COMPANY - 0.01), True),
+        (beside(at([60.0] * 119), "b.test", "c.test", after=WINDOW), False),
+        (beside(at([60.0] * 119), "b.test", "c.test", after=-WINDOW), False),
+        (beside(at([60.0] * 119), "b.test", "c.test", after=WINDOW + 0.01), True),
+        (beside(at([60.0] * 119), "b.test", "c.test", after=-WINDOW - 0.01), True),
         (beside(at([60.0] * 119), "b.test"), True),
         (beside(at([60.0] * 119), "b.test", "a-cdn.test"), True),
         (sorted([*at([60.0] * 119), *beside(at([60.0] * 59), "b.test", "c.test")]), False),
@@ -366,9 +390,9 @@ def test_a_timer_keeps_a_steady_beat(refused, is_timer):
     ],
     ids=[
         "two other firms beside it every time",
-        "two seconds after it",
-        "two seconds before it",
-        "a moment more than two seconds after is no company",
+        "ten seconds after it",
+        "ten seconds before it",
+        "a moment more than ten seconds after is no company",
         "nor a moment more before",
         "one other firm",
         "one other firm and its own second domain",
@@ -585,7 +609,7 @@ def a_report(**changed) -> dict:
         "unknown": {"breaks": 0, "minutes": 0.0},
         "hold": {"names": 31, "seconds": 60.2},
         "list": {"domains": 2416, "trouble": None},
-        "long": 0,
+        "long": {"stretches": 0, "minutes": 0.0},
     } | changed
 
 
@@ -618,29 +642,43 @@ def test_an_apps_line_says_its_hours_its_breaks_and_what_they_allow(row, line):
     assert lines[-1] == "This TV asks a refused name again after about 60 seconds (31 names)."
 
 
-@pytest.mark.parametrize(("long", "said"), [(0, False), (1, True), (2, True)], ids=["none", "one", "two"])
-def test_a_break_past_ten_minutes_is_said_to_be_one_a_timer_may_have_carried_on(long, said):
-    """No break lasts ten minutes. One that long had a name on a beat among its labels, one not yet
-    known for a timer."""
-    row = {"app": "A", "hours": 2.0, "breaks": 3, "minutes": 40.0}
-    lines = adbreaks.render(a_report(apps=[row], long=long))
-    breaks = "1 break" if long == 1 else "2 breaks"
-    expected = f"  {breaks} above ran past 10 minutes: a name asked on a timer may have carried them on"
-    assert (lines[4] == expected) == said and len(lines) == (10 if said else 9)
+@pytest.mark.parametrize(
+    ("stretches", "said"),
+    [
+        (0, None),
+        (1, "  Not counted: 1 stretch of such lookups that ran past 10 minutes, 121 minutes in all."),
+        (2, "  Not counted: 2 stretches of such lookups that ran past 10 minutes, 121 minutes in all."),
+    ],
+    ids=["none", "one", "two"],
+)
+def test_a_stretch_past_ten_minutes_is_said_and_said_to_be_no_break(stretches, said):
+    row = {"app": "A", "hours": 2.0, "breaks": 3, "minutes": 4.0}
+    lines = adbreaks.render(a_report(apps=[row], long={"stretches": stretches, "minutes": 120.6}))
+    if said is None:
+        assert lines[4] == "" and len(lines) == 9
+    else:
+        assert lines[4] == said + " No break lasts that long: these are names asked on timers."
+        assert lines[5] == "" and len(lines) == 10
 
 
-def test_a_fast_beat_under_half_an_hour_carries_a_break_on_and_the_report_counts_it_long(tmp_path):
+def test_a_fast_beat_under_half_an_hour_carries_a_break_on_and_the_report_sets_it_aside(tmp_path):
     """Three firms open a break, and a fourth firm's name beats every minute for 25 minutes after: too
-    short a time to know it for a timer. The break runs as long as the beat, and `long` counts it."""
+    short a time to know it for a timer. The stretch runs as long as the beat. It is no break: it is
+    counted under `long` and nowhere else. A break of ten minutes exactly is still one."""
     store = Store(tmp_path / "tvgw.db")
-    for i, name in enumerate(AD):
-        store.lookup(H0 + i, name, blocked=1)
-    for beat in range(25):
-        store.lookup(H0 + 60 * (beat + 1), "beat.criteo.com", blocked=1)
+    later = H0 + 6 * HOUR
+    for start, beats, name in ((H0, 25, "beat.criteo.com"), (later, 9, "beat.adform.net")):
+        for i, firm in enumerate(AD):
+            store.lookup(start + i, firm, blocked=1)
+        for beat in range(beats):
+            store.lookup(start + 2 + 64 * (beat + 1), name, blocked=1)
+    store.lookup(later + adbreaks.LONG_BREAK - TAIL, "ad.doubleclick.net", blocked=1)  # its last label
     a, b = H0, H0 + DAY
     r = adbreaks.report(store.conn, experiments.timeline(store.conn, a, b), a, b)
     store.conn.close()
-    assert (r["timers"], r["breaks"], r["long"]) == (0, 1, 1) and r["unknown"]["minutes"] > 25
+    assert (r["timers"], r["breaks"]) == (0, 1)
+    assert r["unknown"] == {"breaks": 1, "minutes": adbreaks.LONG_BREAK / 60}
+    assert r["long"] == {"stretches": 1, "minutes": pytest.approx((2 + 64 * 25 + TAIL) / 60)}
 
 
 @pytest.mark.parametrize(
