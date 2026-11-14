@@ -45,6 +45,7 @@ import time
 from collections.abc import Callable, Iterator
 
 from tvgw import durable, localrules, minimize, queries
+from tvgw.names import PUBLIC_SUFFIXES, normalize
 from tvgw.profile import Profile, held_twin, rule_target
 
 TRIAL = 86400  # seconds a new block is on probation, at least: a trial without data extends by this
@@ -153,13 +154,13 @@ class Shape:
     hours: int
     apps: list[str]
     days_seen: int
-    first: float | None
-    last: float | None
 
 
 def shapes(conn: sqlite3.Connection, names: list[str], since: float, until: float) -> dict[str, dict]:
-    """How the TV used each name in the window: per connection bytes, timing, the apps on at the time
-    (from the hourly TV readings), and on how many distinct days the name was ever looked up."""
+    """How the TV used each name in the window: per connection bytes, how long a connection lasted, in
+    how many hours, the apps on at the time (from the hourly TV readings), and on how many distinct days
+    the name was ever looked up. Never when: a shape goes to both models, and the first and last time a
+    name was used is a piece of the household's day (design decision 91)."""
     names = [n for n in dict.fromkeys(names) if n]
     if not names:
         return {}
@@ -204,11 +205,9 @@ def shapes(conn: sqlite3.Connection, names: list[str], since: float, until: floa
                 hours=len({int(a // 3600) for a in starts}),
                 apps=sorted({by_hour[int(a // 3600)] for a in starts if int(a // 3600) in by_hour}),
                 days_seen=int(days.get(name, 0)),
-                first=min(starts),
-                last=max(starts),
             )
         else:
-            shape = Shape(0, 0, 0, 0, 0, 0.0, 0, [], int(days.get(name, 0)), None, None)
+            shape = Shape(0, 0, 0, 0, 0, 0.0, 0, [], int(days.get(name, 0)))
         out[name] = dataclasses.asdict(shape)
     return out
 
@@ -312,6 +311,38 @@ def remove_rule(path: str, rule: str) -> bool:
 
 # ---- the gates ----------------------------------------------------------------------------------------
 OWNER_ALLOWED = "refused: allowed by the owner (local.rules)"  # (site rules) design decision 59
+# (decision 91) the gate's verdicts that judge nothing about the name: the block is one for the owner to make
+FOR_OWNER = "refused: for the owner: "
+REACH_DAYS = 30  # how far back the store is asked what else a rule for a name would refuse
+
+
+def reach(
+    conn: sqlite3.Connection, name: str, expected: tuple[str, ...], since: float, until: float, now: float
+) -> dict:
+    """What a rule for `name` refuses, as far as the store knows: `||name^` matches the name and every
+    name under it, so the gate reads them all and not the heading alone. `names` counts the names the
+    store saw at or under `name` in the last REACH_DAYS; `expected` counts those of them, by category,
+    that lie in one of the profile's `expected` categories (the TV doing its job); `total_down` sums
+    their bytes down over [since, until) and `median_down` is the largest of their median connections,
+    so one name under the heading that carries content shows however many beacons surround it."""
+    host = normalize(name)
+    seen = conn.execute(
+        "SELECT name, category FROM hosts WHERE (name = ?1 OR name LIKE '%.' || ?1) AND last_seen >= ?2",
+        (host, now - REACH_DAYS * 86400),
+    )
+    # LIKE reads `_` as any one character and folds case, so the suffix is checked again as written
+    under = {n: category for n, category in seen if n == host or n.endswith("." + host)}
+    used = shapes(conn, sorted(under), since, until).values()
+    counts: dict[str, int] = {}
+    for category in under.values():
+        if category in expected:
+            counts[category] = counts.get(category, 0) + 1
+    return {
+        "names": len(under),
+        "expected": dict(sorted(counts.items())),
+        "total_down": sum(shape["total_down"] for shape in used),
+        "median_down": max((shape["median_down"] for shape in used), default=0),
+    }
 
 
 def owner_allowed(p: dict, owner_allows: tuple[str, ...]) -> bool:
@@ -328,17 +359,35 @@ def gate(
     added_today: int,
     answers: dict | None = None,
     owner_allows: tuple[str, ...] = (),
+    *,
+    reach: dict,
 ) -> str:
     """The code's veto on an otherwise vetted block proposal; "ok" or the reason. `answers` is
     `answer_use` over the window: a shape with no connection passes only when the name was answered
     and none of its answers reached a flow; without it, such a shape is refused. (site rules) A name
-    an allow in `owner_allows` covers is refused first, whatever else holds."""
+    an allow in `owner_allows` covers is refused first, whatever else holds.
+
+    (decision 91) What is applied unasked is narrow by construction. The rule is `||name^`, with or
+    without `$important`, for exactly the name the proposal is headed with: the vetting lets a parent
+    zone, a wildcard or a regex through because the owner may want one, and the machine applies none.
+    The name is no top-level domain and no public suffix. And `reach` (this module's `reach()`, which a
+    caller cannot leave out) holds no name in an expected category and no payload: the evidence is of
+    everything the rule refuses, not of the heading alone. A block that fails one of the three is not
+    judged unsafe; it is the owner's to make, and its verdict starts FOR_OWNER."""
     if owner_allowed(p, owner_allows):
         return OWNER_ALLOWED
     if p.get("kind") != "block" or p.get("vetted") != "ok":
         return "refused: only a vetted block can be applied on its own"
     if minimize.is_tagged(p.get("name")) or minimize.is_tagged(p.get("rule")):
         return "refused: a tagged title name (NAME_HMAC); a rule for a tag never matches a lookup"
+    host = normalize(p.get("name") or "")
+    if p.get("rule") not in (f"||{host}^", f"||{host}^$important"):
+        return (
+            FOR_OWNER
+            + "only `||name^` for the name in the heading is applied unasked, and this rule is wider"
+        )
+    if "." not in host or host in PUBLIC_SUFFIXES:
+        return FOR_OWNER + "the name is a top-level domain or a public suffix, with other parties under it"
     if p.get("risk") != "low":
         return f"refused: the proposer rated the risk {p.get('risk')}"
     if added_today >= MAX_PER_DAY:
@@ -358,13 +407,22 @@ def gate(
             f"refused: carried payload (median {shape['median_down']} B down per connection,"
             f" {shape['total_down']} B down in the window)"
         )
+    if reach["expected"]:
+        kept = ", ".join(f"{n} in {category}" for category, n in reach["expected"].items())
+        return FOR_OWNER + f"the rule refuses names the TV is expected to use ({kept})"
+    if reach["median_down"] > MAX_MEDIAN_DOWN or reach["total_down"] > MAX_TOTAL_DOWN:
+        return FOR_OWNER + (
+            f"the names the rule refuses carried payload ({reach['names']} name(s), median"
+            f" {reach['median_down']} B down per connection at most, {reach['total_down']} B down in the"
+            " window)"
+        )
     return "ok"
 
 
-def margins(shape: dict | None, answers: dict | None = None) -> dict:
+def margins(shape: dict | None, answers: dict | None = None, reach: dict | None = None) -> dict:
     """What the gate read and the limits it held it to, for the decisions table: how close an accepted
-    rule came to MAX_MEDIAN_DOWN is what tunes it."""
-    shape = shape or {}
+    rule came to MAX_MEDIAN_DOWN is what tunes it. `reach` is what the rule refuses besides the name."""
+    shape, reach = shape or {}, reach or {}
     return {
         "conns": shape.get("conns"),
         "median_down": shape.get("median_down"),
@@ -372,6 +430,10 @@ def margins(shape: dict | None, answers: dict | None = None) -> dict:
         "days_seen": shape.get("days_seen"),
         "answered": (answers or {}).get("answered"),
         "answers_used": (answers or {}).get("used"),
+        "reach_names": reach.get("names"),
+        "reach_expected": reach.get("expected"),
+        "reach_median_down": reach.get("median_down"),
+        "reach_total_down": reach.get("total_down"),
         "limits": {
             "min_days_seen": MIN_DAYS_SEEN,
             "max_median_down": MAX_MEDIAN_DOWN,
@@ -382,19 +444,28 @@ def margins(shape: dict | None, answers: dict | None = None) -> dict:
 
 # the proposal's fields the verifier may see: what the block is, never why the proposer wants it
 VERIFIER_FIELDS = ("kind", "name", "rule")
+WITHHELD_APP = "[app id withheld]"
+
+
+def _apps(ids: list[str] | None) -> list[str]:
+    """App ids as the second model may read them. An app's author chooses its id, and the TV reports
+    it: one that reads like an instruction is replaced, as a name that does is held from a quiet
+    verdict (`instruction_shaped`)."""
+    return [WITHHELD_APP if instruction_shaped(app) else app for app in ids or []]
 
 
 def verifier_message(p: dict, shape: dict, context: dict, category: str | None = None) -> str:
     """The second key's evidence: the proposal's structured fields, the code-computed shape, the
     category the gateway gave the name, the limits the gate held, and the context. The proposer's
     reason, evidence and rollback stay out: one injection must not reach both models, and the second
-    must not anchor on the first's argument."""
+    must not anchor on the first's argument. The app ids in the shape and in the context are the one
+    free text here that the proposer read too, so an instruction-shaped one is withheld (`_apps`)."""
     body = {
         "proposal": {k: p.get(k) for k in VERIFIER_FIELDS},
         "category": category,
-        "traffic_shape": shape,
+        "traffic_shape": {**shape, "apps": _apps(shape.get("apps"))} if "apps" in shape else shape,
         "limits_checked": margins(shape)["limits"],
-        "context": context,
+        "context": {**context, "apps_seen": _apps(context.get("apps_seen"))},
     }
     return "The proposal and its evidence:\n" + json.dumps(body, indent=1, sort_keys=True, ensure_ascii=False)
 
@@ -569,29 +640,35 @@ DEFERRED = "deferred: upstream down"
 # (fin-release) a new block's deferral: the file went back as it was and the block waits in the queue, so
 # AdGuard is owed no push (push_owed does not read it)
 BLOCK_DEFERRED = "deferred: upstream down (block queued)"
-# the `apply` outcomes after which AdGuard holds the whole rules file: a later deferral owes a push again
+# an `apply` row's outcome when a revert or an undo left the file and AdGuard would not take it, for any
+# reason but a deferral: AdGuard still refuses a name the machine or the owner took back
+REAPPLY_FAILED = "reapply_failed"
+# the `apply` outcomes after which AdGuard holds the whole rules file: a later OWED one owes a push again
 PUSHED = ("applied", "pushed")
+# (decision 91) the `apply` outcomes that leave AdGuard behind the rules file
+OWED = (DEFERRED, REAPPLY_FAILED)
 
 
 def push_owed(conn: sqlite3.Connection) -> bool:
-    """(fin-release) True when the newest push of the rules file to AdGuard was deferred and none has
-    taken since: a revert or an undo whose restart waited for the upstreams, which the next hourly check
-    pushes. The record says so, so no run has to remember it."""
+    """True when the newest push of the rules file to AdGuard did not take and none has since: a revert
+    or an undo whose restart waited for the upstreams (fin-release), or whose apply failed (decision
+    91). The next hourly check pushes, and the one after, until one takes. The record says so, so no
+    run has to remember it."""
     return owed_push_id(conn) is not None
 
 
 def owed_push_id(conn: sqlite3.Connection) -> int | None:
-    """(fin-release) The `decisions` row that makes `push_owed` true (the newest `apply` row, when it is
-    DEFERRED), or None. `tvgw forget` and the DECISIONS_DAYS prune keep the debt it records."""
+    """The `decisions` row that makes `push_owed` true (the newest `apply` row, when it is one of
+    OWED), or None. `tvgw forget` and the DECISIONS_DAYS prune keep the debt it records."""
     try:
         row = conn.execute(
-            "SELECT id, outcome FROM decisions WHERE stage = 'apply' AND outcome IN (?, ?, ?)"
+            "SELECT id, outcome FROM decisions WHERE stage = 'apply' AND outcome IN (?, ?, ?, ?)"
             " ORDER BY id DESC LIMIT 1",
-            (DEFERRED, *PUSHED),
+            (*OWED, *PUSHED),
         ).fetchone()
     except sqlite3.OperationalError:  # a store from before schema 9
         return None
-    return int(row[0]) if row is not None and row[1] == DEFERRED else None
+    return int(row[0]) if row is not None and row[1] in OWED else None
 
 
 # ---- one at a time: the lock the hourly check and the analyst's autonomous steps share ----------------

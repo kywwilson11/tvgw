@@ -1827,7 +1827,7 @@ def cmd_undo(a, s, prof) -> int:
         print(
             f"tvgw undo: the rules file was changed but AdGuard was not re-applied ({type(e).__name__}: {e})"
         )
-        print("tvgw undo: run `tvgw adguard apply`")
+        print("tvgw undo: the next hourly check applies it again; to do it now, run `tvgw adguard apply`")
         return 1
     else:
         # (fin-release) AdGuard held its restart back because the upstreams are down: the revert stands

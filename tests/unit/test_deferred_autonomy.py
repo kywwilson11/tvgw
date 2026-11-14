@@ -140,8 +140,7 @@ def test_an_owed_push_that_fails_for_another_reason_exits_1_with_the_warning(aut
     assert cli.main(["--conf", str(conf), "autoblock", "check"]) == 1
     out = capsys.readouterr().out
     assert (
-        "tvgw autoblock: reapply_failed (the deferred re-apply failed (RuntimeError: AdGuard rolled back)"
-        in out
+        "tvgw autoblock: reapply_failed (the owed re-apply failed (RuntimeError: AdGuard rolled back)" in out
     )
     assert "WARNING: a reverted rule is still in AdGuard" in out
     assert "None" not in out

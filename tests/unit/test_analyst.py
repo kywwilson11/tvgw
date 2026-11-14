@@ -105,6 +105,49 @@ def test_pack_keeps_the_evidence_and_drops_every_home_identifier(settings, lg):
     assert "10.10.10.17" not in text  # ...is scrubbed with everything else
 
 
+def numbers(part):
+    """Every number in a pack, wherever it sits."""
+    if isinstance(part, dict | list):
+        for inner in part.values() if isinstance(part, dict) else part:
+            yield from numbers(inner)
+    elif isinstance(part, int | float) and not isinstance(part, bool):
+        yield part
+
+
+def test_no_number_in_the_pack_says_when_anything_happened(settings, lg):
+    """(decision 91) The brief prints when a gated connection was first and last seen and when a rule
+    changed. The pack keeps that it happened: a time of day in it is a piece of the household's day, and
+    the page of what leaves the Pi says it holds none. Before, each traffic shape, each gate example and
+    each rule change carried one or two."""
+    import sqlite3
+
+    a, b, label, _ = analyst.window(settings, DAY, None)
+    t = midday(DAY)
+    conn = sqlite3.connect(settings.db_path)
+    conn.executemany(
+        "INSERT INTO gate(t, proto, dst, dport) VALUES (?, 'tcp', ?, 443)",
+        [(t + 100, "198.51.100.7"), (t + 160, "198.51.100.7"), (t + 21, "203.0.113.9")],
+    )
+    conn.executemany(
+        "INSERT INTO rules(kind, text, first_seen, last_seen, removed_at) VALUES ('block', ?, ?, ?, ?)",
+        [("||old.example^", a - 86400, t, t + 5), ("||new.example^", t + 7, t + 7, None)],
+    )
+    conn.commit()
+    p = analyst.pack(conn, a, b, label, lg, settings)
+    conn.close()
+    gate = p["dns_gate"]
+    assert {x["dst"] for x in gate["examples"]} == {"198.51.100.7", "203.0.113.9"}
+    assert [x["dst"] for x in gate["unexplained"]] == ["198.51.100.7"] and p["shapes"]
+    assert [n for n in numbers(analyst.public(p)) if a <= n < b] == []
+    assert not any(
+        {"first", "last"} & set(x) for x in (*gate["examples"], *gate["unexplained"], *p["shapes"].values())
+    )
+    assert p["rule_changes"] == [
+        {"kind": "block", "text": "||old.example^", "added": False, "removed": True},
+        {"kind": "block", "text": "||new.example^", "added": True, "removed": False},
+    ]
+
+
 def test_pack_withholds_the_zip_code_and_the_device_name_the_tv_reports(settings, lg):
     """The TV's settings hold where it is and the name someone gave it with the remote, which is not
     TV_NAME: the switches keep their values, those two go as changed, and the scrub learns their
@@ -887,6 +930,10 @@ def test_the_pack_reaches_the_model_canonicalized(settings, lg):
 def test_the_system_prompt_tells_the_truth_about_what_is_applied():
     assert "You never apply anything" not in analyst.SYSTEM
     assert "applied at once, on probation and" in analyst.SYSTEM and "the owner can undo it" in analyst.SYSTEM
+    # (decision 91) and of the rule forms it teaches, which one
+    assert "Only the first form, for exactly the name the proposal is headed with, can be" in " ".join(
+        analyst.SYSTEM.split()
+    )
     from tvgw import autoblock
 
     assert "case is not shown to you" in autoblock.VERIFIER_SYSTEM
