@@ -603,7 +603,7 @@ DECISION_COLS = (
     "id", "t", "stage", "outcome", "rule", "name", "source", "trial_id", "reason", "margins", "model",
     "effort", "usage",
 )  # fmt: skip
-STAGES = ("gate", "queue", "verifier", "apply", "canary", "judge", "owner")
+STAGES = ("gate", "queue", "verifier", "apply", "canary", "judge", "owner", "trial")  # trial: (trials)
 
 
 def log_decision(

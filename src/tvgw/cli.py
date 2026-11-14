@@ -2463,6 +2463,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_refused_parser(sub)
     _add_pause_parser(sub)  # (pause) design decision 79
     _add_activity_parser(sub)
+    _add_trial_parser(sub)
     _add_uplink_parser(sub)  # (uplink quality) design decision 78
     bu = sub.add_parser("budget", help="the upload budget's ceiling and how it was set")  # (budget)
     bu.add_argument("--json", action="store_true")
@@ -2894,6 +2895,38 @@ def cmd_activity(a, s, prof) -> int:
     else:
         for line in activity.summary_lines(result):
             print(line)
+    return 0
+
+
+def _add_trial_parser(sub) -> None:
+    """(trials) `tvgw trial`: the trial record, and `tvgw trial aa`, the record judged as a trial would
+    judge it under other keys (design decision 98). Read-only; never a day's arm."""
+    tr = sub.add_parser(
+        "trial", help="the trial record: a coin for each viewing day and what app starts showed"
+    )
+    tr.add_argument(
+        "action", nargs="?", choices=["aa"], help="aa: the record under other keys, nothing refused"
+    )
+    tr.add_argument("--keys", type=int, default=1000, help="with aa: how many other keys (default 1000)")
+    tr.add_argument("--seed", type=int, default=0, help="with aa: the seed those keys are drawn from")
+    tr.add_argument("--json", action="store_true")
+    tr.set_defaults(fn=cmd_trial)
+
+
+def cmd_trial(a, s, prof) -> int:
+    from tvgw import trials
+
+    if not 1 <= a.keys <= 100_000:
+        return _usage("--keys must be 1 to 100000", "trial")
+    conn = _ro(s)
+    days = trials.record(conn)
+    if a.action == "aa":
+        result = {**trials.aa(days, a.keys, a.seed), "forecast": trials.forecast(days)}
+        lines = trials.aa_lines(result)
+    else:
+        result = {"setting": s.trial, "counts": trials.counts(conn), "forecast": trials.forecast(days)}
+        lines = trials.status_lines(conn, s.trial)
+    print(json.dumps(result, indent=1) if a.json else "\n".join(lines))
     return 0
 
 

@@ -6,6 +6,12 @@
 
 ### Status
 
+### A new record, off by default: a coin for each viewing day and what each app start showed, with nothing refused (2026-11-14)
+
+- **What it is for.** A wall on trial could one day be on for some days and off for the others by a coin, so that what it costs is measured against your own other days. Whether that can work on your TV depends on numbers nobody has yet: how often an app fails to start with nothing refused, and how many starts a day there are.
+- **Now.** With `TRIAL=record` the hourly ingest draws a secret coin for each viewing day before it begins, and once the day is over records what the TV's app starts showed. Nothing reads the coin, and nothing is refused. `tvgw trial` says what has been recorded and how long a wall's trial would take; `sudo tvgw trial aa` checks that the trial's own tests stay quiet when nothing was refused. The record keeps one row a day with counts only: no time of day, no app, no name ([design decision 98](docs/design-decisions.md#98-the-trial-record-a-keyed-coin-for-each-viewing-day-drawn-before-it-begins-and-what-each-app-start-showed-with-nothing-refused)).
+- For developers: `tvgw.trials` (`coin`, `commitment`, `hourly`, `stays`, `measure`, `record`, `aa`, `harm`, `unbalanced`, `forecast`), `config.Settings.trial`, the `trial` stage of `autoblock.STAGES`, and `counting`'s `trials` mechanism.
+
 ### "Two clean weeks" says what it rests on, and a few readings no longer meet a bar (2026-11-14)
 
 - **What went wrong.** The brief could say a wall had two clean weeks when the TV had been on for 14 hours of one evening and off the other thirteen days; no event in 14 hours rules out very little. The clock port's count was held to the hours the TV was on, though a TV asks for the time when it starts. `tvgw activity calibrate` passed 23 readings out of 24, a share that could really be 80%. `tvgw autoblock calibrate` printed each rate as exact, from trials an hour apart that share most of their hours. And every brief re-read the clock count's whole history, which after a year cost seconds.

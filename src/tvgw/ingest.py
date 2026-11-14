@@ -1142,6 +1142,15 @@ def run(
         # from the files AdGuard already downloaded (design decision 68)
         step("lists", lambda: listguard.run(conn, s, profile, t0))
         step("threats", threat_match)  # (threats) design decision 80
+        if s.trial == "record":  # (trials) the coins and the measured days, refusing nothing (decision 98)
+            from tvgw import trials  # here: only a gateway that keeps the record needs it
+
+            def trial_record() -> None:
+                got = trials.hourly(conn, s, t0)
+                if "waiting" in got:  # no key: nothing drawn, and the owner is told why
+                    warn(f"trials: {got['waiting']}")
+
+            step("trials", trial_record)
         step(
             "prune",
             lambda: setattr(
