@@ -85,7 +85,7 @@ LONG_BREAK = 600.0  # seconds no break lasts: a longer stretch of labels is set 
 # a fast timer (`timers`): over UNBROKEN_SHARE of the name's lookups come in stretches longer than
 # LONG_BREAK with no gap over UNBROKEN. That is over the beats of two minutes and a little more, run late;
 # measured on the tests' stand-in, 150 misses the timers that beat every two and a half minutes, and 200
-# joins the breaks of a service that breaks every few minutes on a TV that holds a refusal ten seconds
+# joins the breaks of a service that breaks every two minutes or so on a TV that holds a refusal ten seconds
 UNBROKEN, UNBROKEN_SHARE = 160.0, 0.7
 # a slower timer (`timers`). A name's lookups fall into runs, a gap longer than TIMER_PAUSE being an
 # absence that ends one. It is judged once it has TIMER_GAPS gaps that come to TIMER_SPAN seconds. It is
