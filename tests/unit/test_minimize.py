@@ -1,5 +1,6 @@
 """(record) Minimization at ingest: kernel lines without host name and MAC header, query values as their
-lengths, title-bearing names as keyed tags; each applied to new rows and, once, to the rows stored."""
+lengths, title-bearing names as keyed tags; each applied to new rows and, once, to the rows stored. And at
+what leaves (design decision 93): identifier-shaped runs as tokens, and back."""
 
 import dataclasses
 import json
@@ -8,6 +9,8 @@ import stat
 
 import pytest
 from conftest import DNS_ALLOWED, NOW, ODDPORT_LINE, fake_extract, fake_oddport
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from tvgw import config, db, ingest, minimize, queries
 
@@ -300,3 +303,143 @@ def test_the_accepted_values_load(tmp_path):
     assert (s.uri_values, s.name_hmac, s.journal_days) == ("lengths", "on", "off")
     conf.write_text("JOURNAL_DAYS=92\n", encoding="utf-8")
     assert config.load(conf).journal_days == "92"
+
+
+# ---- identifier-shaped runs, in what leaves ---------------------------------------------------------
+DEVICE = "9f8e7d6c5b4a39281f0e9f8e7d6c5b4a"  # 32 hexadecimal characters, as a device's identifier is written
+
+
+@pytest.mark.parametrize(
+    ("run", "reads_as_one"),
+    [
+        (DEVICE, True),
+        (DEVICE[:16], True),
+        (DEVICE[:15], False),
+        ("DEADBEEFdeadbeef", True),
+        ("connectivitycheck", False),
+        ("eligibilitypanelresearch", False),
+        ("k7q2m9x4w1z8r5t3", True),
+        ("servicegateway2b", False),
+        ("servicegateway2b9", False),
+        ("servicegate2b9c4x", True),
+        ("abcdefabcdefabcg", False),
+    ],
+    ids=[
+        "32 hexadecimal",
+        "16 of them",
+        "15: too short",
+        "hexadecimal letters alone, in either case",
+        "a long word",
+        "a longer one",
+        "letters and digits mixed",
+        "a word with one digit",
+        "with two",
+        "with three",
+        "hexadecimal but for one letter, with no digit",
+    ],
+)
+def test_a_long_run_that_is_all_hexadecimal_or_holds_three_digits_reads_as_an_identifier(run, reads_as_one):
+    assert minimize.is_id(run) is reads_as_one
+
+
+def test_an_identifier_goes_as_a_token_that_says_its_length_and_which_one_and_comes_back():
+    """The same run is the same token wherever it stands, a dictionary key included, so two names can
+    still be told apart and two mentions of one can be seen to be one. A run is letters of either case
+    and digits: a hyphen, a dot or an underscore ends it, and the word beside it stays."""
+    other = "K7q2M9x4w1Z8r5t3"
+    pack = {
+        "new_hosts": [
+            {"name": f"{DEVICE}.collect.vendor.test", "dns_n": 3},
+            {"name": f"node-{other}.cdn.example"},
+        ],
+        "gated": [(f"{DEVICE}.collect.vendor.test", 443)],
+        "shapes": {
+            f"{DEVICE}.collect.vendor.test": {"conns": 3, "apps": ["com.webos.app.home", f"sid_{other}"]}
+        },
+        "red_lines": [f"blocked_retries: {DEVICE}.collect.vendor.test x40", "connectivitycheck.gstatic.com"],
+    }
+    mask = minimize.IdMask()
+    sent = mask.hide(pack)
+    assert sent == {
+        "new_hosts": [
+            {"name": "<id32-1>.collect.vendor.test", "dns_n": 3},
+            {"name": "node-<id16-2>.cdn.example"},
+        ],
+        "gated": [["<id32-1>.collect.vendor.test", 443]],  # a tuple leaves as the list JSON makes of it
+        "shapes": {
+            "<id32-1>.collect.vendor.test": {"conns": 3, "apps": ["com.webos.app.home", "sid_<id16-2>"]}
+        },
+        "red_lines": ["blocked_retries: <id32-1>.collect.vendor.test x40", "connectivitycheck.gstatic.com"],
+    }
+    assert DEVICE in json.dumps(pack)  # the pack is as it was
+    answer = {"name": "<id32-1>.collect.vendor.test", "rule": "||<id32-1>.collect.vendor.test^", "n": 1}
+    assert mask.show(answer) == {
+        "name": f"{DEVICE}.collect.vendor.test",
+        "rule": f"||{DEVICE}.collect.vendor.test^",
+        "n": 1,
+    }
+    # a token this mask never gave is some other text's: it stays, and so does one of another mask
+    assert mask.show("<id32-9> and <id7-1>") == "<id32-9> and <id7-1>"
+    assert minimize.IdMask().show("<id32-1>") == "<id32-1>"
+
+
+def test_the_tenth_identifier_and_the_ones_after_it_come_back_as_well():
+    """A token's number has as many digits as it needs: the mask put back only `<id16-1>` to `<id16-9>`
+    when its pattern took one digit."""
+    runs = [f"{n:016x}" for n in range(12)]
+    mask = minimize.IdMask()
+    sent = mask.hide(runs)
+    assert sent[-1] == "<id16-12>" and mask.show(sent) == runs
+
+
+def test_a_token_the_text_already_holds_is_hidden_as_a_run_of_its_own():
+    """(decision 93) The TV can look up any string, `<id32-1>` among them. Left as written, it read as the
+    token of a real run: two names became one in the request, and the model's answer about the one was
+    taken for the other."""
+    mask = minimize.IdMask()
+    sent = mask.hide({f"{DEVICE}.x.test": 12, "<id32-1>.x.test": 900})
+    assert sent == {"<id32-1>.x.test": 12, "<id8-2>.x.test": 900}
+    assert mask.show(sent) == {f"{DEVICE}.x.test": 12, "<id32-1>.x.test": 900}
+
+
+def test_a_key_that_is_not_a_string_stays_as_it_is():
+    assert minimize.IdMask().hide({5: DEVICE, (1, 2): [DEVICE]}) == {5: "<id32-1>", (1, 2): ["<id32-1>"]}
+
+
+def strings(value):
+    """Every string in a value, dictionary keys among them."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for key, inner in value.items():
+            yield from strings(key)
+            yield from strings(inner)
+    elif isinstance(value, list):
+        for inner in value:
+            yield from strings(inner)
+
+
+# what a pack's strings are made of: plain text, identifiers (hexadecimal or mixed, 16 to 40 characters),
+# shorter words and token-shaped text of the TV's own
+PIECE = st.one_of(
+    st.text(alphabet="abcdefxyz0123456789.-_ <>i", max_size=12),
+    st.from_regex(r"[0-9a-fA-F]{16,40}", fullmatch=True),
+    st.from_regex(r"[0-9a-zA-Z]{16,40}", fullmatch=True),
+    st.from_regex(r"[0-9a-z]{4,15}", fullmatch=True),
+    st.sampled_from(["<id32-1>", "<id16-2>", "<id8-10>", "<id7-1"]),
+)
+TEXT = st.lists(PIECE, max_size=5).map("".join)
+VALUE = st.recursive(
+    st.one_of(TEXT, st.integers(), st.none()),
+    lambda inner: st.one_of(st.lists(inner, max_size=3), st.dictionaries(TEXT, inner, max_size=3)),
+    max_leaves=8,
+)
+
+
+@settings(max_examples=300, deadline=None, derandomize=True)
+@given(value=VALUE)
+def test_whatever_is_hidden_no_string_keeps_an_identifier_and_showing_it_gives_it_back(value):
+    mask = minimize.IdMask()
+    sent = mask.hide(value)
+    left = [run for text in strings(sent) for run in minimize._RUN.findall(text) if minimize.is_id(run)]
+    assert not left and mask.show(sent) == value

@@ -320,9 +320,9 @@ def test_the_timer_runs_only_when_a_setting_asks(tmp_path, settings, enabled):
     assert calls == [timer, "-q enable tvgw-update-boot.service"]
 
 
-def test_the_template_turns_both_on_for_new_installs_and_the_package_cleans_up():
+def test_the_template_keeps_installs_off_and_the_check_on_for_new_installs_and_the_package_cleans_up():
     example = (ROOT / "deploy" / "tvgw.conf.example").read_text(encoding="utf-8")
-    assert re.search(r"^UPDATE_INSTALL=all$", example, re.M) and re.search(
+    assert re.search(r"^UPDATE_INSTALL=off$", example, re.M) and re.search(
         r"^UPDATE_CHECK=weekly$", example, re.M
     )
     postrm = (ROOT / "packaging" / "scripts" / "postrm").read_text(encoding="utf-8")

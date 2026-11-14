@@ -831,8 +831,9 @@ def test_verify_passes_on_the_live_gateway():
 
 
 def test_verify_leaves_its_verdict_by_check_name_in_the_status_file():
-    """(plain) Each `tvgw verify` run replaces /run/tvgw/status.txt, 644 and root's, with `ok <epoch> <n>`
-    or `fail <epoch> <failed check names>`: the run's verdict, readable by every account, and never a
+    """(plain) Each `tvgw verify` run replaces /run/tvgw/status.txt, 644 and root's, with `ok <epoch> <n>`,
+    `ok <epoch> <n> held <names>` (decision 92: findings of FAIL level held back as warnings) or
+    `fail <epoch> <failed check names>`: the run's verdict, readable by every account, and never a
     detail. The status is compared with the run's own --json; only names and counts are printed."""
     start = int(time.time())
     out = subprocess.run(
@@ -849,7 +850,9 @@ def test_verify_leaves_its_verdict_by_check_name_in_the_status_file():
     if failed:
         assert word == "fail" and rest.split() == failed, (word, rest, failed)
     else:
-        assert (word, rest) == ("ok", str(len(checks))), (word, rest, len(checks))
+        held = [c["name"] for c in checks if c["detail"].endswith(verify.HELD)]
+        want = " ".join([str(len(checks)), *(["held", *held] if held else [])])
+        assert (word, rest) == ("ok", want), (word, rest, want)
 
 
 def test_the_counting_file_names_each_count_by_key_state_and_time_only():

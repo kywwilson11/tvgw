@@ -4,11 +4,14 @@ You can look after a gateway that is already running here: see what it updates b
 
 ## Updates
 
-A gateway set up with this release installs its own updates. It does so at night, in the hours set aside for changes, and only while nobody is watching the TV. It installs:
+A new gateway does not install its own updates, and the system it runs on keeps its own schedule. Once a week it asks GitHub whether a newer tvgw exists, and the daily brief tells you.
+
+You can let it install updates for you. It then does so at night, in the hours set aside for changes, and only while nobody is watching the TV. With the security setting it installs:
 
 - the security updates of its own system, and of the Raspberry Pi's own software where it runs on one;
-- newer fixes of AdGuard Home, the filter, for the version it runs;
-- on new installs, also the system's other updates and, when tvgw came from the package, newer tvgw releases.
+- newer fixes of AdGuard Home, the filter, for the version it runs.
+
+With the all setting it also installs the system's other updates and, when tvgw came from the package, newer tvgw releases. The system's updates need the package `unattended-upgrades`. When it is missing, `tvgw updates` says so, and `sudo apt install unattended-upgrades` adds it.
 
 After each install the gateway runs the checks of `tvgw verify`. When the filter or tvgw fails them, it puts the version from before back. The system's own updates cannot be taken back. When an update needs a restart, the gateway restarts itself in the same hours and checks itself again once it is back.
 
@@ -22,16 +25,16 @@ tvgw updates
 
 It prints one line for tvgw, one for the filter and one for the system, then the last night's run. Each line that needs you names the command to run. The daily brief also says what was installed, in one line. Its New line names a newer tvgw once a week.
 
-To install now instead of waiting for the night, while nobody is watching the TV, run the command below. The TV may lose its connection for a minute while services restart.
+If you turn the installs on, you can install now instead of waiting for the night, while nobody is watching the TV. Run the command below. The TV may lose its connection for a minute while services restart.
 
 ```sh
 sudo tvgw updates --now
 ```
 
-To change what the gateway installs, edit the settings file, then run the installer again. With `off` the gateway installs nothing itself, and the sections below are how you update it by hand. A gateway installed before this release has no such line, so it installs nothing itself until you add one.
+To change what the gateway installs, edit the settings file, then run the installer again. With `off` the gateway installs nothing itself, and the sections below are how you update it by hand. A gateway set up with tvgw 0.4.0 had its installs turned on by its settings file, and an upgrade keeps that. To turn them off, put `off` on the first line below.
 
 ```sh
-sudoedit /etc/tvgw/tvgw.conf    # UPDATE_INSTALL=all, security or off; UPDATE_CHECK=weekly or off
+sudoedit /etc/tvgw/tvgw.conf    # UPDATE_INSTALL=off, security or all; UPDATE_CHECK=weekly or off
 sudo /usr/lib/tvgw/deploy/install.sh    # from a source checkout: cd deploy && sudo ./install.sh
 ```
 

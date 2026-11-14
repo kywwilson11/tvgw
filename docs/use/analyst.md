@@ -44,6 +44,10 @@ Each request carries a summary of the day:
 
 It never carries your home's addresses, any device's hardware address, the TV's or the gateway's names, the postal code the TV holds, or an hour-by-hour timeline of your day. A scrubber removes those before anything is written or sent.
 
+Some internet names carry an identifier of a device or an account, as a long run of letters and digits. In what is sent, a run of 16 or more letters and digits is replaced by a placeholder like `<id32-1>`. The run must be all hexadecimal or hold three digits or more.
+
+A shorter run, a UUID written with hyphens and an identifier split over labels go as they are. The gateway puts the real name back in the answer, so the proposals you read name the real hosts.
+
 When the gateway may block on its own, a second model, also `claude-fable-5-1` by default, sees each proposed block with its name's traffic, never the first model's reasoning. [What leaves the gateway](../how-it-works/privacy-and-retention.md#the-analyst) has the whole list, and the known gaps.
 
 At Anthropic, the standard API deletes the daily requests within 30 days. The weekly model, `claude-fable-5-1`, requires 30-day retention, and its requests are checked by Anthropic's automated safety systems ([at Anthropic](../how-it-works/privacy-and-retention.md#at-anthropic)).

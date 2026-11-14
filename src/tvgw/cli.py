@@ -2857,11 +2857,13 @@ def cmd_pause(a, s, prof) -> int:
     for line in listpause.describe(prof, s, minutes, now):
         print(clean(line))
     if not a.yes:
+        from tvgw.refused import _times as refused_times
+
         if not sys.stdin.isatty():
             print("tvgw pause: nothing changed; add --yes to pause without the question")
             return listpause.REFUSED
         try:
-            answer = input(f"Pause the shared blocklists for {minutes} minutes? [y/N] ")
+            answer = input(f"Pause the shared blocklists for {refused_times(minutes, 'minute')}? [y/N] ")
         except EOFError:
             answer = ""
         if answer.strip().lower() not in ("y", "yes"):

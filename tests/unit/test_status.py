@@ -30,6 +30,41 @@ def test_a_check_that_held_says_nothing_needs_attention():
     ]
 
 
+@pytest.mark.parametrize(
+    ("held", "first", "code", "third"),
+    [
+        ("disk", "1 of the 49 checks found something that needs a look: disk.", 1, status.DOCTOR),
+        (
+            "disk clock_synced",
+            "2 of the 49 checks found something that needs a look: disk, clock_synced.",
+            1,
+            status.DOCTOR,
+        ),
+        ("tv_paths", "1 of the 49 checks found something that needs a look: tv_paths.", 2, status.ACT),
+        (
+            "tv_paths disk",
+            "2 of the 49 checks found something that needs a look: tv_paths, disk.",
+            2,
+            status.ACT + " Then run: sudo tvgw doctor",
+        ),
+    ],
+    ids=["one", "two", "one whose fix is on the TV", "one on the TV and one on the gateway"],
+)
+def test_a_run_that_holds_a_failure_back_as_a_warning_still_needs_a_look(held, first, code, third):
+    """(decision 92) A new check's finding of the level of a failure is printed as a warning until the
+    check is promoted, and the run passes. The protection did hold; the reader is still told, by name,
+    and sent where a failure of that check would send them."""
+    shown, got = lines(f"ok {T} 49 held {held}\n")
+    assert (got, shown) == (
+        code,
+        [
+            "tvgw: the protection held at 09:56, but " + first,
+            "The checks run every 10 minutes; this one is 4 minutes old.",
+            third,
+        ],
+    )
+
+
 def test_failed_checks_on_the_gateway_send_the_reader_to_the_doctor():
     shown, code = lines(f"fail {T} services disk\n")
     assert code == 1
@@ -64,7 +99,11 @@ def test_no_status_file_yet_and_one_that_cannot_be_parsed():
     shown, code = lines(None)
     assert code == 1 and shown[0] == "tvgw: no check has run since this computer started."
     assert len(shown) == 3
-    for bad in ("", "ok", "ok nope 3", "fail 123", "ok 123 3 extra", "fail 123 Services", "maybe 1 2"):
+    for bad in (
+        *("", "ok", "ok 123", "ok nope 3", "fail 123", "ok 123 3 extra", "fail 123 Services", "maybe 1 2"),
+        *("ok 123 3 held", "ok 123 3 held Disk", "ok 123 3 hold disk", "ok 123 x held disk"),
+        *("fail 123 a.b", "ok 123 3 held a.b"),
+    ):
         shown, code = lines(bad)
         assert code == 1 and shown[0] == "tvgw: the last check's verdict could not be read.", bad
 

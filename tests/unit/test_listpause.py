@@ -13,19 +13,24 @@ import dataclasses
 import json
 import os
 import random
+import signal
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 
 import pytest
+import yaml
 from conftest import NOW
 
 from tvgw import (
     adguardcfg,
     aghinstall,
+    analyst,
     autoblock,
     cli,
     db,
+    dnsq,
     doctor,
     ledger,
     listpause,
@@ -266,6 +271,33 @@ def test_a_pause_switches_the_tracker_lists_off_sets_its_timer_and_records_its_s
     assert done.lines[0].startswith("tvgw pause: the shared blocklists are off until 10:10 (HaGeZi LG webOS")
 
 
+def test_the_command_as_shipped_pauses_and_ends_through_the_apply_every_rule_change_uses(
+    site, lg, monkeypatch
+):
+    """No stand-in for the apply itself, only for systemctl and the resolver's answer. 0.4.0 handed the
+    lists to the apply where its `guard` stands: every `sudo tvgw pause` stopped with a TypeError, its
+    row written and its timer set, and the next unrelated apply made that pause real. The applies now
+    take their options by name only."""
+    units = []
+
+    def systemctl(cmd, *a, **k):
+        units.append(cmd[1])
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", systemctl)
+    monkeypatch.setattr(dnsq, "query", lambda *a, **k: b"\x12\x34\x81\x80" + bytes(8))  # NOERROR
+    hooks = {"disarm_fn": site.disarm, "sleep": lambda seconds: None}
+    assert listpause.start(site.s, lg, 10, arm_fn=site.arm, clock=lambda: NOW, **hooks).code == 0
+    assert site.enabled() == {LG_LIST: False, PRO: False, DOH: True} and site.row().in_force(NOW)
+    assert listpause.end(site.s, lg, listpause.EARLY, clock=lambda: NOW + 4 * MIN, **hooks).code == 0
+    assert all(site.enabled().values()) and site.row().how == "early"
+    assert [verb for verb in units if verb in ("stop", "start")] == ["stop", "start"] * 2
+    with pytest.raises(TypeError):
+        analyst.adguardcfg_apply(site.s, lg, lg.tracking_filters())
+    with pytest.raises(TypeError):
+        adguardcfg.apply(site.s.adguard_yaml, adguardcfg.desired(lg, site.s, ()), lambda *a: None)
+
+
 def test_a_second_pause_is_refused_with_the_end_time(site, lg):
     _, clock = clock_at(NOW)
     assert listpause.start(site.s, lg, 10, arm_fn=site.arm, clock=clock, **site.hooks()).code == listpause.OK
@@ -297,7 +329,19 @@ def test_with_the_upstreams_down_it_says_deferred_exits_3_and_pauses_nothing(sit
     assert site.row() is None and site.disarmed == 1 and site.spool() == []
 
 
-def test_a_change_adguard_refuses_puts_the_last_pause_back_and_stops_the_timer(site, lg):
+@pytest.mark.parametrize(
+    "fault",
+    [
+        RuntimeError("AdGuard Home rejected the planned config"),
+        TypeError("not callable"),
+        KeyError("filters"),
+        yaml.YAMLError("could not read the config"),
+    ],
+    ids=["a refusal the apply names", "a call that does not fit", "a config of another shape", "a bad YAML"],
+)
+def test_a_change_adguard_refuses_puts_the_last_pause_back_and_stops_the_timer(site, lg, fault):
+    """Whatever the apply could not do. The last two once left the row written and the timer set, under
+    a traceback: a pause that had not begun, which the next apply of anything began."""
     old = listpause.Pause(NOW - DAY, NOW - DAY + 600, 10, lg.tracking_filters(), NOW - DAY + 600, "timer")
     conn = db.connect(site.s.db_path)
     db.set_meta(conn, listpause.META_KEY, old.as_json())
@@ -305,11 +349,95 @@ def test_a_change_adguard_refuses_puts_the_last_pause_back_and_stops_the_timer(s
     conn.close()
 
     def broken(paused):
-        raise RuntimeError("AdGuard Home rejected the planned config")
+        raise fault
 
     done = listpause.start(site.s, lg, 10, arm_fn=site.arm, **{**site.hooks(), "apply_fn": broken})
     assert done.code == listpause.REFUSED and "nothing was paused" in done.lines[0]
     assert site.row() == old and site.disarmed == 1
+
+
+class Stopped(BaseException):
+    """The process ends here: Ctrl-C, a kill, a reboot."""
+
+
+def test_a_start_interrupted_with_the_lists_already_off_keeps_its_row_and_timer_and_ends_on_time(site, lg):
+    """An interrupt that gets past the start's own hold (it cannot be held off from the apply's own
+    interior forever) arrives with the lists off. Taking the row back then would leave them off with
+    nothing to bring them back."""
+
+    def interrupted(paused):
+        site.apply(paused)
+        raise Stopped
+
+    with pytest.raises(Stopped):
+        listpause.start(
+            site.s, lg, 10, arm_fn=site.arm, clock=lambda: NOW, **{**site.hooks(), "apply_fn": interrupted}
+        )
+    assert site.enabled()[PRO] is False and site.row().in_force(NOW + MIN) and site.disarmed == 0
+    done = listpause.end(site.s, lg, listpause.TIMER, clock=lambda: NOW + 10 * MIN, **site.hooks())
+    assert done.code == 0 and all(site.enabled().values())
+
+
+@pytest.mark.parametrize("sig", [signal.SIGINT, signal.SIGTERM, signal.SIGHUP])
+@pytest.mark.parametrize("took", [True, False], ids=["the lists go off", "the apply refuses"])
+def test_a_signal_during_a_start_arrives_after_it_has_paused_or_put_everything_back(site, lg, sig, took):
+    """Ctrl-C, a hang-up or a stop before the apply reached AdGuard's stop once raised with the lists on
+    and the row in force: a pause that had not begun, which the next apply of anything began. The signal
+    is raised in this thread from inside the apply, as the owner's would arrive."""
+    old = signal.signal(
+        sig, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt)
+    )  # the default would end the run
+
+    def signalled(paused):
+        signal.raise_signal(sig)  # to this thread, at once
+        if not took:
+            raise RuntimeError("AdGuard Home did not answer")
+        return site.apply(paused)
+
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            listpause.start(
+                site.s, lg, 10, arm_fn=site.arm, clock=lambda: NOW, **{**site.hooks(), "apply_fn": signalled}
+            )
+    finally:
+        signal.signal(sig, old)
+    assert (site.enabled()[PRO] is False) == took
+    assert (site.row() is not None) == took and site.disarmed == (0 if took else 1)
+
+
+@pytest.mark.parametrize(
+    ("live", "kept"),
+    [("off", True), ("on", False), ("unreadable", False), ("other", False)],
+    ids=["its rollback failed, lists off", "lists on", "the YAML cannot be read", "only another list off"],
+)
+def test_a_failed_start_says_the_lists_are_off_and_keeps_its_timer_only_when_they_are(site, lg, live, kept):
+    """The apply puts its backup back when it fails. When that fails too the lists stay off, and a start
+    that then said "nothing was paused", took the row back and stopped the timer left them off with
+    nothing to end the pause."""
+
+    def broken(paused):
+        if live == "off":
+            site.apply(paused)
+        elif live == "other":  # a list the pause does not touch, switched off by hand
+            cfg = site.yaml()
+            next(f for f in cfg["filters"] if f["url"] == DOH)["enabled"] = False
+            Path(site.s.adguard_yaml).write_text(adguardcfg.dump_yaml(cfg), encoding="utf-8")
+        elif live == "unreadable":
+            Path(site.s.adguard_yaml).write_text("filters: [unclosed", encoding="utf-8")
+        raise RuntimeError("restoring the backup also failed")
+
+    done = listpause.start(
+        site.s, lg, 10, arm_fn=site.arm, clock=lambda: NOW, **{**site.hooks(), "apply_fn": broken}
+    )
+    assert done.code == listpause.REFUSED and ("the shared blocklists are off" in done.lines[0]) == kept
+    assert ("nothing was paused" in done.lines[0]) != kept and site.disarmed == (0 if kept else 1)
+    if not kept:
+        assert site.row() is None
+        return
+    row = site.row()
+    assert row.overdue(NOW) and not row.in_force(NOW) and listpause.paused_urls(lg, site.s, NOW) == ()
+    assert listpause.fallback(site.s, lg, clock=lambda: NOW + MIN, **site.hooks()).code == 0
+    assert all(site.enabled().values()) and site.row().ended is not None
 
 
 def test_without_its_timer_a_pause_does_not_start(site, lg):
@@ -442,6 +570,94 @@ def test_the_hourly_check_ends_a_pause_past_its_end_and_nothing_else(site, lg):
     assert done.code == 0 and site.row().how == "fallback" and site.enabled()[PRO] is True
     assert "ended by the hourly check" in done.lines[0]
     assert listpause.fallback(site.s, lg, clock=lambda: NOW + 80 * MIN, **site.hooks()) is None  # over
+
+
+@pytest.mark.parametrize(
+    ("how", "at"),
+    [(listpause.EARLY, 4 * MIN), (listpause.TIMER, 10 * MIN)],
+    ids=["the owner's", "the timer's"],
+)
+@pytest.mark.parametrize("lists_back", [False, True], ids=["before the apply", "with the lists back"])
+@pytest.mark.parametrize(
+    "finish",
+    [
+        lambda site, lg, at, hooks: listpause.fallback(site.s, lg, clock=lambda: NOW + at + MIN, **hooks),
+        lambda site, lg, at, hooks: listpause.end(
+            site.s, lg, listpause.TIMER, clock=lambda: NOW + 10 * MIN, **hooks
+        ),
+        lambda site, lg, at, hooks: listpause.end(
+            site.s, lg, listpause.EARLY, clock=lambda: NOW + at + 5, **hooks
+        ),
+    ],
+    ids=["the hourly check a minute later", "the timer at the planned end", "the owner's --end again"],
+)
+def test_an_end_cut_short_is_a_pause_past_its_end_that_any_way_back_finishes(
+    site, lg, how, at, lists_back, finish
+):
+    """An end writes twice around its apply: the row's end moved to now, then the row ended. It once
+    wrote `ended` first: stopped in the apply, the lists were off, the row said over, the timer, the
+    hourly check and `--end` each found no pause to end, and `--status` said the lists were on."""
+    started(site, lg)
+    during = []
+
+    def stopped(paused):
+        during.append(listpause.paused_urls(lg, site.s, NOW + at))  # what any other apply would render
+        if lists_back:
+            site.apply(paused)
+        raise Stopped
+
+    with pytest.raises(Stopped):
+        listpause.end(site.s, lg, how, clock=lambda: NOW + at, **{**site.hooks(), "apply_fn": stopped})
+    row = site.row()
+    assert during == [()] and row.ended is None and row.overdue(NOW + at) and row.start == NOW
+    said = listpause.status(site.s, now=NOW + at + 1, timer=lambda: True)
+    assert said.code == listpause.REFUSED and "and it is not over yet" in said.lines[0]
+    done = finish(site, lg, at, site.hooks())
+    assert done.code == 0 and all(site.enabled().values()) and site.row().ended is not None
+    assert listpause.fallback(site.s, lg, clock=lambda: NOW + 2 * 3600, **site.hooks()) is None  # over
+
+
+@pytest.mark.parametrize(
+    ("at", "moved_to"),
+    [(4 * MIN, NOW + 4 * MIN), (12 * MIN, NOW + 10 * MIN), (-3 * MIN, NOW)],
+    ids=["an early end", "an end after the planned one", "a clock stepped back before the start"],
+)
+@pytest.mark.parametrize("fault", [adguardcfg.Deferred("upstreams down"), RuntimeError("refused")])
+def test_an_end_moves_the_end_to_now_within_the_pause_and_a_refusal_puts_the_row_back(
+    site, lg, at, moved_to, fault
+):
+    started(site, lg)
+    planned, during = site.row(), []
+
+    def refusing(paused):
+        during.append(site.row().end)
+        raise fault
+
+    done = listpause.end(
+        site.s, lg, listpause.EARLY, clock=lambda: NOW + at, **{**site.hooks(), "apply_fn": refusing}
+    )
+    assert done.code != listpause.OK and during == [moved_to] and site.row() == planned
+    listpause.end(site.s, lg, listpause.EARLY, clock=lambda: NOW + at, **site.hooks())
+    assert site.row().end == planned.end and site.row().ended == NOW + at  # recorded as it was planned
+
+
+def test_an_end_adguard_fails_in_any_way_is_said_and_tried_again_by_the_timer(site, lg):
+    """A failure outside the three classes the end once caught ended the timer's unit with a traceback,
+    its tries with it."""
+    started(site, lg)
+    faults, said = iter([KeyError("filters")]), []
+
+    def once_broken(paused):
+        if (fault := next(faults, None)) is not None:
+            raise fault
+        return site.apply(paused)
+
+    done = listpause.end_by_timer(
+        site.s, lg, said.append, clock=lambda: NOW + 10 * MIN, **{**site.hooks(), "apply_fn": once_broken}
+    )
+    assert said[0].startswith("tvgw pause --end: AdGuard Home did not take the change ('filters')")
+    assert done.code == 0 and all(site.enabled().values()) and site.row().how == "timer"
+    assert site.row().end == NOW + 10 * MIN  # the planned end, as it was
 
 
 def test_the_hourly_check_runs_the_fallback_before_it_judges(site, lg, monkeypatch, capsys):
@@ -853,6 +1069,17 @@ def test_without_a_terminal_or_yes_it_asks_and_changes_nothing(site, conf, monke
     assert out[0].startswith("For 15 minutes, the gateway stops using")
     assert out[-1] == "tvgw pause: nothing changed; add --yes to pause without the question"
     assert site.row() is None
+
+
+@pytest.mark.parametrize(("minutes", "span"), [("1", "1 minute"), ("2", "2 minutes"), ("15", "15 minutes")])
+def test_the_question_says_how_long_in_plain_words(site, conf, monkeypatch, capsys, minutes, span):
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    asked = []
+    monkeypatch.setattr("builtins.input", lambda question: asked.append(question) or "n")
+    assert cli.main(["--conf", conf, "pause", minutes]) == 1
+    assert asked == [f"Pause the shared blocklists for {span}? [y/N] "] and site.row() is None
+    assert capsys.readouterr().out.splitlines()[-1] == "tvgw pause: nothing changed"
 
 
 def test_the_command_pauses_with_yes_and_hands_the_timer_its_settings(site, lg, conf, monkeypatch, capsys):

@@ -6,6 +6,24 @@
 
 ### Status
 
+### tvgw status no longer says "nothing needs your attention" over a held finding, and failed jobs are checked (2026-11-13)
+
+- **`tvgw status` names what a passing check run holds back.** A new check's worst finding is printed as a warning until the check is promoted, and the run passes. Before, `tvgw status` then said "Nothing needs your attention", even with a read-only disk or a clock that is not set. Now it says the protection held, names the checks that found something, and sends you to `sudo tvgw doctor` (exit 1; exit 2 when the fix is on the TV) ([design decision 92](docs/design-decisions.md#92-a-finding-held-back-as-a-warning-still-reaches-tvgw-status-and-a-check-asks-how-the-timers-jobs-ended)). `sudo tvgw verify` itself is unchanged.
+- **A new check, `jobs`,** asks systemd how the last run of each scheduled job ended: the hourly judge, the ingest, the backup, the prune, the list updates, the software update, the analyst. Before, a job could fail at every run and no check said so, because its timer stayed active. A failed job is a warning that names it; when it is the hourly judge and it has a block to judge or a revert AdGuard has not taken, `tvgw status` says so too.
+- The status file gains a form, `ok <epoch> <n> held <names>`. For developers: `status.parse()` returns a `Verdict` with `held`; `verify.Check.held`; `verify.JOBS`.
+
+### An identifier in a host's name no longer goes to the analyst (2026-11-13)
+
+- **What changed.** Some hosts carry a device's or an account's identifier in their name, as a long run of letters and digits. In what the analyst sends, a run of 16 or more that is all hexadecimal or holds three digits or more now goes as a token like `<id32-1>` that says only how long it is and which one it is; the same run is the same token within a run, so names can still be told apart ([design decision 93](docs/design-decisions.md#93-an-identifier-a-name-carries-goes-to-the-models-as-a-token-and-comes-back-as-itself)). On the reference this touches 11 of the 349 names of two weeks. Not covered: a UUID with hyphens, a run shorter than 16 characters, an identifier split over labels, and a run mostly of letters with fewer than three digits.
+- **What you see.** Nothing: the model's answer has the names put back before the gateway checks it, so your proposals, any rule and the record hold the real names. The copy of the pack kept beside each request shows what was sent, tokens and all.
+- For developers: `minimize.IdMask`, `minimize.is_id`, `analyst.leaving()`; `analyst.user_message()` takes what `leaving()` returns.
+
+### `tvgw pause` starts, and an end that is cut short is finished (2026-11-13)
+
+- **What went wrong.** `sudo tvgw pause` stopped with an error every time and paused nothing, though it said it was paused until the end time; the next unrelated change to AdGuard then made the pause real. And an end that was interrupted halfway, by Ctrl-C, a kill or a reboot, left the shared lists off, with nothing to bring them back and `tvgw status` saying they were on.
+- **Now.** The pause starts, or says it could not and leaves everything as it was (when AdGuard also fails to put its own file back and the lists stay off, it says that instead and the timer ends the pause). Ctrl-C, a hang-up or a stop during the start waits until it is done, so none leaves a pause that never began; a kill still can, and the timer ends that pause on time ([design decision 94](docs/design-decisions.md#94-tvgw-pause-starts-and-an-end-that-is-cut-short-is-finished-by-the-next-way-back)). An end first moves the pause's end to now, then brings the lists back, then records the end; if it is cut short, the timer's next try, the hourly check or `sudo tvgw pause --end` finishes it. The question reads "for 1 minute".
+- For developers: `analyst.adguardcfg_apply()` and `adguardcfg.apply()` take their options by name only.
+
 ### What the gateway blocks on its own is one name, its reverts land, and the nightly pack holds no time of day (2026-11-13)
 
 - **This changes nothing you see unless `ANALYST_APPLY=auto`,** which is off unless you turned it on. The nightly pack changes for everyone who uses the analyst.
@@ -15,6 +33,12 @@
 - **The pack no longer says when.** The first and last time a name was used, the first and last time a gated connection was seen, and the time a rule changed are gone from what is sent, and a red line that names an hour names its day; the brief on the gateway still prints them.
 - An app id that reads like an instruction is withheld from the second model.
 - For developers: `autoblock.gate()` takes a required `reach=` (`autoblock.reach()`); `autoblock.Shape` has no `first` or `last`; `adguardcfg.retry_busy()` replaces the pause's own loop and `listpause.BUSY_TRIES`.
+
+### New installs start with automatic installs off (2026-11-13)
+
+- **What went wrong.** The 0.4.0 release page told owners to leave automatic installs off. The settings template for a new install turned them on, and the maintenance page said a new gateway installs its own updates. A new owner was told two things.
+- **Now** the template says `off`, so a new gateway installs nothing by itself, and the maintenance page says so, then tells how to turn the installs on and what the system's updates need. The weekly check for a newer tvgw stays on.
+- **What you notice:** nothing on a gateway that is already set up. An upgrade never rewrites its settings file, so a gateway set up with 0.4.0 keeps its installs on; the page gives the line that turns them off ([design decision 77](docs/design-decisions.md#77-the-gateway-installs-its-own-security-updates-in-the-quiet-window-checks-each-install-and-rolls-back-what-it-can)).
 
 ### The daily DoH list leaves out a network the TV is streaming from, while it streams (2026-11-13)
 

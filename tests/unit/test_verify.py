@@ -313,6 +313,9 @@ def gateway(
             [{"priority": 50, "table": "main"}, {"priority": 60, "table": "100"}]
         ),
         ("systemctl", "is-active", *verify.SERVICES): "active\n" * len(verify.SERVICES),
+        verify.JOBS_SHOW: "\n\n".join(
+            f"Id={j}.service\nLoadState=loaded\nResult=success" for j in verify.JOBS
+        ),
         ("systemctl", "is-active", *verify.SERVICES, "tvgw-dnsgate"): "active\n" * (len(verify.SERVICES) + 1),
         ("nft", "list", "table", "inet", "tvgw_gate"): GATE_TABLE,
         ("nft", "-j", "list", "set", "inet", "tvgw_gate", "resolved4"): GATE_SET_JSON,
@@ -439,6 +442,7 @@ def test_healthy_gateway_passes_every_check(lg):
         "web",  # (web) off: nothing listens on its port
         "flowlog_events",  # (events)
         "store_version",  # (reliability)
+        "jobs",  # (decision 92)
         "disk",  # (depth)
         "clock_synced",
         "store_backup",
