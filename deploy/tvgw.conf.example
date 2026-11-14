@@ -262,11 +262,12 @@ THREAT_LISTS=off
 # ---- updates (docs/use/maintenance.md#updates; design decision 77) ----
 # What the gateway installs on its own, only in DEPLOY_WINDOW and only while the TV is quiet, each install
 # checked with tvgw verify afterwards and put back where it can be (AdGuard Home, tvgw's own package):
-# all:      the system's updates, AdGuard Home's patch releases and tvgw's own releases. New installs use it.
+# all:      the system's updates, AdGuard Home's patch releases and tvgw's own releases.
 # security: the system's security updates (and Raspberry Pi's own archive) and AdGuard Home's patch releases
-# off:      nothing, which is also what a settings file without this line means.
+# off:      nothing, which is also what a settings file without this line means. New installs use it, and
+#           docs/use/maintenance.md#updates says why and how to turn the installs on.
 # sudo tvgw updates says what waits and what was installed; re-run install.sh after a change.
-UPDATE_INSTALL=all
+UPDATE_INSTALL=off
 # weekly: ask GitHub once a week whether a newer tvgw exists, for the brief; off: never ask.
 UPDATE_CHECK=weekly
 # UPDATE_REPO=kywwilson11/tvgw       # the GitHub repository, owner/name, those requests ask about

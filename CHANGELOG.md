@@ -6,6 +6,12 @@
 
 ### Status
 
+### New installs start with automatic installs off (2026-11-13)
+
+- **What went wrong.** The 0.4.0 release page told owners to leave automatic installs off. The settings template for a new install turned them on, and the maintenance page said a new gateway installs its own updates. A new owner was told two things.
+- **Now** the template says `off`, so a new gateway installs nothing by itself, and the maintenance page says so, then tells how to turn the installs on and what the system's updates need. The weekly check for a newer tvgw stays on.
+- **What you notice:** nothing on a gateway that is already set up. An upgrade never rewrites its settings file, so a gateway set up with 0.4.0 keeps its installs on; the page gives the line that turns them off ([design decision 77](docs/design-decisions.md#77-the-gateway-installs-its-own-security-updates-in-the-quiet-window-checks-each-install-and-rolls-back-what-it-can)).
+
 ### tvgw forget leaves no timeline behind (2026-11-13)
 
 - **What it kept before.** The firewall's counters stayed whole, a snapshot every ten minutes, and they grow only while the TV is on, so every hour it was watched could be read back. The time servers' addresses stayed, the first line of the deleted change spool stayed in a cursor, and the capture file that was open stayed for `PCAP_DAYS`.
