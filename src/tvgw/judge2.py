@@ -32,7 +32,7 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 
-from tvgw import autoblock, ledger, queries
+from tvgw import autoblock, evidencekit, ledger, queries
 from tvgw.profile import Profile
 
 CEILING = ledger.CEILING  # seconds: the longest a trial may extend for want of clean hours
@@ -266,16 +266,6 @@ class Outcome:
     hour: int | None = None  # the hour whose test reverted or suspended
 
 
-def _prefix(values: dict[int, float], hs: list[int]) -> dict[int, float]:
-    """Running sums over the hour list, so a window's sum is two lookups."""
-    acc, out = 0.0, {}
-    for h in hs:
-        out[h] = acc
-        acc += values.get(h, 0.0)
-    out[hs[-1] + 3600] = acc
-    return out
-
-
 def calibrate(
     conn: sqlite3.Connection,
     prof: Profile,
@@ -304,7 +294,8 @@ def calibrate(
     For each arm: the false-revert rate alpha (hourly and final), the blind-pass or NODATA rate, the
     share of trials holding a confounded hour, the share whose reverting hour was confounded or had no
     demand, and the power at `breakage` (every expected-category byte after the pretended rule scaled
-    by that factor: the share of trials that then take the rule out). Read-only."""
+    by that factor: the share of trials that then take the rule out), each with its day-block interval
+    (`_summary`) over the `trial_days` local days the trials start on. Read-only."""
     now = now if now is not None else time.time()
     end = int(now // 3600) * 3600
     start = end - days * 86400
@@ -312,16 +303,14 @@ def calibrate(
     clf = ledger.Classifier(conn, prof, first, end)
     all_hours = list(range(first, end, 3600))
     cls = {h: clf.classify(h) for h in all_hours}
-    active = {h: float(clf.facts(h).readings_active) for h in all_hours}
-    if SHIPPED_ON != ("Active",):
-        on_set = set(SHIPPED_ON)
-        active = {h: float(sum(1 for r in clf.readings.get(h, []) if r[1] in on_set)) for h in all_hours}
+    on_set = set(SHIPPED_ON)
+    active = {h: float(sum(1 for r in clf.readings.get(h, []) if r[1] in on_set)) for h in all_hours}
     demand = shipped_demand(clf, all_hours)  # (fin-release) arm A's hours
     placebo = [h for h in all_hours if start <= h <= end - autoblock.TRIAL]
     classes = {c: sum(1 for h in all_hours if h >= start and cls[h][0] == c) for c in ledger.CLASSES}
     result: dict = {
         "generated": now, "days": days, "trials": len(placebo), "k": k, "breakage": breakage,
-        "hour_classes": classes, "arms": {},
+        "hour_classes": classes, "trial_days": len({_local_day(h) for h in placebo}), "arms": {},
     }  # fmt: skip
     if not placebo:
         return result
@@ -339,36 +328,48 @@ def calibrate(
     return result
 
 
+def _local_day(h: int) -> str:
+    return datetime.fromtimestamp(h).strftime("%Y-%m-%d")
+
+
 def _summary(
     out: list[Outcome], broken: list[Outcome], placebo: list[int], cls: dict[int, tuple[str, list[str]]]
-) -> dict[str, float]:
-    """One arm's numbers: shares of the placebo trials."""
-    n = len(placebo)
-
-    def share(outcomes: list[Outcome], pred) -> float:
-        return round(sum(1 for o in outcomes if pred(o)) / n, 4)
+) -> dict:
+    """One arm's numbers: shares of the placebo trials, and in `intervals` each share's 95% interval from
+    a bootstrap that resamples whole local days of trial starts (`evidencekit.day_block_bootstrap`). A
+    trial starts at every hour, so trials a day apart share 23 of their 24 hours: the day, not the
+    trial, is the unit that is independent, and a share of 1,417 trials is about 60 days' evidence."""
+    by_day: dict[str, list[int]] = {}
+    for i, h in enumerate(placebo):
+        by_day.setdefault(_local_day(h), []).append(i)
 
     def at(o: Outcome, c: str) -> bool:
         return o.verdict == "reverted" and o.hour is not None and cls[o.hour][0] == c
 
-    held = sum(
-        1
-        for h in placebo
-        if any(cls.get(x, ("off",))[0] == "confounded" for x in range(h, h + autoblock.TRIAL, 3600))
-    )
-    return {
-        "alpha": share(out, lambda o: o.verdict == "reverted"),
-        "alpha_hourly": share(out, lambda o: o.verdict == "reverted" and o.stage == "hourly"),
-        "alpha_final": share(out, lambda o: o.verdict == "reverted" and o.stage == "final"),
-        "suspended": share(out, lambda o: o.verdict == "suspended"),
-        "blind_pass": share(out, lambda o: o.verdict == "blind_pass"),
-        "nodata": share(out, lambda o: o.verdict == "nodata"),
-        "trials_with_confounded_hour": round(held / n, 4),
-        "revert_hour_confounded": share(out, lambda o: at(o, "confounded")),
-        "revert_hour_no_demand": share(out, lambda o: at(o, "no_demand")),
-        "power": share(broken, lambda o: o.verdict == "reverted"),
-        "power_out": share(broken, lambda o: o.verdict in ("reverted", "suspended")),
+    def held(i: int) -> bool:
+        h = placebo[i]
+        return any(cls.get(x, ("off",))[0] == "confounded" for x in range(h, h + autoblock.TRIAL, 3600))
+
+    rates: dict[str, Callable[[int], bool]] = {
+        "alpha": lambda i: out[i].verdict == "reverted",
+        "alpha_hourly": lambda i: out[i].verdict == "reverted" and out[i].stage == "hourly",
+        "alpha_final": lambda i: out[i].verdict == "reverted" and out[i].stage == "final",
+        "suspended": lambda i: out[i].verdict == "suspended",
+        "blind_pass": lambda i: out[i].verdict == "blind_pass",
+        "nodata": lambda i: out[i].verdict == "nodata",
+        "trials_with_confounded_hour": held,
+        "revert_hour_confounded": lambda i: at(out[i], "confounded"),
+        "revert_hour_no_demand": lambda i: at(out[i], "no_demand"),
+        "power": lambda i: broken[i].verdict == "reverted",
+        "power_out": lambda i: broken[i].verdict in ("reverted", "suspended"),
     }
+    result: dict = {"intervals": {}}
+    for name, hit in rates.items():
+        days = {day: [float(hit(i)) for i in trials] for day, trials in by_day.items()}
+        result[name] = round(sum(map(sum, days.values())) / len(placebo), 4)
+        lo, hi = evidencekit.day_block_bootstrap(days) if result[name] else (0.0, 0.0)
+        result["intervals"][name] = [round(lo, 4), round(hi, 4)]
+    return result
 
 
 def _reverting_classes(arm, placebo, clf, cls, active, k, end, demand=None) -> dict[str, int]:
@@ -519,23 +520,43 @@ def write_report(result: dict, reports_dir: str) -> str:
     return path
 
 
+COLUMNS = (  # the table's columns: (heading, the arm's share); "blind/nodata" is arm B's blind passes
+    ("alpha", "alpha"),
+    ("hourly", "alpha_hourly"),
+    ("final", "alpha_final"),
+    ("suspended", "suspended"),
+    ("blind/nodata", "nodata"),
+    ("trials-with-confounded", "trials_with_confounded_hour"),
+    ("revert-hour-conf", "revert_hour_confounded"),
+    ("revert-hour-no-demand", "revert_hour_no_demand"),
+    ("power", "power"),
+    ("power-out", "power_out"),
+)
+
+
+def rate_words(share: float, interval: list[float], days: int) -> str:
+    """`16.7% (9 to 25)`: a share of the placebo trials with its day-block interval, in points. A share of
+    none is `0 of 14 days: under 21%`: no false revert on N independent days bounds the rate only under
+    about 3 in N (`evidencekit.poisson_upper`)."""
+    if not share:
+        under = min(100.0, 100 * evidencekit.poisson_upper(0, days))
+        return f"0 of {days} day{'s' if days != 1 else ''}: under {under:.0f}%"
+    return f"{share:.1%} ({100 * interval[0]:.0f} to {100 * interval[1]:.0f})"
+
+
 def summary_lines(result: dict) -> list[str]:
-    """The calibration as a table for the terminal."""
+    """The calibration as a table for the terminal, every share with its interval."""
     out = [
         f"placebo trials: {result['trials']} over {result['days']} days; K = {result['k']} clean hours;"
         f" power at breakage x{result['breakage']:g}",
         "hours: " + ", ".join(f"{c} {n}" for c, n in result["hour_classes"].items()),
-        "arm  alpha  hourly  final  suspended  blind/nodata  trials-with-confounded  revert-hour-conf"
-        "  revert-hour-no-demand  power  power-out",
     ]
+    rows = [["arm", *(heading for heading, _ in COLUMNS)]]
     for arm, r in result["arms"].items():
-        blind = r["blind_pass"] if arm == "B" else r["nodata"]  # (fin-release) A extends, as shipped
-        out.append(
-            f"{arm:<4} {r['alpha']:<6.1%} {r['alpha_hourly']:<7.1%} {r['alpha_final']:<6.1%}"
-            f" {r['suspended']:<10.1%} {blind:<13.1%} {r['trials_with_confounded_hour']:<23.1%}"
-            f" {r['revert_hour_confounded']:<17.1%} {r['revert_hour_no_demand']:<22.1%}"
-            f" {r['power']:<6.1%} {r['power_out']:.1%}"
-        )
+        keys = [("blind_pass" if key == "nodata" and arm == "B" else key) for _, key in COLUMNS]
+        rows.append([arm, *(rate_words(r[k], r["intervals"][k], result["trial_days"]) for k in keys)])
+    widths = [max(len(row[c]) for row in rows) for c in range(len(rows[0]))]
+    out += ["  ".join(cell.ljust(w) for cell, w in zip(row, widths, strict=True)).rstrip() for row in rows]
     if not result["arms"]:
         out.append("(no complete trial window in the store yet)")
     else:
@@ -543,6 +564,10 @@ def summary_lines(result: dict) -> list[str]:
             "bytes: "
             + "; ".join(f"{arm} {ARM_BYTES.get(arm, '?')}" for arm in result["arms"])
             + " (the shadow judge counts end-time bytes: D is the judge it records)"
+        )
+        out.append(
+            f"each share with its 95% interval in points, from {result['trial_days']} days of trials"
+            " resampled a day at a time: trials an hour apart share most of their hours"
         )
     return out
 
