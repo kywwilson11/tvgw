@@ -691,6 +691,15 @@ RELATIONS: tuple[Relation, ...] = (
         same_end,
     ),
     Relation(
+        "the minted-address shadow only counts",
+        96,
+        "MINT=shadow changes no packet's end on the TV's port.",
+        "MINT",
+        "off",
+        "shadow",
+        same_end,
+    ),
+    Relation(
         "the attention count only counts",
         69,
         "LIVE_READING=on, which loads the attention count, changes no packet's end on the TV's port.",

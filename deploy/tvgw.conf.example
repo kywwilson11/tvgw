@@ -85,6 +85,13 @@ DNSGATE=count
 #            TV asks again), and a second count runs beside the first so the two can be compared in
 #            the brief. If that program stops, the answers pass without it.
 DNSGATE_FILL=passive
+# MINT: (mint) the minted-address shadow: a live count of what handing the TV a made-up address for each
+# name would refuse (design decision 96). Read only with DNSGATE=count and DNSGATE_FILL=inpath.
+#   off     no count (the default).
+#   shadow  the in-path filler keeps the table of made-up addresses from the answers it has released,
+#           and the firewall copies the first packet of each new TV connection to it, which it counts by
+#           what a strict stage would do with it. The TV is handed the real addresses; nothing is refused.
+MINT=off
 # NAME_BINDING: the live check of each TLS connection's server name against the names the TV's own DNS
 # answers gave that address (nothing is refused either way; the brief checks the same from the record).
 #   off    no live check (the default).

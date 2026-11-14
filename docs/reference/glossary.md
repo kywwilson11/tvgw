@@ -242,7 +242,7 @@ A block rule in the machine's rules file, put there by the gateway itself and re
 
 ### minted address
 
-(mint) An address made up for one name at one real address, from a range that exists nowhere else (`198.18.0.0/15`), which a later version could hand the TV in place of the real one, so that the address of every connection says which name it means. No TV is handed one today: `tvgw mint replay` only asks the record what such a table would have held for each connection. A minted address with its name, its real address and its end is a ticket. See [design decision 85](../design-decisions.md#85-one-address-per-name-the-minting-table-first-as-a-replay-over-the-record-that-changes-nothing).
+(mint) An address made up for one name at one real address, from a range that exists nowhere else (`198.18.0.0/15`), which a later version could hand the TV in place of the real one, so that the address of every connection says which name it means. No TV is handed one today: `tvgw mint replay` only asks the record what such a table would have held for each connection, and with `MINT=shadow` the in-path filler keeps such a table live and counts each connection by it ([design decision 96](../design-decisions.md#96-one-address-per-name-as-a-shadow-the-in-path-filler-keeps-the-minting-table-from-the-answers-it-holds-and-counts-what-a-strict-stage-would-refuse-as-connections-happen)). A minted address with its name, its real address and its end is a ticket. See [design decision 85](../design-decisions.md#85-one-address-per-name-the-minting-table-first-as-a-replay-over-the-record-that-changes-nothing).
 
 ### must-allow
 

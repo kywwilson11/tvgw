@@ -21,7 +21,7 @@ from test_apply_check import checked, run_check
 from test_verify import GATE_TABLE, INPATH_TABLE, NOW, S, resolver
 from test_verify import gateway as scripted
 
-from tvgw import cli, config, db, forget, ingest, inpath, queries, verify
+from tvgw import cli, config, db, forget, ingest, inpath, mintshadow, queries, verify
 
 APPLY = (ROOT / "deploy" / "nftables" / "tvgw-apply").read_text(encoding="utf-8")
 INSTALL = (ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
@@ -421,7 +421,8 @@ def test_the_names_the_store_and_the_script_share():
     assert queries.INPATH_RULE == inpath.RULE_PREFIX
     assert not inpath.MISS_RULE.startswith(queries.GATE_RULE) and queries.GATE_RULE not in inpath.MISS_RULE
     comments = set(re.findall(r'comment "(in-path: [^"]+)"', APPLY))
-    assert comments == {inpath.MISS_RULE, *inpath.OFFERED_RULES}
+    # (mint) and the minted-address shadow's copies, which the filler reads (design decision 96)
+    assert comments == {inpath.MISS_RULE, *inpath.OFFERED_RULES, mintshadow.COPY_RULE}
     for _key, fields, rule in inpath.SERIES:
         assert rule.startswith(inpath.RULE_PREFIX) and rule not in comments
         assert set(fields) <= set(asdict(inpath.Stats()))
@@ -433,6 +434,8 @@ def test_the_names_the_store_and_the_script_share():
 
 BLOCK = re.compile(r"# ---- \(inpath\) begin.*?# ---- \(inpath\) end ----\n", re.S)
 APPLIED_LINE = re.compile(r"^printf '%s=%s\\n' DNSGATE_FILL .*\n", re.M)
+MINT_BLOCK = re.compile(r"# ---- \(mint\) begin.*?# ---- \(mint\) end ----\n", re.S)  # (mint)
+MINT_LINE = re.compile(r"^printf '%s=%s\\n' MINT .*\n", re.M)
 needs_bash = pytest.mark.skipif(shutil.which("bash") is None, reason="tvgw-apply is a bash script")
 
 
@@ -530,8 +533,10 @@ def test_passive_is_byte_for_byte_the_script_without_the_blocks(tmp_path, monkey
     """DNSGATE_FILL=passive, said or not: every script handed to nft, and every other nft call but
     inpath_quiet's, is what the script with the three (inpath) blocks and the settings line cut out
     hands it. The stub says an earlier inpath apply left its switch, so everything of it is deleted, by
-    plain commands, in order, before the first load."""
+    plain commands, in order, before the first load. (mint) The minted-address shadow's blocks, which
+    need the in-path filler, are cut too: off, they are the script without them (test_mintshadow.py)."""
     cut = APPLIED_LINE.sub("", BLOCK.sub("", APPLY))
+    cut = MINT_LINE.sub("", MINT_BLOCK.sub("", cut))
     assert "inpath" not in cut and "DNSGATE_FILL" not in cut
     for n, conf in enumerate(
         (CONF, CONF + "DNSGATE_FILL=passive\n", CONF + "UPLINK=vpn\nCAPTURE_MODE=headers\n")
@@ -548,7 +553,8 @@ def test_passive_is_byte_for_byte_the_script_without_the_blocks(tmp_path, monkey
         assert calls[at : at + len(left_over)] == left_over and at < calls.index("-f -")
         assert calls[:at] + calls[at + len(left_over) :] == nft_calls(before)
         used = (now / "run" / "tvgw" / "settings.applied").read_text(encoding="utf-8")
-        assert used == (before / "run" / "tvgw" / "settings.applied").read_text() + "DNSGATE_FILL=passive\n"
+        old = (before / "run" / "tvgw" / "settings.applied").read_text()
+        assert used == old + "DNSGATE_FILL=passive\nMINT=off\n"
 
 
 @needs_bash

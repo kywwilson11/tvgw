@@ -405,6 +405,23 @@ inpath_drain() {
 	return 0
 }
 # ---- (inpath) end ----
+# ---- (mint) begin: MINT, checked before anything is loaded (design decision 96) ----
+# off, the default and what a conf without the key means: no table, as before the key existed. shadow:
+# the mint table below copies the first packet of each new connection the TV makes to NFLOG group
+# MINT_GROUP, where the in-path filler's minting table counts it by what a strict stage would do with
+# it. The table lives in the filler, so the copies are made only where it runs. Nothing is refused.
+: "${MINT:=off}"
+case "$MINT" in
+	off | shadow) ;;
+	*) echo "tvgw: MINT must be off or shadow" >&2; exit 1 ;;
+esac
+MINT_GROUP=9 # the NFLOG group the in-path filler binds for the shadow; mintshadow.GROUP in src/tvgw/mintshadow.py
+MINT_USED=$MINT
+if [ "$MINT" = shadow ] && { [ "$DNSGATE" != count ] || [ "$DNSGATE_FILL" != inpath ]; }; then
+	MINT_USED=off
+	echo "tvgw: MINT=shadow needs DNSGATE=count and DNSGATE_FILL=inpath (the in-path filler keeps its table); nothing is copied for it" >&2
+fi
+# ---- (mint) end ----
 # ---- (namebound) begin: NAME_BINDING, checked before anything is loaded (design decision 70) ----
 # off, the default and what a conf without the key means: no table, as before the key existed. count:
 # the names table below copies the TV's DNS answers and the first packets of its TLS connections to
@@ -1728,6 +1745,34 @@ elif [ "$(sed -n 's/^NAME_BINDING=//p' "$APPLIED" 2>/dev/null | head -n 1 || tru
 	nft delete table inet tvgw_names 2>/dev/null || true
 fi
 # ---- (namebound) end ----
+# ---- (mint) begin: the minted-address shadow's copies, MINT=shadow (design decision 96) ----
+# Copies, never verdicts, as the names table's: `log group` hands the kernel's copy of a packet to NFLOG
+# group MINT_GROUP and the packet goes on at once, whoever reads the group, or nobody. Its own table of
+# one base chain with policy accept and no verdict, so it can never drop, accept or redirect a packet,
+# and a failure to load it leaves the TV online and only warns. The chain hooks forward after every
+# chain that can refuse (the names table's hellos at filter + 25 among them), so it sees only what the
+# filter let through: the first packet of each new connection from the TV's side (a retried opening is
+# new to conntrack too; the filler counts it once). MINT_SNAPLEN covers an IPv4 header with options and
+# the two ports. Made anew at every apply, and loaded before the in-path block for the names table's
+# reason: its `delete table` removes a hook.
+MINT_SNAPLEN=64
+if [ "$MINT_USED" = shadow ]; then
+	modprobe -a nfnetlink_log nft_log 2>/dev/null || true # both load on demand too; this says so early
+	nft -f - <<EOF || echo "tvgw: mint table not loaded; the minted-address shadow counts no connection" >&2
+table inet tvgw_mint
+delete table inet tvgw_mint
+table inet tvgw_mint {
+	chain news {
+		type filter hook forward priority filter + 26; policy accept;
+		iifname "$TV_IF" ip saddr $TV_NET ct state new counter log group $MINT_GROUP snaplen $MINT_SNAPLEN queue-threshold 1 comment "in-path: new TV connections copied to the minting table"
+	}
+}
+EOF
+elif [ "$(sed -n 's/^MINT=//p' "$APPLIED" 2>/dev/null | head -n 1 || true)" = shadow ]; then
+	# only where the last apply was asked for it, as for the names table
+	nft delete table inet tvgw_mint 2>/dev/null || true
+fi
+# ---- (mint) end ----
 # ---- (inpath) begin: the gate's set filled in the path of the answer, DNSGATE_FILL=inpath (design decision 64) ----
 # A second set, resolved4_inpath, filled by tvgw-dnsgate-inpath before each DNS answer leaves for the TV,
 # and a second count beside the gate's own, so the two fillers can be compared. In the gate's table, in
@@ -1828,6 +1873,7 @@ printf '%s=%s\n' NAME_BINDING "$NAME_BINDING" >>"$APPLIED" # (namebound) a line 
 printf '%s=%s\n' CLOCK_PORT "$CLOCK_PORT" CLOCK_PORT_PROFILE "$CLOCK_PROFILE" CLOCK_PORT_USED "$CLOCK_USED" >>"$APPLIED"
 printf '%s=%s\n' LIVE_READING "$LIVE_READING" ATTENTION_WALL "$ATTENTION_WALL" >>"$APPLIED" # (attention) as the conf says them
 printf '%s=%s\n' DNSGATE_FILL "$DNSGATE_FILL" >>"$APPLIED" # (inpath) a line of its own, after the others
+printf '%s=%s\n' MINT "$MINT" >>"$APPLIED" # (mint) as the conf says it, a line of its own
 # (revert) what this apply was made of, for the next confirmed apply to say what it changes; root's alone
 (umask 077; printf '%s\n' "$INPUTS" >/run/tvgw/inputs.applied.tmp && mv -f /run/tvgw/inputs.applied.tmp /run/tvgw/inputs.applied) || true
 # (uplink) the router WAN_IF's own route named, kept for an apply that runs while that route is gone

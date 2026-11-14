@@ -593,6 +593,7 @@ COUNTING = {
     "DNSGATE": "count",
     "DNSGATE_FILL": "inpath",
     "NAME_BINDING": "count",
+    "MINT": "shadow",  # (mint)
     "LIVE_READING": "on",
     "CAPTURE_MODE": "headers",
 }
@@ -600,6 +601,7 @@ SILENT = {
     "DNSGATE": "off",
     "DNSGATE_FILL": "passive",
     "NAME_BINDING": "off",
+    "MINT": "off",  # (mint)
     "LIVE_READING": "off",
     "CAPTURE_MODE": "full",
 }
@@ -630,7 +632,7 @@ def test_a_switch_keeps_its_promise(relation):
 
 
 def test_every_counter_switched_on_at_once_behind_every_wall_still_changes_no_packets_end():
-    """The same promise where it is hardest to keep: all five counting values together, on a gateway with
+    """The same promise where it is hardest to keep: all six counting values together, on a gateway with
     the tunnel, the walls and the probe."""
     (off, _), (on, site) = (gateway(*sorted({**WALLS, **values}.items())) for values in (SILENT, COUNTING))
     assert differing(off, on, site, {}, fwpolicy.same_end)[:10] == []

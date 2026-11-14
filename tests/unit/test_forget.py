@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from conftest import DNS_BLOCKED, FLOW_TCP, NOW, ROOT, fake_extract, fake_oddport
 
-from tvgw import backup, cli, config, db, forget, ingest, pcaps, ports, queries
+from tvgw import backup, cli, config, db, forget, ingest, mintshadow, pcaps, ports, queries
 
 CANARY = "zz-forget-canary-7f3a.example"
 FORMS = [CANARY.encode(), b"\x15zz-forget-canary-7f3a\x07example", CANARY.upper().encode()]
@@ -281,6 +281,22 @@ def test_a_new_row_after_the_forget_is_kept_and_one_begun_before_it_is_not(tree,
     )
     conn = db.connect(tree.db_path, readonly=True)
     assert conn.execute("SELECT t_end FROM flows").fetchall() == [(NOW + 1000,)]
+
+
+def test_a_running_filler_is_asked_to_empty_the_minted_address_shadow(tree, monkeypatch, tmp_path):
+    """(mint) The shadow's table holds the last day's names and addresses in the in-path filler's memory
+    (design decision 96): where the filler runs, forget leaves the stamp that has it empty that memory;
+    where it does not, there is no memory and nothing to say."""
+    stamp = tmp_path / "filler" / "mint-forget"
+    monkeypatch.setattr(mintshadow, "FORGET", str(stamp))
+
+    def shadow(r):
+        return [step.action for step in r.steps if step.what == forget.SHADOW_WHAT]
+
+    assert shadow(forget.run(tree, dry_run=True, live=live(tree))) == []
+    stamp.parent.mkdir()
+    assert shadow(forget.run(tree, dry_run=True, live=live(tree))) == ["empty"] and not stamp.exists()
+    assert shadow(forget.run(tree, live=live(tree), lock=False)) == ["empty"] and stamp.exists()
 
 
 def test_an_unknown_file_is_kept_and_reported(tree):

@@ -151,6 +151,7 @@ CHECK_SWITCHES = (
     "TV_PROBE",
     "NAME_BINDING",
     "LIVE_READING",
+    "MINT",  # (mint) design decision 96: copies only, with the in-path block
 )
 CONF_FIXED = {
     "WAN_IF": WAN_IF,

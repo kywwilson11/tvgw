@@ -6,6 +6,12 @@
 
 ### Status
 
+### One address per name, as a shadow: a live count of what a strict stage would refuse (2026-11-14)
+
+- **What changed.** `tvgw mint replay` asks your record what the TV would have been refused if it were handed a made-up address for each name. With the new setting `MINT=shadow`, the gateway asks the same question as the TV's traffic passes: the part that already holds each of the TV's lookup answers keeps the table of made-up addresses, and each new connection the TV makes is counted by what a strict stage would do with it ([design decision 96](docs/design-decisions.md#96-one-address-per-name-as-a-shadow-the-in-path-filler-keeps-the-minting-table-from-the-answers-it-holds-and-counts-what-a-strict-stage-would-refuse-as-connections-happen)).
+- **What you see.** Nothing changes for the TV: it is handed the real addresses, and nothing is refused or held for the count. `MINT` is `off` unless you set it, and it needs `DNSGATE_FILL=inpath`. With it on, `tvgw status` shows a counting line with the date its two weeks end, `tvgw verify` has a check, `mint_shadow`, that warns at most, and `tvgw forget` empties what the count remembers.
+- For developers: `tvgw.mintshadow`; `inpath.read_packet(..., named=True)` and `Parsed.named`; `mintreplay.class_of` (was `_class`); `inet tvgw_mint` copies to NFLOG group 9.
+
 ## 0.5.0 (2026-11-14)
 
 ### Highlights

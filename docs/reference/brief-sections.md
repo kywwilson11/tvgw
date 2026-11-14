@@ -318,7 +318,7 @@ When any. `Private reverse lookups (LAN inventory): N for D names`: PTR lookups 
 
 ### Counting
 
-(counting) Once a count-only mechanism counts or has counted (`cli.render_counting()`), so a store where none ever did prints nothing here: `Counting (each refuses nothing; whether a wall refuses after two clean weeks is the owner's decision):`, then one line for each mechanism in `counting.MECHANISMS` (src/tvgw/counting.py), in its order: the NTP count, the upload budget, the in-path filler, the probe from the TV's position, the live reading ([design decision 72](../design-decisions.md#72-did-it-work-a-failed-app-start-is-read-from-the-tvs-own-account-and-joined-with-what-was-refused-in-its-minutes-a-wall-on-probation-asks-one-question-what-is-counting-since-when-and-when-its-two-weeks-end)). Each line is one of:
+(counting) Once a count-only mechanism counts or has counted (`cli.render_counting()`), so a store where none ever did prints nothing here: `Counting (each refuses nothing; whether a wall refuses after two clean weeks is the owner's decision):`, then one line for each mechanism in `counting.MECHANISMS` (src/tvgw/counting.py), in its order: the NTP count, the upload budget, the in-path filler, (mint) the minted-address shadow, the probe from the TV's position, the live reading ([design decision 72](../design-decisions.md#72-did-it-work-a-failed-app-start-is-read-from-the-tvs-own-account-and-joined-with-what-was-refused-in-its-minutes-a-wall-on-probation-asks-one-question-what-is-counting-since-when-and-when-its-two-weeks-end)). Each line is one of:
 
 | State | The line ends |
 |---|---|

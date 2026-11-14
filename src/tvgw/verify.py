@@ -38,6 +38,7 @@ from tvgw import (
     lgkeys,
     lgwebos,
     listpause,
+    mintshadow,
     nametap,
     queries,
     scrub,
@@ -72,6 +73,7 @@ APPLY_KEYS = (
     "PROFILE",  # (profile) the port wall is LG's, so it follows the profile (design decision 62)
     "WAN_GW_MODE",  # (uplink) how tvgw-apply finds the router; absent is literal
     "DNSGATE_FILL",  # (inpath) whether the in-path filler's rules are loaded; absent is passive
+    "MINT",  # (mint) whether the minted-address shadow's table is loaded; absent is off
     "NAME_BINDING",  # (namebound) whether the live name count's table is loaded; absent is off
     *("TV_PROBE", "TV_PROBE_IP"),  # (probe) the probe's rules stand only while it is on, for its address
     "CLOCK_PORT",  # (ports) the clock port's rule follows it; absent is profile (design decision 71)
@@ -749,6 +751,10 @@ def _check(
     #      whether its table is loaded, its group held and its status fresh. A WARN at most
     names, names_series = names_check(s, run, read, r.t)
     r.checks.append(names)
+    # 7c3. (mint) the minted-address shadow (design decision 96): OK when MINT=off; with shadow, whether
+    #      its table is loaded, its group held and its section of the filler's status fresh. A WARN at most
+    shadow, mint_series = mint_check(s, run, read, r.t)
+    r.checks.append(shadow)
     # 7c3. (attention) the attention count (design decision 69): OK when it is not in use here; where the
     #      live reading runs, whether its table is loaded and its holder runs. A WARN at most
     r.checks.append(attention_check(s, run, read, r.t))
@@ -824,6 +830,7 @@ def _check(
     r.counters += counters_from_table(ntp) + ntp_counters(ntp)
     r.counters += fill_series  # (inpath) the filler's own counts, when it is bound and its status fresh
     r.counters += names_series  # (namebound) the live count's own counts, likewise
+    r.counters += mint_series  # (mint) the shadow's, likewise
     pair = [(mtime(path), read(path)) for path in RELOADS]
     (t0, before), (t1, after) = pair
     if t0 is not None and t1 is not None and t1 > t0 and before.strip() and after.strip():
@@ -1503,6 +1510,58 @@ def names_check(
     return Check("names_tap", True, detail), series
 
 
+MINT_TABLE = ("inet", "tvgw_mint")  # (mint) the minted-address shadow's copies, as tvgw-apply loads them
+
+
+def mint_check(
+    s: Settings, run: Runner, read: Callable[[str], str], now: float
+) -> tuple[Check, list[tuple[str, int, int]]]:
+    """(mint) The minted-address shadow (design decision 96), and its counts for the store.
+
+    OK, saying so, when MINT=off. With shadow: the in-path filler that keeps its table runs (the settings
+    ask for it), the mint table's rule is loaded, a process holds its NFLOG group, and the filler's status,
+    written within the last minute, has the shadow's section, reading. Nothing here can be an outage: the
+    shadow reads each answer after its verdict and the table only copies, so every finding is a WARN. The
+    detail names no count; the second value is the section's counts as fw_counters series, empty unless
+    the status is fresh, so a stale file never repeats an old count as a new snapshot."""
+    name = "mint_shadow"
+    if getattr(s, "mint", "off") != "shadow":
+        return Check(name, True, "not in use (MINT=off): tvgw mint replay reads the store alone"), []
+    if not inpath.wanted(s):
+        detail = "MINT=shadow needs DNSGATE=count and DNSGATE_FILL=inpath: no filler keeps its table"
+        return Check(name, *held(name, WARN, detail)), []
+    if mintshadow.COPY_RULE not in run(["nft", "list", "table", *MINT_TABLE]):
+        detail = "missing: the copying rule; no connection is counted (sudo tvgw-apply)"
+        return Check(name, *held(name, WARN, detail)), []
+    if mintshadow.GROUP not in log_groups(read(PROC_LOG)):
+        detail = (
+            f"no process holds NFLOG group {mintshadow.GROUP}: the kernel throws the copies away and no"
+            f" connection is counted (systemctl status {INPATH_UNIT})"
+        )
+        return Check(name, *held(name, WARN, detail)), []
+    doc = _json(read(inpath.STATUS))
+    section = doc.get("mint") if isinstance(doc, dict) else None
+    written = _number(doc.get("t")) if isinstance(doc, dict) else None
+    if not isinstance(section, dict) or written is None or not 0 <= now - written <= inpath.STATUS_STALE:
+        age = "missing" if written is None else f"{_ago(max(now - written, 0))} old"
+        detail = f"the filler's status file is {age}, or has no shadow (journalctl -u {INPATH_UNIT} -n 20)"
+        return Check(name, *held(name, WARN, detail)), []
+
+    def n(part: str, key: str) -> int:
+        counts = section.get(part)
+        return int(_number(counts.get(key)) or 0) if isinstance(counts, dict) else 0
+
+    series = [(rule, n(part, key), 0) for part, key, rule in mintshadow.SERIES]
+    if not section.get("reading"):
+        detail = f"its copies' socket failed and it reads no connection (systemctl restart {INPATH_UNIT})"
+        return Check(name, *held(name, WARN, detail)), series
+    detail = (
+        f"counting, its memory from {_ago(max(now - (_number(section.get('since')) or now), 0))} ago; its"
+        f" counts are in the store (tvgw verify --record) and in {inpath.STATUS}"
+    )
+    return Check(name, True, detail), series
+
+
 # (attention) what tvgw-apply's attention block loads into inet tvgw_attn, as the listing prints it
 ATTENTION_NEEDLES = (
     (f"set {attention.PLATFORM_SET}", "the essentials' set"),
@@ -1636,6 +1695,7 @@ FAIL_AFTER: dict[str, str] = {
     # (reliability) something leans on legacy iptables: a risk at the next kernel, not an outage now
     "iptables_legacy": WARN,
     "names_tap": WARN,  # (namebound) never more: the live name count copies and holds nothing
+    "mint_shadow": WARN,  # (mint) never more: the shadow reads after the verdict and refuses nothing
     "web": FAIL,  # (web) the page listens on every address, GW_IP or TV_NET; every other finding is a WARN
     "attention": WARN,  # (attention) never more: the attention count refuses nothing (design decision 69)
     "updates": WARN,  # (updates) never more (design decision 77): an update that waits is not an outage
@@ -2824,6 +2884,14 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Run sudo tvgw-apply, then sudo systemctl restart tvgw-names. "
         "If the warning stays, see why with journalctl -u tvgw-names -n 20.",
     ),
+    "mint_shadow": (
+        "The gateway's count of the connections a stage that hands the TV made-up addresses would refuse "
+        "is switched on in the settings but is not working.",
+        "Nothing on the TV: the count changes no answer and stops no connection. "
+        "sudo tvgw mint replay still answers the same question from the gateway's record.",
+        "Check that DNSGATE_FILL=inpath is set, run sudo tvgw-apply, then sudo systemctl restart "
+        "tvgw-dnsgate-inpath. If the warning stays, see why with journalctl -u tvgw-dnsgate-inpath -n 20.",
+    ),
     "attention": (
         "The gateway's count of what the TV reaches while its screen saver is on, or an input is in front, "
         "is switched on in the settings but is not working.",
@@ -3051,6 +3119,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "dnsgate",
         "dnsgate_inpath",  # (inpath)
         "names_tap",  # (namebound)
+        "mint_shadow",  # (mint)
     ),
     "recording what the TV does": ("capture", "flowlog_events", "attention"),  # (attention)
     "every service is running": (

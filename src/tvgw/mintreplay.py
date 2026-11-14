@@ -118,12 +118,13 @@ def _unseen(conn: sqlite3.Connection, a: float, b: float) -> Iterator[tuple]:
     )
 
 
-def _class(
+def class_of(
     names: tuple[str, ...], is_listed: bool, assessed: bool, age: float | None, lifetime: float
 ) -> str:
     """A judged connection's class, from the names with a live ticket for its address, whether the
     profile lists it, whether the record reaches back a lifetime, and the age of the newest answer that
-    named the address (None when none did)."""
+    named the address (None when none did). (mint) The live shadow judges with it too
+    (`tvgw.mintshadow`), so the replay and the shadow put a connection in the same class."""
     if names:
         return TICKET if len(names) == 1 else TICKETS
     if is_listed:
@@ -179,7 +180,7 @@ def replay(
             ttl_known += 1
             past_ttl += age > ttl + PAST_TTL
         for lifetime, table, counts, cases in zip(lifetimes, tables, classes, refused, strict=True):
-            cls = _class(
+            cls = class_of(
                 table.names_of(real, at), (dst, dport) in exempt, at - lifetime >= since, age, lifetime
             )
             counts[cls] += 1

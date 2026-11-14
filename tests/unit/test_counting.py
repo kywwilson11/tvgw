@@ -447,6 +447,7 @@ def test_the_file_holds_keys_states_and_dates_only_and_status_reads_it(conn, lg,
         "ntp reached 2026-11-07 2026-11-21",
         "budget waiting - -",
         "inpath off - -",
+        "mint off - -",
         "probe off - -",
         "live counting 2026-11-17 2026-12-01",
     ]

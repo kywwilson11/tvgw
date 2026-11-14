@@ -38,6 +38,9 @@ class Settings:
     # (inpath) how the gate's set is filled: passive (tvgw-dnsgate alone, from a capture) | inpath (also
     # tvgw-dnsgate-inpath, which holds each answer until its addresses are in a second set; decision 64)
     dnsgate_fill: str = "passive"
+    # (mint) off | shadow: the in-path filler keeps the minting table from the answers it holds, and counts
+    # each new connection of the TV's by what a strict stage would do with it; changes nothing (decision 96)
+    mint: str = "off"
     # (namebound) off | count: tvgw-apply copies the TV's DNS answers and the first packets of its TLS
     # connections to tvgw-names, which counts each connection's name against the answers (decision 70)
     name_binding: str = "off"
@@ -227,6 +230,7 @@ CONF_KEYS = {
     "STRICT_PORTS": "strict_ports",
     "DNSGATE": "dnsgate",
     "DNSGATE_FILL": "dnsgate_fill",  # (inpath)
+    "MINT": "mint",  # (mint)
     "NAME_BINDING": "name_binding",  # (namebound)
     "CAPTURE_MODE": "capture_mode",  # (capture)
     "CO_TENANT_UNITS": "co_tenant_units",  # (guard)
@@ -313,6 +317,7 @@ CHOICES = {
     "STRICT_PORTS": ("yes", "no"),
     "DNSGATE": ("off", "count"),
     "DNSGATE_FILL": ("passive", "inpath"),  # (inpath) the default first; read with DNSGATE=count only
+    "MINT": ("off", "shadow"),  # (mint) the default first; read with DNSGATE_FILL=inpath only
     "NAME_BINDING": ("off", "count"),  # (namebound) the default first; tvgw-apply and tvgw-names read it
     "CAPTURE_MODE": ("full", "headers"),  # (capture) tvgw-apply and both capture units read it
     "ADTECH_PORT_WALL": ("yes", "no"),  # (acr)

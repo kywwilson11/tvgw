@@ -74,6 +74,7 @@ from dataclasses import asdict, dataclass
 from tvgw import dnsmsg, nfnl
 from tvgw.config import Settings
 from tvgw.dnsgate import TTL  # a day, as the passive feeder's set
+from tvgw.names import normalize
 
 # (attention) the TV's essentials, for the attention count's platform set (design decision 69): an answer
 # to a name the profile counts among them has its addresses added there too, before the answer leaves.
@@ -197,13 +198,18 @@ class Parsed:
     kind: str
     addrs: tuple[bytes, ...] = ()
     essential: tuple[bytes, ...] = ()  # (attention) of `addrs`, those answered for one of the TV's essentials
+    # (mint) with `named`: each of `addrs` with the name its message's question asks for, (name, address)
+    # in order, each pair once; the minting table's input. Read only when asked, after the verdict
+    named: tuple[tuple[str, bytes], ...] = ()
 
 
-def read_message(msg: bytes, essential: Callable[[str], bool] | None = None) -> Parsed | None:
+def read_message(
+    msg: bytes, essential: Callable[[str], bool] | None = None, named: bool = False
+) -> Parsed | None:
     """One DNS message's admissible A addresses; None when it cannot be read. A message without the
     response bit is OTHER, one with the truncation bit TRUNCATED: neither is read further. (attention)
     With `essential`, a test of the name the question asks for, the addresses of an answer to one of the
-    TV's essentials are also in `essential`."""
+    TV's essentials are also in `essential`. (mint) With `named`, each address with that name too."""
     if len(msg) < 12 or len(msg) > MAX_DNS:
         return None
     if not msg[2] & 0x80:
@@ -215,9 +221,18 @@ def read_message(msg: bytes, essential: Callable[[str], bool] | None = None) -> 
     except dnsmsg.DnsFormatError:
         return None
     addrs = tuple(dict.fromkeys(a for a in found if admissible(a)))
+    pairs = _named(msg, addrs) if named else ()
     if addrs and essential is not None and _essential(essential, dnsmsg.qname(msg)):
-        return Parsed(ANSWER, addrs, addrs)
-    return Parsed(ANSWER, addrs)
+        return Parsed(ANSWER, addrs, addrs, pairs)
+    return Parsed(ANSWER, addrs, named=pairs)
+
+
+def _named(msg: bytes, addrs: tuple[bytes, ...]) -> tuple[tuple[str, bytes], ...]:
+    """(mint) Each address with the name the message's question asks for, normalized as the store keeps
+    names: what the TV looked up, and so what it will connect to. None of them for a message whose
+    question does not read."""
+    name = normalize(dnsmsg.qname(msg) or "")
+    return tuple((name, a) for a in addrs) if name else ()
 
 
 def _essential(test: Callable[[str], bool], name: str | None) -> bool:
@@ -232,11 +247,14 @@ def _essential(test: Callable[[str], bool], name: str | None) -> bool:
 
 
 def read_packet(
-    packet: bytes | None, whole: bool = True, essential: Callable[[str], bool] | None = None
+    packet: bytes | None,
+    whole: bool = True,
+    essential: Callable[[str], bool] | None = None,
+    named: bool = False,
 ) -> Parsed:
     """Classify an IPv4 packet as the queue handed it over (from the IP header on). Never raises on any
     bytes: a length that does not fit is UNPARSED or OTHER, never an exception. (attention) `essential`
-    as for `read_message`."""
+    and (mint) `named` as for `read_message`."""
     if not packet or len(packet) < 20 or packet[0] >> 4 != 4:
         return Parsed(OTHER)
     ihl = (packet[0] & 0x0F) * 4
@@ -250,7 +268,7 @@ def read_packet(
     if proto == 17:
         if total < ihl + 8:
             return unparsed
-        return read_message(packet[ihl + 8 : total], essential) or unparsed
+        return read_message(packet[ihl + 8 : total], essential, named) or unparsed
     if total < ihl + 20:
         return unparsed
     doff = (packet[ihl + 12] >> 4) * 4
@@ -263,6 +281,7 @@ def read_packet(
     # whole messages is read; a part of a longer answer passes unread
     addrs: list[bytes] = []
     essentials: list[bytes] = []
+    pairs: list[tuple[str, bytes]] = []  # (mint)
     kinds: set[str] = set()
     off = n = 0
     while off < len(data):
@@ -272,16 +291,19 @@ def read_packet(
         (length,) = struct.unpack_from(">H", data, off)
         if length == 0 or off + 2 + length > len(data):
             return unparsed
-        one = read_message(data[off + 2 : off + 2 + length], essential)
+        one = read_message(data[off + 2 : off + 2 + length], essential, named)
         if one is None:
             return unparsed
         kinds.add(one.kind)
         addrs += one.addrs
         essentials += one.essential
+        pairs += one.named
         off += 2 + length
     if ANSWER not in kinds:
         return Parsed(OTHER)  # over TCP a truncation bit or a query is nothing this filler acts on
-    return Parsed(ANSWER, tuple(dict.fromkeys(addrs)), tuple(dict.fromkeys(essentials)))
+    return Parsed(
+        ANSWER, tuple(dict.fromkeys(addrs)), tuple(dict.fromkeys(essentials)), tuple(dict.fromkeys(pairs))
+    )
 
 
 # --- what the filler remembers and counts ------------------------------------------------------------
@@ -446,6 +468,7 @@ class Filler:
         log: Callable[[str], None] = lambda line: print(line, file=sys.stderr, flush=True),
         hold_bound: float = HOLD_BOUND,
         essential: Callable[[str], bool] | None = None,
+        shadow=None,
     ):
         self._release, self.adder, self.clock, self._log = release, adder, clock, log
         self.hold_bound = hold_bound
@@ -460,6 +483,9 @@ class Filler:
         self.holds: list[float] = []  # the last HOLD_SAMPLES hold times, seconds
         self.essential_holds: list[float] = []  # (attention) the same, of holds that added essentials
         self.set_missing = False  # the last add found no table or no set
+        # (mint) the minted-address shadow (design decision 96), None unless MINT=shadow: handed each
+        # answer once its verdict is given, so it can neither keep an answer nor make one wait
+        self.shadow = shadow
         self._last_id = 0
         self._logged: dict[str, float] = {}
 
@@ -487,6 +513,8 @@ class Filler:
             self.say("error", f"internal error, the answer was released: {type(e).__name__}: {e}")
         finally:
             release()
+        if self.shadow is not None:  # (mint) after the verdict; the shadow never raises
+            self.shadow.answer(packet.payload, packet.whole)
 
     def _decide(self, packet: nfnl.Packet, t0: float, release: Callable[[], None]) -> None:
         st = self.stats
@@ -495,6 +523,8 @@ class Filler:
             # ids are consecutive per queue; the kernel takes one before it finds the socket's buffer
             # full and accepts the packet itself, so a gap is what it passed without this process
             st.kernel_passed += packet.id - self._last_id - 1
+            if self.shadow is not None and packet.id - self._last_id > 1:
+                self.shadow.missed()  # (mint) what the kernel passed, the shadow never saw
             self._last_id = packet.id
         now = self.clock()
         test = self.essential if now >= self.essential_off_until else None
@@ -869,6 +899,7 @@ class Loop:
         self.started = wall()
         self._next = {"ping": 0.0, "live": 0.0, "status": 0.0}
         self._refused: list[tuple[float, int]] = []  # (wall time, verdict_errors then), for dropped_1h
+        self._present_at: float | None = None  # (mint) wall time the live port was last found in place
 
     def dropped_1h(self, now: float) -> int:
         """Verdicts the kernel refused in the last DROPS_WINDOW, from the samples the status ticks keep."""
@@ -918,6 +949,10 @@ class Loop:
             self._next["status"] = now + STATUS_EVERY
             wall = self.wall()
             doc = status(self.filler, self.qsock.queue, self.live, self.started, wall, self.dropped_1h(wall))
+            shadow = self.filler.shadow
+            if shadow is not None:  # (mint) a forget asked for, then the shadow's counts
+                shadow.tick()
+                doc["mint"] = shadow.status()
             self._publish(doc)
 
     def assert_live(self) -> None:
@@ -934,6 +969,12 @@ class Loop:
             self._next["status"] = 0.0  # the status says so at once, not ten seconds later
         if err != errno.EEXIST:
             self.filler.known.clear()
+        shadow = self.filler.shadow
+        if shadow is not None:
+            # (mint) the port not in place: the answers since it was last seen passed the queue unseen
+            if err != errno.EEXIST:
+                shadow.missed(self._present_at)
+            self._present_at = self.wall() if self.live else None
         if self.live and not was:
             self.filler.set_missing = False
             self.filler._log(f"tvgw dnsgate-inpath: holding the TV's DNS answers (queue {self.qsock.queue})")
@@ -969,9 +1010,12 @@ class Loop:
             self.tick()
             if not self.adder_alive():
                 raise RuntimeError("the adder thread ended")
-            data = self.qsock.recv(PING_EVERY, wake)
+            shadow = self.filler.shadow
+            data = self.qsock.recv(PING_EVERY, wake if shadow is None else (*wake, *shadow.fds()))
             if data is not None:
                 self.deliver(data, self.clock())
+            if shadow is not None:  # (mint) the connections' copies, after the answer that waited
+                shadow.poll()
 
     def drain(self, wait: float = 0.25) -> None:
         """Stop without losing an answer: stop matching, stop queueing, release what waits. The first
@@ -1055,8 +1099,13 @@ def main(s: Settings, queue_num: int = QUEUE, status_path: str = STATUS, profile
         from tvgw import attention
 
         essential = attention.platform_check(profile) if attention.wanted(s) else None
+    # (mint) the minted-address shadow, where MINT=shadow asks for it (design decision 96): None when its
+    # copies' group cannot be bound, and the filler holds the answers as before
+    from tvgw import mintshadow
+
+    shadow = mintshadow.start(s, profile)
     adder = Adder(nft.add, add_essential=nft.add_essential)
-    filler = Filler(lambda packet_id: loop.release(packet_id), adder, essential=essential)
+    filler = Filler(lambda packet_id: loop.release(packet_id), adder, essential=essential, shadow=shadow)
     loop = Loop(
         qsock,
         filler,
@@ -1079,6 +1128,8 @@ def main(s: Settings, queue_num: int = QUEUE, status_path: str = STATUS, profile
         notify("STOPPING=1")
         loop.drain()
         qsock.close()
+        if shadow is not None:
+            shadow.close()
     st = filler.stats
     print(
         f"tvgw dnsgate-inpath: stopped after {st.received} packets ({st.held} held, {st.late} late,"

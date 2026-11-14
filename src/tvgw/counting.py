@@ -2,10 +2,10 @@
 and the earliest day its two weeks end (design decision 72).
 
 A new wall counts for two weeks before it may refuse anything (design decision 17's two clean weeks, the
-rule decision 20 and research pass 4 kept), and whether it then refuses is the owner's decision. Five
+rule decision 20 and research pass 4 kept), and whether it then refuses is the owner's decision. Six
 mechanisms count today (`MECHANISMS`): the clock servers the TV asks (the NTP count), the upload budget,
-the address gate's in-path filler, the probe from the TV's position, and the live reading of the app in
-front. A later one adds one `Mechanism` to the tuple.
+the address gate's in-path filler, (mint) the minted-address shadow, the probe from the TV's position, and
+the live reading of the app in front. A later one adds one `Mechanism` to the tuple.
 
 **The runs.** A mechanism's two weeks are one run without a break. Every 10 minutes `tvgw verify
 --record` looks at what its own run shows of each (`observe()`: the counters it stored, the probe's
@@ -23,10 +23,10 @@ whose times say when the TV was watched, so its run starts at the first `verify 
 NTP count is clean with no request in them and the upload budget with no hour over its ceiling, each only
 when the TV was on for MIN_ON_HOURS of them (a TV left off for two weeks asks nothing and uploads nothing),
 and the probe with no failed test, no apply it would have undone and a passing test on every day (a run
-that could not judge is no evidence either way). The in-path count's misses and the live
-reading's bar are the owner's to judge: each miss needs a cause, and decision 67's bar is what `tvgw
-receipt --replay` reports. Those two say they have counted two weeks and where the numbers are, never that
-they are clean.
+that could not judge is no evidence either way). The in-path count's misses, (mint) the shadow's
+refusals and the live reading's bar are the owner's to judge: each miss and refusal needs a cause, and
+decision 67's bar is what `tvgw receipt --replay` reports. Those three say they have counted two weeks and
+where the numbers are, never that they are clean.
 
 `write_file()` leaves the runs in `counting.txt` beside `tvgw verify`'s status file, mode 644, for `tvgw
 status`, which reads no store: one line a mechanism, its key, its state and two dates, nothing else. A
@@ -180,6 +180,12 @@ def _inpath_active(o: Observation) -> bool:
     return getattr(o.s, "dnsgate_fill", "") == "inpath" and inpath.MISS_RULE in o.counters
 
 
+def _mint_active(o: Observation) -> bool:
+    from tvgw import mintshadow
+
+    return getattr(o.s, "mint", "off") == "shadow" and mintshadow.NEVER_RULE in o.counters
+
+
 def _live_active(o: Observation) -> bool:
     from tvgw import tvlive
 
@@ -311,6 +317,27 @@ def _inpath_judge(conn, since, until, profile, ceiling) -> Judgement:
     )
 
 
+def _mint_judge(conn, since, until, profile, ceiling) -> Judgement:
+    """(mint) What the shadow counted in the two weeks: the connections a strict stage would refuse, by
+    class, and those it could not assess. Each series read alone, as the in-path count's is."""
+    from tvgw import mintreplay, mintshadow, queries
+
+    gained = {
+        key: queries.series_gain(conn, rule, since, until)
+        for part, key, rule in mintshadow.SERIES
+        if part == "conns"
+    }
+    refused = sum(gained[cls] for cls in mintreplay.REFUSED)
+    conns = "1 connection" if refused == 1 else f"{refused} connections"
+    return Judgement(
+        None,
+        f"{refused} connections a strict stage would refuse ({gained[mintreplay.NEVER]} never answered,"
+        f" {gained[mintreplay.LAPSED]} lapsed, {gained[mintreplay.CROWDED]} crowded out);"
+        f" {gained[mintreplay.UNASSESSED]} not assessed",
+        f"{conns} went where a stage that hands the TV made-up addresses would refuse them",
+    )
+
+
 def _live_judge(conn, since, until, profile, ceiling) -> Judgement:
     return Judgement(
         None,
@@ -358,6 +385,18 @@ MECHANISMS: tuple[Mechanism, ...] = (
         "Whether the gateway may refuse such connections is your decision; tvgw brief --full lists them.",
     ),
     Mechanism(
+        "mint",
+        "Minted addresses, the shadow",
+        "The made-up address count",
+        "connections a stage that hands the TV made-up addresses would refuse",
+        "MINT=shadow",
+        _mint_active,
+        lambda conn, now: _series(_mint_rule())(conn, now),
+        _mint_judge,
+        "",
+        "Whether the TV may be handed made-up addresses is your decision; sudo tvgw mint replay compares.",
+    ),
+    Mechanism(
         "probe",
         "Probe from the TV's position",
         "The test from the TV's place",
@@ -395,6 +434,12 @@ def _miss_rule() -> str:
     from tvgw import inpath
 
     return inpath.MISS_RULE
+
+
+def _mint_rule() -> str:
+    from tvgw import mintshadow
+
+    return mintshadow.NEVER_RULE
 
 
 # ---- the runs ----------------------------------------------------------------------------------------------
