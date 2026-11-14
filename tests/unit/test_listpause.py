@@ -13,12 +13,14 @@ import dataclasses
 import json
 import os
 import random
+import signal
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 
 import pytest
+import yaml
 from conftest import NOW
 
 from tvgw import (
@@ -333,8 +335,9 @@ def test_with_the_upstreams_down_it_says_deferred_exits_3_and_pauses_nothing(sit
         RuntimeError("AdGuard Home rejected the planned config"),
         TypeError("not callable"),
         KeyError("filters"),
+        yaml.YAMLError("could not read the config"),
     ],
-    ids=["a refusal the apply names", "a call that does not fit", "a config of another shape"],
+    ids=["a refusal the apply names", "a call that does not fit", "a config of another shape", "a bad YAML"],
 )
 def test_a_change_adguard_refuses_puts_the_last_pause_back_and_stops_the_timer(site, lg, fault):
     """Whatever the apply could not do. The last two once left the row written and the timer set, under
@@ -358,8 +361,9 @@ class Stopped(BaseException):
 
 
 def test_a_start_interrupted_with_the_lists_already_off_keeps_its_row_and_timer_and_ends_on_time(site, lg):
-    """The apply holds signals off until the change is live, so an interrupt arrives after it. Taking
-    the row back then would leave the lists off with nothing to bring them back."""
+    """An interrupt that gets past the start's own hold (it cannot be held off from the apply's own
+    interior forever) arrives with the lists off. Taking the row back then would leave them off with
+    nothing to bring them back."""
 
     def interrupted(paused):
         site.apply(paused)
@@ -372,6 +376,68 @@ def test_a_start_interrupted_with_the_lists_already_off_keeps_its_row_and_timer_
     assert site.enabled()[PRO] is False and site.row().in_force(NOW + MIN) and site.disarmed == 0
     done = listpause.end(site.s, lg, listpause.TIMER, clock=lambda: NOW + 10 * MIN, **site.hooks())
     assert done.code == 0 and all(site.enabled().values())
+
+
+@pytest.mark.parametrize("sig", [signal.SIGINT, signal.SIGTERM, signal.SIGHUP])
+@pytest.mark.parametrize("took", [True, False], ids=["the lists go off", "the apply refuses"])
+def test_a_signal_during_a_start_arrives_after_it_has_paused_or_put_everything_back(site, lg, sig, took):
+    """Ctrl-C, a hang-up or a stop before the apply reached AdGuard's stop once raised with the lists on
+    and the row in force: a pause that had not begun, which the next apply of anything began. The signal
+    is raised in this thread from inside the apply, as the owner's would arrive."""
+    old = signal.signal(
+        sig, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt)
+    )  # the default would end the run
+
+    def signalled(paused):
+        signal.raise_signal(sig)  # to this thread, at once
+        if not took:
+            raise RuntimeError("AdGuard Home did not answer")
+        return site.apply(paused)
+
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            listpause.start(
+                site.s, lg, 10, arm_fn=site.arm, clock=lambda: NOW, **{**site.hooks(), "apply_fn": signalled}
+            )
+    finally:
+        signal.signal(sig, old)
+    assert (site.enabled()[PRO] is False) == took
+    assert (site.row() is not None) == took and site.disarmed == (0 if took else 1)
+
+
+@pytest.mark.parametrize(
+    ("live", "kept"),
+    [("off", True), ("on", False), ("unreadable", False), ("other", False)],
+    ids=["its rollback failed, lists off", "lists on", "the YAML cannot be read", "only another list off"],
+)
+def test_a_failed_start_says_the_lists_are_off_and_keeps_its_timer_only_when_they_are(site, lg, live, kept):
+    """The apply puts its backup back when it fails. When that fails too the lists stay off, and a start
+    that then said "nothing was paused", took the row back and stopped the timer left them off with
+    nothing to end the pause."""
+
+    def broken(paused):
+        if live == "off":
+            site.apply(paused)
+        elif live == "other":  # a list the pause does not touch, switched off by hand
+            cfg = site.yaml()
+            next(f for f in cfg["filters"] if f["url"] == DOH)["enabled"] = False
+            Path(site.s.adguard_yaml).write_text(adguardcfg.dump_yaml(cfg), encoding="utf-8")
+        elif live == "unreadable":
+            Path(site.s.adguard_yaml).write_text("filters: [unclosed", encoding="utf-8")
+        raise RuntimeError("restoring the backup also failed")
+
+    done = listpause.start(
+        site.s, lg, 10, arm_fn=site.arm, clock=lambda: NOW, **{**site.hooks(), "apply_fn": broken}
+    )
+    assert done.code == listpause.REFUSED and ("the shared blocklists are off" in done.lines[0]) == kept
+    assert ("nothing was paused" in done.lines[0]) != kept and site.disarmed == (0 if kept else 1)
+    if not kept:
+        assert site.row() is None
+        return
+    row = site.row()
+    assert row.overdue(NOW) and not row.in_force(NOW) and listpause.paused_urls(lg, site.s, NOW) == ()
+    assert listpause.fallback(site.s, lg, clock=lambda: NOW + MIN, **site.hooks()).code == 0
+    assert all(site.enabled().values()) and site.row().ended is not None
 
 
 def test_without_its_timer_a_pause_does_not_start(site, lg):

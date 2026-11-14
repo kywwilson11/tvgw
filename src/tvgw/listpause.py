@@ -33,6 +33,7 @@ import json
 import math
 import os
 import shutil
+import signal
 import sqlite3
 import subprocess
 import time
@@ -396,6 +397,20 @@ def refusal(prof: Profile, p: Pause | None, now: float) -> Outcome | None:
     return None
 
 
+def _lists_off(s: Settings, urls: tuple[str, ...]) -> bool:
+    """Whether AdGuard's live YAML has any of `urls` switched off; False when it cannot be read, since a
+    file nobody can read is not known to hold a paused list."""
+    from tvgw import adguardcfg
+
+    try:
+        filters = adguardcfg.load_yaml(s.adguard_yaml).get("filters") or []
+        return any(
+            isinstance(f, dict) and f.get("url") in urls and f.get("enabled") is False for f in filters
+        )
+    except Exception:
+        return False
+
+
 def start(
     s: Settings,
     prof: Profile,
@@ -410,9 +425,12 @@ def start(
 ) -> Outcome:
     """`sudo tvgw pause [MINUTES]` once the owner said yes: under the autonomy's lock, set the timer that
     ends it, write the row, apply. A refused or deferred apply puts the row back and stops the timer, so
-    nothing is paused; a timer that cannot be set pauses nothing at all. A start that is interrupted
-    (Ctrl-C, a kill) keeps its row and its timer: the apply holds signals off until the change is live,
-    so the lists may be off by then, and the pause must still end on time."""
+    nothing is paused; a timer that cannot be set pauses nothing at all. Ctrl-C, a hang-up and a stop are
+    held off from the row's write until the apply is over and the row says what AdGuard holds, so they
+    arrive after a start that has either paused or put everything back. A kill or a power cut cannot be
+    held: it leaves the row and the timer, and the pause ends on time. A refusal after which the lists
+    are off all the same (the apply's own rollback failed) keeps the timer and the row as a pause past
+    its end, and says so."""
     from tvgw import adguardcfg
     from tvgw.refused import clock as hhmm
 
@@ -439,19 +457,34 @@ def start(
                         f" nothing ({why})"
                     ],
                 )
-            _put(conn, p)
+            # the same three signals the apply holds, from before the row exists to after it is settled
+            held = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGHUP, signal.SIGINT})
             try:
-                _apply(apply_fn, p.urls, sleep)
-            except adguardcfg.Deferred as e:
-                _put(conn, before)
-                disarm_fn()
-                return Outcome(DEFERRED, [f"tvgw pause: {e}; nothing was paused"])
-            except Exception as e:  # whatever the apply could not do: nothing is paused, and that is said
-                _put(conn, before)
-                disarm_fn()
-                return Outcome(
-                    REFUSED, [f"tvgw pause: AdGuard Home did not take the change ({e}); nothing was paused"]
-                )
+                _put(conn, p)
+                try:
+                    _apply(apply_fn, p.urls, sleep)
+                except adguardcfg.Deferred as e:
+                    _put(conn, before)
+                    disarm_fn()
+                    return Outcome(DEFERRED, [f"tvgw pause: {e}; nothing was paused"])
+                except Exception as e:  # whatever the apply could not do: nothing is paused, and that is said
+                    if _lists_off(s, p.urls):  # its rollback failed too: a pause past its end, timer kept
+                        _put(conn, dataclasses.replace(p, end=p.start))
+                        return Outcome(
+                            REFUSED,
+                            [
+                                f"tvgw pause: AdGuard Home did not take the change cleanly ({e}); the shared"
+                                " blocklists are off, and the timer or sudo tvgw pause --end brings them back"
+                            ],
+                        )
+                    _put(conn, before)
+                    disarm_fn()
+                    return Outcome(
+                        REFUSED,
+                        [f"tvgw pause: AdGuard Home did not take the change ({e}); nothing was paused"],
+                    )
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, held)
         finally:
             conn.close()
         _spool(s, ["start", str(minutes), f"{p.end:.0f}"], p.start)
@@ -489,8 +522,9 @@ def end(
     without it), move the row's end to now, apply with no list paused, and only then record the pause as
     ended. Between the two the row is a pause past its end (`Pause.overdue`): every other apply already
     renders the lists on, and an end cut short there, by an interrupt, a kill or a reboot, is finished by
-    the timer's next try or the hourly check (`fallback`). A refused or deferred apply puts the row back
-    as it was, in force, to be tried again. With no pause in force there is nothing to do."""
+    the timer's next try, or the hourly check (`fallback`) or `--end` when the timer's own end was killed.
+    A refused or deferred apply puts the row back as it was, in force, to be tried again. With no pause in
+    force there is nothing to do."""
     from tvgw import adguardcfg
     from tvgw.refused import clock as hhmm
 
