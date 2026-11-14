@@ -3,6 +3,7 @@ second key, the live canary, the hourly judge, the owner's undo, and the novelty
 days free of requests."""
 
 import functools
+import hashlib
 import json
 import pathlib
 from contextlib import contextmanager
@@ -1542,8 +1543,6 @@ def test_every_sent_request_leaves_its_pack(auto, lg):
     pack = json.loads((d / f"{DAY}.pack.json").read_text(encoding="utf-8"))
     record = json.loads((d / f"{DAY}.json").read_text(encoding="utf-8"))
     assert "_judged" not in pack and pack["day"] == DAY
-    import hashlib
-
     assert (
         hashlib.sha256(json.dumps(pack, sort_keys=True).encode()).hexdigest()[:16] == record["pack_sha256_16"]
     )
@@ -2815,3 +2814,51 @@ def test_with_nothing_standing_in_every_push_is_the_apply_tvgw_adguard_apply_mak
     assert analyst.undo(conn, s, lg, now=T0 + 7200) == [TRACKER_RULE]
     conn.close()
     assert calls == [{"s": s, "prof": lg}] * 3
+
+
+# ---- identifier-shaped runs are withheld from both models (design decision 93) -----------------------
+def test_an_identifier_in_a_name_reaches_neither_model_and_the_rule_is_for_the_real_name(auto, lg):
+    """Two hosts that each carry a device's identifier in their name. What a dry run writes, the pack
+    that is sent, the copy kept of it and the second model's message hold tokens in their place, the
+    second model the same token the first was shown; the vetting, the rule, the record and the owner's
+    page have the name as it is."""
+    s, key = auto
+    devices = ("9f8e7d6c5b4a39281f0e9f8e7d6c5b4a", "0a1b2c3d4e5f60718293a4b5c6d7e8f9")
+    reals = [f"{device}.collect.vendor.test" for device in devices]
+    for i, real in enumerate(reals):
+        telemetry(s.db_path, real, f"203.0.113.6{i}", 42000 + i)
+    folder = pathlib.Path(s.reports_dir) / "proposals"
+
+    def left_the_gateway(*texts: str) -> bool:
+        return not any(device in text for device in devices for text in texts)
+
+    assert analyst.run(s, lg, DAY, dry_run=True, make_client=lambda k: pytest.fail("called")) == 0
+    assert left_the_gateway(
+        *((folder / f"{DAY}{kind}").read_text("utf-8") for kind in (".pack.json", ".prompt.txt"))
+    )
+    token = "<id32-2>.collect.vendor.test"  # the second of the two, whichever host that is
+    second = {}
+
+    def second_key(client, system, user, model, effort, schema=None):
+        second["user"] = user
+        return {**agree()[0], "reason": f"{token} is a beacon"}, {}
+
+    hooks = {"call": second_key, "apply": lambda: None, "sampler": steady_sampler(), "sleep": lambda x: None}
+    client = FakeClient(message(proposals({**block(token), "evidence": [f"allowed_unexpected: {token}"]})))
+    assert analyst.run(s, lg, DAY, make_client=lambda k: client, key_path=key, hooks=hooks) == 0
+    (request,) = client.calls
+    kept = (folder / f"{DAY}.pack.json").read_text("utf-8")
+    assert left_the_gateway(request["messages"][0]["content"], kept, second["user"])
+    assert token in request["messages"][0]["content"] and token in kept and token in second["user"]
+    record = json.loads((folder / f"{DAY}.json").read_text("utf-8"))
+    sent = json.dumps(json.loads(kept), sort_keys=True).encode()
+    assert record["pack_sha256_16"] == hashlib.sha256(sent).hexdigest()[:16]  # of what was sent
+    (rule,) = autoblock.read_rules(s.auto_rules)
+    real = rule.strip("|^")
+    assert real in reals
+    assert f"block: {real}" in md(s) and f"allowed_unexpected: {real}" in md(s) and "<id" not in md(s)
+    conn = db.connect(s.db_path)
+    assert {d["name"] for d in autoblock.decisions(conn)} == {real}
+    (verdict,) = autoblock.decisions(conn, "stage = 'verifier'")
+    assert verdict["reason"] == f"{real} is a beacon"
+    conn.close()

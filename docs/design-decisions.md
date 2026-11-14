@@ -1747,6 +1747,22 @@ That is a large change to what the TV is told, and the TV keeps what it is told.
 
 **Consequences.** `tvgw status` can exit 1 after a run that passed, and the page on the home network takes the same tier from the same line. A reader older than this change, after a downgrade, cannot read the new line and says so until the next run replaces it, ten minutes at most. Not built: a registry for checks or for commands, a history of warnings, and promotion on this gateway's own evidence.
 
+## 93. An identifier a name carries goes to the models as a token, and comes back as itself
+
+*2026-11-13. Pass 6, package P04b: the part of P04's finding on the pack that needed its own design.*
+
+**Context.** A host sometimes carries an identifier in its name: a device's, an account's, a session's, as a long run of letters and digits in one label. The analyst's pack lists the names the TV looked up, and such a run went to the model with the rest, nightly, though no reasoning about the name needs it. The rule first proposed for this masked a label of 16 characters or more that was hexadecimal, base32 or of high entropy, and replaced it by its length alone, inside the pack itself. Counted on the reference's two weeks, read-only, it would have masked 136 of 349 names, 122 of them in expected categories and most of them ordinary host names made of words; two different identifiers of one length became one name; and masking inside the pack broke the gateway's own use of it, from the gate's evidence to which names were judged already.
+
+**Decision.**
+
+- **What reads as an identifier.** A run of 16 letters and digits or more, between any other characters, that is all hexadecimal or holds three digits or more (`minimize.is_id`). A dot, a hyphen and an underscore end a run, so a word joined to an identifier stays. On the same two weeks this takes 11 names of 349.
+- **A token that says only the length and which one.** `<id32-1>`: the same run is the same token for as long as one run of the analyst lasts, so the model can still tell two names apart and tell that two mentions are one (`minimize.IdMask`).
+- **Only in what leaves.** The pack the gateway works from keeps every name whole. The copy that is sent and the copy kept beside the request's record are masked (`analyst.leaving`), and so is the second model's message (`_Autonomy.attempt`), in every string and dictionary key, except the profile's own section, which is the repository's text and goes to the first model as it is. The digest in the record is of what was sent.
+- **Back as itself.** The proposer's answer and the second model's reason have each token put back before anything reads them, so the vetting, the gate, the rule that is applied, the record and the owner's page hold the real name. A token the run never gave stays as written, and a name or a rule that holds one, of any kind and in any form, is refused by the vetting (`analyst._verdict`). A token-shaped text the TV itself put in a name is hidden as a run of its own, so the masking is one-to-one: `show(hide(v)) == v`, and two names never become one. A model that writes a token without its brackets is not caught.
+- **Both prompts say what a token is.**
+
+**Consequences.** A name whose only difference from another is such a run is still a different name to the model, and nothing else about it changes. The kept pack no longer shows the identifier, so a past day replayed from it gives proposals in tokens that only the run that made them could have turned back; the record beside it holds the proposals as vetted, with the real names. A long word with three digits in it and no separator is taken for an identifier, and the model then reads a token where the word stood. What still leaves as written: an identifier with hyphens (a UUID), a run under 16 characters (a MAC without separators), an identifier split over labels, and a run mostly of letters with fewer than three digits. A string cut at 200 characters inside a run loses that whole run first. Not built: a mask for anything but what the analyst sends, and a setting to turn it off.
+
 ## Owner decisions pending (2026-11-01)
 
 *Gathered at the integration of research pass 2, from the owner decisions of decisions 41 to 48. Each item is listed once, with the setting that controls it in `/etc/tvgw/tvgw.conf` ([the settings file](reference/settings.md)) and the value it has until the owner chooses. "No setting" means the choice is a change of code, of the profile or of the Pi, not of the settings file. Nothing here changes on its own.*
