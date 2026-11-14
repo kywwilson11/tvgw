@@ -100,7 +100,9 @@ def test_a_deferred_revert_stands_is_no_failure_and_the_next_check_pushes_it(aut
     assert applies_rows(conn)[-1] == (autoblock.DEFERRED, None) and autoblock.push_owed(conn)
     # the upstreams are back: the hourly check pushes the file once and the debt is paid
     pushes = []
-    assert analyst.check(conn, s, lg, now=T0 + 14400, apply_fn=lambda: pushes.append(1)) == []
+    assert analyst.check(conn, s, lg, now=T0 + 14400, apply_fn=lambda: pushes.append(1)) == [
+        {"rule": None, "name": None, "verdict": "pushed", "reason": analyst.PUSH_TOOK}
+    ]  # and says so: the hour after a WARNING shows it was put right
     assert pushes == [1] and applies_rows(conn)[-1] == ("pushed", None) and not autoblock.push_owed(conn)
     # and nothing more to push the hour after
     assert analyst.check(conn, s, lg, now=T0 + 18000, apply_fn=lambda: pushes.append(1)) == []

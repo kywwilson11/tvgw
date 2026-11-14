@@ -45,8 +45,8 @@ import time
 from collections.abc import Callable, Iterator
 
 from tvgw import durable, localrules, minimize, queries
-from tvgw.names import PUBLIC_SUFFIXES, normalize
-from tvgw.profile import Profile, held_twin, rule_target
+from tvgw.names import PUBLIC_SUFFIXES, is_public_name, normalize
+from tvgw.profile import Profile, rule_target
 
 TRIAL = 86400  # seconds a new block is on probation, at least: a trial without data extends by this
 # (autonomy) the longest a trial extends for want of TV hours with demand; then the rule stays in place,
@@ -160,7 +160,9 @@ def shapes(conn: sqlite3.Connection, names: list[str], since: float, until: floa
     """How the TV used each name in the window: per connection bytes, how long a connection lasted, in
     how many hours, the apps on at the time (from the hourly TV readings), and on how many distinct days
     the name was ever looked up. Never when: a shape goes to both models, and the first and last time a
-    name was used is a piece of the household's day (design decision 91)."""
+    name was used is a piece of the household's day (design decision 91). A flow is named as its hello
+    wrote the name, and a hello may end it with the root's dot: that dot is read past, or a name would
+    hide what it carried by writing one."""
     names = [n for n in dict.fromkeys(names) if n]
     if not names:
         return {}
@@ -168,8 +170,8 @@ def shapes(conn: sqlite3.Connection, names: list[str], since: float, until: floa
     rows_ = conn.execute(
         f"""WITH f AS (SELECT {queries.FLOW_NAME} AS name, t_start, t_end, bytes_down, bytes_up FROM flows f
                       WHERE f.t_end >= ? AND f.t_end < ?)
-            SELECT name, t_start, t_end, COALESCE(bytes_down, 0), COALESCE(bytes_up, 0) FROM f
-            WHERE name IN ({marks})""",
+            SELECT rtrim(name, '.'), t_start, t_end, COALESCE(bytes_down, 0), COALESCE(bytes_up, 0) FROM f
+            WHERE rtrim(name, '.') IN ({marks})""",
         (since, until, *names),
     ).fetchall()
     readings = conn.execute(
@@ -321,14 +323,16 @@ def reach(
 ) -> dict:
     """What a rule for `name` refuses, as far as the store knows: `||name^` matches the name and every
     name under it, so the gate reads them all and not the heading alone. `names` counts the names the
-    store saw at or under `name` in the last REACH_DAYS; `expected` counts those of them, by category,
-    that lie in one of the profile's `expected` categories (the TV doing its job); `total_down` sums
-    their bytes down over [since, until) and `median_down` is the largest of their median connections,
-    so one name under the heading that carries content shows however many beacons surround it."""
+    store saw at or under `name` in the last REACH_DAYS, or since the window began where that is
+    further back (a day asked for again, a block that waited in the queue); `expected` counts those of
+    them, by category, that lie in one of the profile's `expected` categories (the TV doing its job);
+    `total_down` sums their bytes down over [since, until) and `median_down` is the largest of their
+    median connections, so one name under the heading that carries content shows however many beacons
+    surround it."""
     host = normalize(name)
     seen = conn.execute(
         "SELECT name, category FROM hosts WHERE (name = ?1 OR name LIKE '%.' || ?1) AND last_seen >= ?2",
-        (host, now - REACH_DAYS * 86400),
+        (host, min(since, now - REACH_DAYS * 86400)),
     )
     # LIKE reads `_` as any one character and folds case, so the suffix is checked again as written
     under = {n: category for n, category in seen if n == host or n.endswith("." + host)}
@@ -370,8 +374,9 @@ def gate(
     (decision 91) What is applied unasked is narrow by construction. The rule is `||name^`, with or
     without `$important`, for exactly the name the proposal is headed with: the vetting lets a parent
     zone, a wildcard or a regex through because the owner may want one, and the machine applies none.
-    The name is no top-level domain and no public suffix. And `reach` (this module's `reach()`, which a
-    caller cannot leave out) holds no name in an expected category and no payload: the evidence is of
+    The name is one party's own public name: no top-level domain, no public suffix, and no wildcard,
+    which the store would hold nothing under. And `reach` (this module's `reach()`, which a caller
+    cannot leave out) holds no name in an expected category and no payload: the evidence is of
     everything the rule refuses, not of the heading alone. A block that fails one of the three is not
     judged unsafe; it is the owner's to make, and its verdict starts FOR_OWNER."""
     if owner_allowed(p, owner_allows):
@@ -381,19 +386,25 @@ def gate(
     if minimize.is_tagged(p.get("name")) or minimize.is_tagged(p.get("rule")):
         return "refused: a tagged title name (NAME_HMAC); a rule for a tag never matches a lookup"
     host = normalize(p.get("name") or "")
-    if p.get("rule") not in (f"||{host}^", f"||{host}^$important"):
+    plain, held_over = f"||{host}^", f"||{host}^$important"
+    if p.get("rule") not in (plain, held_over):
         return (
             FOR_OWNER
-            + "only `||name^` for the name in the heading is applied unasked, and this rule is wider"
+            + "only `||name^` for the name in the heading is applied unasked, and this is another rule"
         )
-    if "." not in host or host in PUBLIC_SUFFIXES:
-        return FOR_OWNER + "the name is a top-level domain or a public suffix, with other parties under it"
+    if not is_public_name(host) or host in PUBLIC_SUFFIXES:
+        return FOR_OWNER + (
+            "the name is not one party's own public name (a top-level domain, a public suffix, a wildcard)"
+        )
+    if reach["expected"]:  # before what a later day's evidence could change: this is the owner's for good
+        kept = ", ".join(f"{n} in {category}" for category, n in reach["expected"].items())
+        return FOR_OWNER + f"the rule refuses names the TV is expected to use ({kept})"
     if p.get("risk") != "low":
         return f"refused: the proposer rated the risk {p.get('risk')}"
     if added_today >= MAX_PER_DAY:
         return f"refused: {MAX_PER_DAY} autonomous blocks in 24 h already"
-    # (listguard) the profile loads its red-line blocks with `$important`: `||name^` is in place over either
-    if p.get("rule") in current_rules or held_twin(p.get("rule") or "") in current_rules:
+    # (listguard) the profile loads its red-line blocks with `$important`: either form in place covers both
+    if plain in current_rules or held_over in current_rules:
         return "refused: already in place"
     if shape is None:
         return "refused: no evidence of how the TV used this name"
@@ -407,9 +418,6 @@ def gate(
             f"refused: carried payload (median {shape['median_down']} B down per connection,"
             f" {shape['total_down']} B down in the window)"
         )
-    if reach["expected"]:
-        kept = ", ".join(f"{n} in {category}" for category, n in reach["expected"].items())
-        return FOR_OWNER + f"the rule refuses names the TV is expected to use ({kept})"
     if reach["median_down"] > MAX_MEDIAN_DOWN or reach["total_down"] > MAX_TOTAL_DOWN:
         return FOR_OWNER + (
             f"the names the rule refuses carried payload ({reach['names']} name(s), median"
@@ -643,32 +651,36 @@ BLOCK_DEFERRED = "deferred: upstream down (block queued)"
 # an `apply` row's outcome when a revert or an undo left the file and AdGuard would not take it, for any
 # reason but a deferral: AdGuard still refuses a name the machine or the owner took back
 REAPPLY_FAILED = "reapply_failed"
-# the `apply` outcomes after which AdGuard holds the whole rules file: a later OWED one owes a push again
-PUSHED = ("applied", "pushed")
-# (decision 91) the `apply` outcomes that leave AdGuard behind the rules file
+# (decision 91) the `apply` outcome that says the rules file reached AdGuard after a revert; the outcomes
+# that say it did not; and the rows that take a rule out of the file. A revert owes AdGuard a push from
+# the moment it is written, so one cut short before its push is owed like one whose push failed
+PUSHED = "pushed"
 OWED = (DEFERRED, REAPPLY_FAILED)
+REVERTS = "stage IN ('judge', 'owner', 'canary') AND outcome = 'reverted'"
 
 
 def push_owed(conn: sqlite3.Connection) -> bool:
-    """True when the newest push of the rules file to AdGuard did not take and none has since: a revert
-    or an undo whose restart waited for the upstreams (fin-release), or whose apply failed (decision
-    91). The next hourly check pushes, and the one after, until one takes. The record says so, so no
-    run has to remember it."""
+    """True while AdGuard may be behind the machine's rules file: a rule was taken out and no push of
+    the file is recorded since, whether the push waited for the upstreams (fin-release), failed, or
+    never ran because the process stopped (decision 91). The next hourly check pushes, and the one
+    after, until one takes. The record says so, so no run has to remember it."""
     return owed_push_id(conn) is not None
 
 
 def owed_push_id(conn: sqlite3.Connection) -> int | None:
-    """The `decisions` row that makes `push_owed` true (the newest `apply` row, when it is one of
-    OWED), or None. `tvgw forget` and the DECISIONS_DAYS prune keep the debt it records."""
+    """The `decisions` row that makes `push_owed` true, or None: the newest of the reverts and of the
+    `apply` rows of OWED, when no PUSHED row is newer. A new block's `applied` row settles nothing: its
+    apply was planned from the file as it stood before, and a revert made meanwhile is not in it.
+    `tvgw forget` and the DECISIONS_DAYS prune keep the debt this row records."""
     try:
         row = conn.execute(
-            "SELECT id, outcome FROM decisions WHERE stage = 'apply' AND outcome IN (?, ?, ?, ?)"
-            " ORDER BY id DESC LIMIT 1",
-            (*OWED, *PUSHED),
+            f"SELECT id, outcome FROM decisions WHERE ({REVERTS})"
+            " OR (stage = 'apply' AND outcome IN (?, ?, ?)) ORDER BY id DESC LIMIT 1",
+            (*OWED, PUSHED),
         ).fetchone()
     except sqlite3.OperationalError:  # a store from before schema 9
         return None
-    return int(row[0]) if row is not None and row[1] in OWED else None
+    return int(row[0]) if row is not None and row[1] != PUSHED else None
 
 
 # ---- one at a time: the lock the hourly check and the analyst's autonomous steps share ----------------

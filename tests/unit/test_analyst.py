@@ -6,11 +6,12 @@ import re
 import socket
 import stat
 from contextlib import contextmanager
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
 
-from tvgw import analyst, cli, db
+from tvgw import analyst, cli, db, lgwebos, queries
 from tvgw.config import Settings
 
 DAY = "2026-10-26"
@@ -105,6 +106,18 @@ def test_pack_keeps_the_evidence_and_drops_every_home_identifier(settings, lg):
     assert "10.10.10.17" not in text  # ...is scrubbed with everything else
 
 
+CLOCK = re.compile(r"\b\d{1,2}:\d{2}\b|\bhour \d")  # a time of day, as the brief's lines write one
+
+
+def strings(part):
+    """Every string in a part of a pack."""
+    if isinstance(part, dict | list):
+        for inner in part.values() if isinstance(part, dict) else part:
+            yield from strings(inner)
+    elif isinstance(part, str):
+        yield part
+
+
 def numbers(part):
     """Every number in a pack, wherever it sits."""
     if isinstance(part, dict | list):
@@ -130,11 +143,30 @@ def test_no_number_in_the_pack_says_when_anything_happened(settings, lg):
     )
     conn.executemany(
         "INSERT INTO rules(kind, text, first_seen, last_seen, removed_at) VALUES ('block', ?, ?, ?, ?)",
-        [("||old.example^", a - 86400, t, t + 5), ("||new.example^", t + 7, t + 7, None)],
+        [
+            ("||old.example^", a - 86400, t, t + 5),
+            ("||new.example^", t + 7, t + 7, None),
+            ("||first.example^", a, a, None),  # added in the window's first second
+            ("||gone.example^", a - 86400, a, a),  # and taken out in it
+            ("||brief.example^", t + 9, t + 9, b),  # added in the window, taken out as it ended
+        ],
     )
+    # two red lines that the brief prints with a time of day: Live Plus since, and an agreement accepted at
+    conn.execute("INSERT INTO tvsettings(t, key, value) VALUES (?, ?, 'on')", (t + 64 * 60, lgwebos.ACR_KEY))
     conn.commit()
     p = analyst.pack(conn, a, b, label, lg, settings)
+    brief_lines = queries.window_report(conn, a, b, lg, gw_ip=settings.gw_ip, label=label)["red_lines"]
     conn.close()
+    at = datetime.fromtimestamp(t + 64 * 60)
+    assert (
+        f"Live Plus (ACR) is on on the TV (since {at:%Y-%m-%d %H:%M}): General > Additional Settings"
+        in brief_lines
+    )
+    assert (
+        f"Live Plus (ACR) is on on the TV (since {at:%Y-%m-%d}): General > Additional Settings"
+        in p["red_lines"]
+    )
+    assert not [text for text in strings(p["red_lines"]) if CLOCK.search(text)]
     gate = p["dns_gate"]
     assert {x["dst"] for x in gate["examples"]} == {"198.51.100.7", "203.0.113.9"}
     assert [x["dst"] for x in gate["unexplained"]] == ["198.51.100.7"] and p["shapes"]
@@ -142,10 +174,23 @@ def test_no_number_in_the_pack_says_when_anything_happened(settings, lg):
     assert not any(
         {"first", "last"} & set(x) for x in (*gate["examples"], *gate["unexplained"], *p["shapes"].values())
     )
-    assert p["rule_changes"] == [
-        {"kind": "block", "text": "||old.example^", "added": False, "removed": True},
+    assert sorted(p["rule_changes"], key=lambda change: change["text"]) == [
+        {"kind": "block", "text": "||brief.example^", "added": True, "removed": False},
+        {"kind": "block", "text": "||first.example^", "added": True, "removed": False},
+        {"kind": "block", "text": "||gone.example^", "added": False, "removed": True},
         {"kind": "block", "text": "||new.example^", "added": True, "removed": False},
+        {"kind": "block", "text": "||old.example^", "added": False, "removed": True},
     ]
+
+
+def test_a_red_line_for_the_pack_names_its_day_and_no_hour():
+    """The ACR line names the busiest hour in the brief. An hour of the evening is when the TV was on."""
+    upload = {"key": "acr.example", "dport": 443, "payload_up": 2_500_000, "ratio": 0.1, "conns": 9}
+    o = {"acr_upload": [upload | {"start": midday(DAY) + 10 * 3600, "bucket": "hour", "hours": 3}]}
+    (in_the_brief,) = queries.red_lines(o)
+    (in_the_pack,) = queries.red_lines(o, hours=False)
+    assert f"in 9 connections in hour 22 of {DAY} (the busiest of 3); Live Plus reads" in in_the_brief
+    assert f"in 9 connections on {DAY}; Live Plus reads" in in_the_pack and not CLOCK.search(in_the_pack)
 
 
 def test_pack_withholds_the_zip_code_and_the_device_name_the_tv_reports(settings, lg):

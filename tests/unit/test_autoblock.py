@@ -13,7 +13,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from tvgw import adguardcfg, analyst, autoblock, cli, db, minimize
+from tvgw import adguardcfg, analyst, autoblock, cli, db, minimize, names
 from tvgw.autoblock import FOR_OWNER, MAX_MEDIAN_DOWN, MAX_TOTAL_DOWN
 from tvgw.config import Settings
 from tvgw.names import PUBLIC_SUFFIXES
@@ -339,7 +339,10 @@ def test_autonomous_run_blocks_telemetry_refuses_content_and_remembers(auto, lg,
     assert row["trial_until"] - row["added_t"] == autoblock.TRIAL and row["source"] == DAY
     md = (pathlib.Path(s.reports_dir) / "proposals" / f"{DAY}.md").read_text()
     assert "- Applied: yes; claude-fable-5-1 agreed (pure telemetry); canary passed: 10 minutes" in md
-    assert "- Applied: no: carried payload (median 50000000 B down per connection" in md
+    assert (
+        "- Applied: no: for the owner: the rule refuses names the TV is expected to use (1 in Streaming)"
+        in md
+    )
     assert "put in by the gateway itself" in md and "Nothing here is applied" not in md
     record = json.loads((pathlib.Path(s.reports_dir) / "proposals" / f"{DAY}.json").read_text())
     assert [x["outcome"] for x in record["autonomous"]] == ["applied", "refused"] and record["reasons"]
@@ -1207,7 +1210,9 @@ def test_a_waiting_block_faces_the_gates_again_and_a_stale_one_expires(auto, lg)
     rows_ = [(d["name"], d["stage"], d["outcome"]) for d in autoblock.decisions(conn)]
     assert ("tracker.example", "queue", "expired") in rows_  # oldest first: it expired
     (cdn,) = autoblock.decisions(conn, "name = 'cdn.example'")
-    assert cdn["outcome"] == "refused" and cdn["reason"].startswith("refused: carried payload")
+    assert cdn["outcome"] == "refused" and cdn["reason"] == (
+        FOR_OWNER + "the rule refuses names the TV is expected to use (1 in Streaming)"
+    )
     conn.close()
 
 
@@ -1934,8 +1939,11 @@ def test_a_canary_revert_whose_reapply_fails_says_so(auto, lg):
 
 # ---- narrow by construction (design decision 91) -------------------------------------------------------
 SMALL = {"conns": 5, "days_seen": 3, "median_down": 300, "total_down": 4000}
-WIDER = FOR_OWNER + "only `||name^` for the name in the heading is applied unasked, and this rule is wider"
-SUFFIX = FOR_OWNER + "the name is a top-level domain or a public suffix, with other parties under it"
+WIDER = FOR_OWNER + "only `||name^` for the name in the heading is applied unasked, and this is another rule"
+NO_NAME = (
+    FOR_OWNER
+    + "the name is not one party's own public name (a top-level domain, a public suffix, a wildcard)"
+)
 
 
 def vetted(name: str, rule: str | None = None) -> dict:
@@ -1955,9 +1963,12 @@ def vetted(name: str, rule: str | None = None) -> dict:
         ("t.example", "||t.example^$dnstype=HTTPS", WIDER),
         ("t.example", "||t.example^$important,dnstype=HTTPS", WIDER),
         ("t.example", "||other.example^", WIDER),
-        ("example", "||example^", SUFFIX),
-        ("co.uk", "||co.uk^", SUFFIX),
-        ("cloudfront.net", "||cloudfront.net^", SUFFIX),
+        ("example", "||example^", NO_NAME),
+        ("co.uk", "||co.uk^", NO_NAME),
+        ("cloudfront.net", "||cloudfront.net^", NO_NAME),
+        ("*.cdn.example", "||*.cdn.example^", NO_NAME),
+        ("t*.example", "||t*.example^", NO_NAME),
+        ("tv.local", "||tv.local^", NO_NAME),
     ],
     ids=[
         "the name",
@@ -1973,6 +1984,9 @@ def vetted(name: str, rule: str | None = None) -> dict:
         "a top-level domain",
         "a country's suffix",
         "a host of many tenants",
+        "a wildcard as the heading itself",
+        "a wildcard inside a label",
+        "a name of the home network",
     ],
 )
 def test_only_the_rule_for_exactly_the_name_in_the_heading_is_applied_unasked(name, rule, verdict):
@@ -1980,7 +1994,7 @@ def test_only_the_rule_for_exactly_the_name_in_the_heading_is_applied_unasked(na
     assert gate(vetted(name, rule), SMALL, [], 0) == verdict
 
 
-LABEL = st.sampled_from(["t", "a", "example", "co", "uk", "net", "cloudfront", "x-1"])
+LABEL = st.sampled_from(["t", "a", "example", "co", "uk", "net", "cloudfront", "x-1", "*", "t*", "", "local"])
 NAME = st.lists(LABEL, min_size=1, max_size=4).map(".".join)
 RULE = st.one_of(
     *(
@@ -1993,7 +2007,8 @@ RULE = st.one_of(
 @given(name=NAME, rule=RULE)
 def test_whatever_is_proposed_what_the_gate_clears_is_the_one_rule_for_a_name_someone_registered(name, rule):
     if gate(vetted(name, rule), SMALL, [], 0) == "ok":
-        assert rule in (f"||{name}^", f"||{name}^$important") and "." in name and name not in PUBLIC_SUFFIXES
+        assert rule in (f"||{name}^", f"||{name}^$important") and name not in PUBLIC_SUFFIXES
+        assert names.is_public_name(name) and "*" not in name
 
 
 @pytest.mark.parametrize(
@@ -2065,12 +2080,16 @@ def test_the_reach_of_a_rule_is_every_name_the_store_saw_at_or_under_it_in_thirt
         "total_down": 12 * 300 + 900 + 300,
         "median_down": 900,
     }
-    assert read("example", kept) == {
+    whole = read("example", kept)
+    assert whole == {
         "names": 5,
         "expected": {"FAST": 1, "Streaming": 2},
         "total_down": 12 * 300 + 900 + 300 + 300 + 6 * 50_000_000,
         "median_down": 50_000_000,
     }
+    assert list(whole["expected"]) == ["FAST", "Streaming"]  # by name, whatever order the store gave them
+    # a window that began further back than thirty days is looked back from its own start
+    assert autoblock.reach(conn, "tracker.example", kept, T0 - month - 1, T0, now=T0)["names"] == 4
     assert read("example", ())["expected"] == {}
     assert (
         read("tracker_example", kept)
@@ -2223,7 +2242,7 @@ def the_owner_undoes(s, key, lg, conn, fault) -> AdGuard:
     on_trial(s, conn)
     adguard = AdGuard(s, fault)
     with pytest.raises(type(fault)):
-        analyst.undo(conn, s, lg, apply_fn=adguard, now=T0 + 3600)
+        analyst.undo(conn, s, lg, apply_fn=adguard, now=T0 + 3600, sleep=lambda seconds: None)
     return adguard
 
 
@@ -2250,11 +2269,118 @@ def test_a_revert_adguard_did_not_take_is_owed_until_a_later_check_lands_it(auto
     assert (d["verdict"], d["rule"]) == ("reapply_failed", None) and autoblock.push_owed(conn)
     adguard.mend()
     pushes = adguard.calls
-    assert analyst.check(conn, s, lg, now=T0 + 10800, apply_fn=adguard, hooks=QUIET) == []
+    assert analyst.check(conn, s, lg, now=T0 + 10800, apply_fn=adguard, hooks=QUIET) == [
+        {"rule": None, "name": None, "verdict": "pushed", "reason": "the owed re-apply took"}
+    ]
     assert adguard.rules == [] and adguard.calls == pushes + 1 and not autoblock.push_owed(conn)
     assert autoblock.decisions(conn, "stage = 'apply'")[-1]["outcome"] == "pushed"
     assert analyst.check(conn, s, lg, now=T0 + 14400, apply_fn=adguard, hooks=QUIET) == []
     assert adguard.calls == pushes + 1  # nothing owed: nothing pushed
+    conn.close()
+
+
+def stopped_in_the_hourly_check(s, lg, conn, adguard) -> None:
+    harm = {**QUIET, "judge": lambda *a: ("reverted", "a must-allow name was blocked")}
+    analyst.check(conn, s, lg, now=T0 + 3600, apply_fn=adguard, hooks=harm)
+
+
+def stopped_in_an_undo(s, lg, conn, adguard) -> None:
+    analyst.undo(conn, s, lg, apply_fn=adguard, now=T0 + 3600)
+
+
+@pytest.mark.parametrize("revert", [stopped_in_the_hourly_check, stopped_in_an_undo])
+def test_a_revert_whose_run_is_stopped_before_its_push_is_owed_all_the_same(auto, lg, revert):
+    """A unit stopped, a reboot, a power cut. The revert's own row owes AdGuard the push from the moment
+    it is written, so there is no moment at which the rule is out of the file and nothing knows."""
+    s, _ = auto
+    conn = db.connect(s.db_path)
+    on_trial(s, conn)
+    adguard = AdGuard(s, Killed())
+    with pytest.raises(Killed):
+        revert(s, lg, conn, adguard)
+    assert adguard.rules == [RULE_] and autoblock.read_rules(s.auto_rules) == [] and autoblock.push_owed(conn)
+    adguard.mend()
+    (landed,) = analyst.check(conn, s, lg, now=T0 + 7200, apply_fn=adguard, hooks=QUIET)
+    assert landed["verdict"] == "pushed" and adguard.rules == [] and not autoblock.push_owed(conn)
+    conn.close()
+
+
+REVERTED = [(stage, "reverted") for stage in ("judge", "owner", "canary")]
+
+
+@pytest.mark.parametrize(
+    ("rows", "owed"),
+    [
+        ([], False),
+        *(([revert], True) for revert in REVERTED),
+        *(([revert, ("apply", "pushed")], False) for revert in REVERTED),
+        ([("apply", "pushed"), ("owner", "reverted")], True),
+        ([("apply", autoblock.DEFERRED)], True),
+        ([("apply", autoblock.REAPPLY_FAILED), ("apply", "pushed")], False),
+        ([("owner", "reverted"), ("apply", autoblock.REAPPLY_FAILED), ("apply", "applied")], True),
+        ([("judge", "passed"), ("canary", "passed"), ("apply", "applied")], False),
+        ([("apply", autoblock.BLOCK_DEFERRED), ("apply", "failed")], False),
+    ],
+)
+def test_a_push_is_owed_from_a_revert_until_a_push_is_recorded(tmp_path, rows, owed):
+    """A new block's `applied` row settles nothing: its apply was planned from the file as it stood
+    before, so an undo made while it ran is not in it (the last but two)."""
+    conn = db.connect(str(tmp_path / "s.db"))
+    ids = [autoblock.log_decision(conn, stage, outcome, T0 + i) for i, (stage, outcome) in enumerate(rows)]
+    debts = [i for i, (stage, outcome) in zip(ids, rows, strict=True) if outcome != "pushed" and owed]
+    assert autoblock.push_owed(conn) is owed
+    if owed:
+        assert autoblock.owed_push_id(conn) in debts
+    conn.close()
+
+
+def test_a_name_written_with_the_roots_dot_hides_nothing_it_carried(auto):
+    """A flow is named as its hello wrote the name, and `dl.tracker.example.` is the same host."""
+    s, _ = auto
+    under(s.db_path, "dl.tracker.example", "Other", down=50_000_000)
+    conn = db.connect(s.db_path)
+    conn.execute("UPDATE tls SET sni = sni || '.' WHERE sni = 'dl.tracker.example'")
+    conn.commit()
+    window = (T0 - 1, T0 + 86400)
+    assert (
+        autoblock.shapes(conn, ["dl.tracker.example"], *window)["dl.tracker.example"]["total_down"]
+        == 50_000_000
+    )
+    assert autoblock.reach(conn, "tracker.example", (), *window, now=T0)["median_down"] == 50_000_000
+    conn.close()
+
+
+def test_a_block_that_waited_in_the_queue_is_judged_over_its_own_wait_and_the_names_of_thirty_days(auto, lg):
+    """The queue's turn comes days after the proposal. What the rule refuses is read over the whole wait,
+    not over the day the run is for, and among the names seen in the thirty days before now."""
+    s, key = auto
+    since = T0 - 15 * 86400
+    under(s.db_path, "dl.tracker.example", "Other", down=50_000_000)  # one connection, at T0 + 60
+    under(s.db_path, "old.tracker.example", "Streaming", last_seen=T0 - 40 * 86400)  # too long ago to count
+    conn = db.connect(s.db_path)
+    conn.execute(
+        "UPDATE flows SET t_start = t_start - 5 * 86400, t_end = t_end - 5 * 86400 WHERE sport >= 47000"
+    )
+    conn.execute("UPDATE tls SET t = t - 5 * 86400 WHERE sport >= 47000")
+    autoblock.enqueue(conn, {"rule": RULE_, "name": "tracker.example", "risk": "low"}, DAY, "o", since, T0)
+    conn.commit()
+    conn.close()
+    hooks = {
+        "call": lambda *a, **k: pytest.fail("the gates come first"),
+        "apply": lambda: pytest.fail("applied"),
+    }
+    client = FakeClient(message({"summary": "nothing", "nothing_to_do": True, "proposals": []}))
+    assert (
+        analyst.run(
+            s, lg, DAY, make_client=lambda k: client, key_path=key, hooks={**hooks, "now": lambda: T0 + 600}
+        )
+        == 0
+    )
+    conn = db.connect(s.db_path)
+    (row,) = autoblock.decisions(conn, "stage = 'gate'")
+    assert row["reason"].startswith(
+        FOR_OWNER + "the names the rule refuses carried payload (2 name(s), median 50000000"
+    )
     conn.close()
 
 
