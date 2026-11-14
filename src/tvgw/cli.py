@@ -1830,15 +1830,26 @@ def cmd_undo(a, s, prof) -> int:
         print("tvgw undo: the next hourly check applies it again; to do it now, run `tvgw adguard apply`")
         return 1
     else:
-        # (fin-release) AdGuard held its restart back because the upstreams are down: the revert stands
-        # in the file and the record, and the next hourly check pushes it
-        deferred = bool(gone) and autoblock.push_owed(conn)
+        # how this undo's push ended is its own last `apply` row, the last row this connection wrote; the
+        # store's debt is no guide, since a revert the hourly check made meanwhile owes a push as well
+        (ended,) = autoblock.decisions(conn, "id = last_insert_rowid()") if gone else ({},)
     finally:
         conn.close()
-    if deferred:
+    if ended.get("outcome") == autoblock.DEFERRED:
+        # (fin-release) AdGuard held its restart back because the upstreams are down: the revert stands
+        # in the file and the record, and the next hourly check pushes it
         print(
             f"tvgw undo: {', '.join(gone)} removed from the rules file; AdGuard held its restart back"
             " (deferred: upstream down) and the next hourly check re-applies it"
+        )
+        return DEFERRED_EXIT
+    if (ended.get("outcome"), ended.get("reason")) == (autoblock.REAPPLY_FAILED, autoblock.STALE_PUSH):
+        # (decision 91) the push took, but its plan was made before another revert and may still hold
+        # that revert's rule: the push is owed again
+        print(
+            f"tvgw undo: {', '.join(gone)} removed from the rules file; another change to the rules"
+            " came while AdGuard was being re-applied, so the next hourly check applies it again"
+            " (to do it now: sudo tvgw adguard apply)"
         )
         return DEFERRED_EXIT
     print(

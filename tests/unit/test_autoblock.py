@@ -2358,62 +2358,73 @@ def kept(s: Settings, conn, rule: str = KEPT_RULE) -> None:
     autoblock.decide(conn, rule, "passed", "no harm seen", T0 + 10)
 
 
-def met_by_an_undo(s, lg, conn, adguard: FakeAdGuard, at: int = 1):
+def met_by_an_undo(s, lg, conn, adguard: FakeAdGuard, at: int = 1, lands: bool = False):
     """An apply for `adguard` whose `at`th call plans from the file, as `tvgw adguard apply` does, and
-    then waits for AdGuard so long that the owner's `tvgw undo --all`, made meanwhile, gives up waiting.
-    Only then does it land what it planned. The calls before it land at once."""
+    then waits for AdGuard while the owner's `tvgw undo --all` is made. The undo's own apply gives up
+    waiting or, with `lands`, takes AdGuard first and records it. Only then does the waiting apply land
+    what it planned. The calls before it land at once."""
     calls = iter(range(1, 99))
 
     def apply() -> None:
         if next(calls) != at:
             return adguard()
         planned = autoblock.read_rules(s.auto_rules)
-        held = FakeAdGuard(s, adguardcfg.Busy("another apply holds the lock"))
-        with pytest.raises(adguardcfg.Busy):
-            analyst.undo(conn, s, lg, True, held, now=T0 + 3700, sleep=lambda seconds: None)
+        undo = functools.partial(analyst.undo, conn, s, lg, True, now=T0 + 3700, sleep=lambda seconds: None)
+        if lands:
+            undo(adguard)
+        else:
+            with pytest.raises(adguardcfg.Busy):
+                undo(FakeAdGuard(s, adguardcfg.Busy("another apply holds the lock")))
         adguard.rules = planned
 
     return apply
 
 
-def the_hourly_check_was_pushing(s, key, lg, conn, adguard) -> None:
+def the_hourly_check_was_pushing(s, key, lg, conn, met) -> None:
     on_trial(s, conn)
     autoblock.log_decision(conn, "apply", autoblock.DEFERRED, T0 + 60)  # and a push owed from before
     harm = {
         **QUIET,
         "judge": lambda c, p, row, now: ("reverted", "harm") if row["rule"] == TRACKER_RULE else None,
     }
-    (d,) = analyst.check(
-        conn, s, lg, now=T0 + 3600, apply_fn=met_by_an_undo(s, lg, conn, adguard), hooks=harm
-    )
+    (d,) = analyst.check(conn, s, lg, now=T0 + 3600, apply_fn=met(), hooks=harm)
     assert d["verdict"] == "reverted"  # and no word that the owed push took: it settled nothing
 
 
-def the_canary_was_pushing(s, key, lg, conn, adguard) -> None:
-    a_canary_takes_its_block_back(s, key, lg, met_by_an_undo(s, lg, conn, adguard, at=2))
+def the_canary_was_pushing(s, key, lg, conn, met) -> None:
+    a_canary_takes_its_block_back(s, key, lg, met(at=2))
 
 
-def another_undo_was_pushing(s, key, lg, conn, adguard) -> None:
+def another_undo_was_pushing(s, key, lg, conn, met) -> None:
     on_trial(s, conn)
-    analyst.undo(conn, s, lg, apply_fn=met_by_an_undo(s, lg, conn, adguard), now=T0 + 3600)
+    analyst.undo(conn, s, lg, apply_fn=met(), now=T0 + 3600)
 
 
+@pytest.mark.parametrize("lands", [False, True], ids=["the undo gave up waiting", "the undo landed first"])
 @pytest.mark.parametrize(
     "push", [the_hourly_check_was_pushing, the_canary_was_pushing, another_undo_was_pushing]
 )
-def test_an_undo_made_while_another_push_waited_for_adguard_is_owed_when_that_push_lands(auto, lg, push):
+def test_an_undo_made_while_another_push_waited_for_adguard_is_owed_when_that_push_lands(
+    auto, lg, push, lands
+):
     """A push is planned from the file before it waits for AdGuard, and an undo made during the wait is
     not in its plan. Its `pushed` row once settled the undo's debt all the same: AdGuard went on
-    refusing a name the owner had taken back, the file did not hold the rule, and nothing was owed."""
+    refusing a name the owner had taken back, the file did not hold the rule, and nothing was owed.
+    Writing no row was not enough: when the undo's own push landed first, its `pushed` row settled the
+    debt, and the stale plan landed after it. The waiting push now writes the debt itself."""
     s, key = auto
     conn = db.connect(s.db_path)
     kept(s, conn)
     adguard = FakeAdGuard(s)
-    push(s, key, lg, conn, adguard)
+    push(s, key, lg, conn, functools.partial(met_by_an_undo, s, lg, conn, adguard, lands=lands))
     assert autoblock.read_rules(s.auto_rules) == [] and adguard.rules  # AdGuard holds what the file lacks
-    assert autoblock.push_owed(conn)
+    *_, undos, stale = autoblock.decisions(conn, "stage = 'apply'")
+    assert undos["outcome"] == ("pushed" if lands else autoblock.REAPPLY_FAILED)
+    assert (stale["outcome"], stale["reason"]) == (autoblock.REAPPLY_FAILED, autoblock.STALE_PUSH)
+    assert autoblock.owed_push_id(conn) == stale["id"]
     (landed,) = analyst.check(conn, s, lg, now=T0 + 99000, apply_fn=adguard, hooks=QUIET)
-    assert landed["verdict"] == "pushed" and adguard.rules == [] and not autoblock.push_owed(conn)
+    assert landed["verdict"] == "pushed" and adguard.rules == autoblock.read_rules(s.auto_rules) == []
+    assert not autoblock.push_owed(conn)
     conn.close()
 
 
@@ -2488,6 +2499,9 @@ def test_a_push_is_owed_from_a_revert_until_a_push_is_recorded(tmp_path, rows, o
     conn.close()
 
 
+FORGET = ("forget", None)  # `tvgw forget` empties the table, and the ids start again from 1
+
+
 @pytest.mark.parametrize(
     ("meanwhile", "settled"),
     [
@@ -2495,22 +2509,109 @@ def test_a_push_is_owed_from_a_revert_until_a_push_is_recorded(tmp_path, rows, o
         ([("apply", "applied")], True),  # a new block owes nothing, and its row keeps no debt open
         *(([revert], False) for revert in REVERTED),
         *(([("apply", outcome)], False) for outcome in autoblock.OWED),
+        ([FORGET, ("judge", "reverted")], False),  # the revert's new id is below the mark
     ],
 )
 def test_a_push_settles_only_what_was_written_before_it_was_planned(tmp_path, meanwhile, settled):
     """`record_push` writes `pushed` for a push whose plan held every revert so far. A revert written
-    after the plan was made, or a push another run still owes, is not in it and goes on owing."""
+    after the plan was made, or a push another run still owes, is not in it. Such a push once wrote
+    nothing, and another run's `pushed` row, written before this plan landed, settled the revert while
+    AdGuard held its rule again; now the push writes the debt itself."""
     conn = db.connect(str(tmp_path / "s.db"))
     assert autoblock.newest_decision(conn) == 0
-    autoblock.log_decision(conn, "owner", "reverted", T0)  # before the plan, so in it
+    for stage, outcome in [("apply", "applied"), ("owner", "reverted")]:  # before the plan, so in it
+        autoblock.log_decision(conn, stage, outcome, T0)
     planned_after = autoblock.newest_decision(conn)
-    for stage, outcome in meanwhile:
-        autoblock.log_decision(conn, stage, outcome, T0 + 1)
+    for row in meanwhile:
+        if row == FORGET:
+            conn.execute("DELETE FROM decisions")
+        else:
+            autoblock.log_decision(conn, *row, T0 + 1)
     assert autoblock.record_push(conn, planned_after, T0 + 2, "took", rule=TRACKER_RULE) is settled
     last = autoblock.decisions(conn)[-1]
-    assert ((last["outcome"], last["rule"], last["reason"]) == ("pushed", TRACKER_RULE, "took")) is settled
-    assert autoblock.push_owed(conn) is not settled
+    # the stale push's words, as data-model.md quotes them
+    stale = (autoblock.REAPPLY_FAILED, "an apply landed that was planned before a later revert")
+    outcome, reason = ("pushed", "took") if settled else stale
+    assert (last["stage"], last["outcome"], last["rule"], last["reason"]) == (
+        "apply",
+        outcome,
+        TRACKER_RULE,
+        reason,
+    )
+    assert autoblock.owed_push_id(conn) == (None if settled else last["id"])
     conn.close()
+
+
+def nothing(s: Settings) -> None:
+    """No other run writes, and AdGuard takes the apply."""
+
+
+def another_run_writes(stage: str, outcome: str):
+    """A row of another run, through its own connection: the hourly check takes no lock that `tvgw undo`
+    waits for, and writes while the undo's apply runs or after it."""
+
+    def write(s: Settings) -> None:
+        other = db.connect(s.db_path)
+        autoblock.log_decision(other, stage, outcome, T0 + 3601, "||other.example^")
+        other.close()
+
+    return write
+
+
+def upstreams_down(s: Settings) -> None:
+    raise adguardcfg.Deferred("deferred: upstream down (no answer in 5 s)")
+
+
+TOOK = "removed and AdGuard re-applied"
+
+
+@pytest.mark.parametrize(
+    ("during", "after", "status", "said"),
+    [
+        (nothing, nothing, 0, TOOK),
+        (nothing, another_run_writes("apply", autoblock.DEFERRED), 0, TOOK),
+        (
+            upstreams_down,
+            nothing,
+            cli.DEFERRED_EXIT,
+            "removed from the rules file; AdGuard held its restart back (deferred: upstream down)"
+            " and the next hourly check re-applies it",
+        ),
+        (
+            another_run_writes("judge", "reverted"),
+            nothing,
+            cli.DEFERRED_EXIT,
+            "removed from the rules file; another change to the rules came while AdGuard was being"
+            " re-applied, so the next hourly check applies it again (to do it now: sudo tvgw adguard apply)",
+        ),
+    ],
+    ids=[
+        "it took",
+        "another run's deferral came after",
+        "AdGuard held its restart back",
+        "a revert came meanwhile",
+    ],
+)
+def test_tvgw_undo_says_how_its_own_push_ended(auto, lg, capsys, monkeypatch, during, after, status, said):
+    """`tvgw undo` read the store's debt and said AdGuard had held its restart back whenever a push was
+    owed after it: also when its own push took and another run's revert or deferral owed one."""
+    s, _ = auto
+    conf = pathlib.Path(s.state_dir) / "tvgw.conf"
+    conf.write_text(f"STATE_DIR={s.state_dir}\nDB_PATH={s.db_path}\nAUTO_RULES={s.auto_rules}\n")
+    undo = analyst.undo
+
+    def undo_and_after(*a, **k) -> list[str]:
+        gone = undo(*a, **k)
+        after(s)
+        return gone
+
+    monkeypatch.setattr(analyst, "adguardcfg_apply", lambda *a: during(s))
+    monkeypatch.setattr(analyst, "undo", undo_and_after)
+    conn = db.connect(s.db_path)
+    kept(s, conn)
+    conn.close()
+    assert cli.main(["--conf", str(conf), "undo"]) == status
+    assert capsys.readouterr().out == f"tvgw undo: {KEPT_RULE} {said}\n"
 
 
 def test_a_name_written_with_the_roots_dot_hides_nothing_it_carried(auto):

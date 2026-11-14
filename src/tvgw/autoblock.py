@@ -657,7 +657,8 @@ DEFERRED = "deferred: upstream down"
 # AdGuard is owed no push (push_owed does not read it)
 BLOCK_DEFERRED = "deferred: upstream down (block queued)"
 # an `apply` row's outcome when a revert or an undo left the file and AdGuard would not take it, for any
-# reason but a deferral: AdGuard still refuses a name the machine or the owner took back
+# reason but a deferral, or took a plan made before it (STALE_PUSH): AdGuard may still refuse a name the
+# machine or the owner took back
 REAPPLY_FAILED = "reapply_failed"
 # (decision 91) the `apply` outcome that says the rules file reached AdGuard after a revert; the outcomes
 # that say it did not; and the rows that take a rule out of the file. A revert owes AdGuard a push from
@@ -665,6 +666,9 @@ REAPPLY_FAILED = "reapply_failed"
 PUSHED = "pushed"
 OWED = (DEFERRED, REAPPLY_FAILED)
 REVERTS = "stage IN ('judge', 'owner', 'canary') AND outcome = 'reverted'"
+# (decision 91) the reason of the REAPPLY_FAILED row a push writes when it took but its plan was stale
+# (`record_push`): AdGuard holds the plan, and the plan may still hold a rule a later revert took out
+STALE_PUSH = "an apply landed that was planned before a later revert"
 
 
 def push_owed(conn: sqlite3.Connection) -> bool:
@@ -698,18 +702,23 @@ def newest_decision(conn: sqlite3.Connection) -> int:
 
 
 def record_push(conn: sqlite3.Connection, planned_after: int, now: float, reason: str, **row) -> bool:
-    """Write the PUSHED row of a push that reached AdGuard, and say whether it was written. It is not
-    when a revert or an owed row came after `planned_after` (`newest_decision` before the push). A push
-    is planned from the file before it waits for AdGuard, `tvgw undo` waits for no one, and an undo made
-    during that wait is not in the plan: a PUSHED row above the undo's rows would settle a debt AdGuard
-    still holds. Unwritten, it leaves the later row owing, and the next hourly check pushes again."""
+    """Write the row of a push that reached AdGuard, and say whether it settled the debt: PUSHED when
+    the plan held every revert, otherwise a REAPPLY_FAILED row of STALE_PUSH, which owes the next push.
+    The plan is stale when a revert or an owed row came after `planned_after` (`newest_decision` before
+    the push). A push is planned from the file before it waits for AdGuard, `tvgw undo` waits for no
+    one, and an undo made during that wait is not in the plan: a PUSHED row above the undo's rows would
+    settle a debt AdGuard still holds. Writing nothing is not enough: the undo's own push can land first
+    and write PUSHED, and this plan then puts the rule back in AdGuard after it. A newest row below the
+    mark means a `tvgw forget` emptied the table meanwhile and the ids started again, so a later revert
+    can hide below the mark: that plan is stale too. The next hourly check pushes again."""
     later = conn.execute(
         f"SELECT 1 FROM decisions WHERE id > ? AND (({REVERTS}) OR (stage = 'apply' AND outcome IN (?, ?)))",
         (planned_after, *OWED),
     ).fetchone()
-    if later is None:
-        log_decision(conn, "apply", PUSHED, now, reason=reason, **row)
-    return later is None
+    settled = later is None and newest_decision(conn) >= planned_after
+    outcome, why = (PUSHED, reason) if settled else (REAPPLY_FAILED, STALE_PUSH)
+    log_decision(conn, "apply", outcome, now, reason=why, **row)
+    return settled
 
 
 # ---- one at a time: the lock the hourly check and the analyst's autonomous steps share ----------------

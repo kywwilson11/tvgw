@@ -1598,7 +1598,7 @@ def check(
             autoblock.log_decision(conn, "apply", autoblock.DEFERRED, now, d["rule"], d["name"], reason=err)
     elif not kind and (reapply or owed):  # it took: these reverts, and any owed from before, are in AdGuard
         # said when a push was owed, so that the hour after a WARNING shows it was put right; not said,
-        # and not recorded, when an undo came while this push waited: the next check pushes again
+        # and recorded as owed, when an undo came while this push waited: the next check pushes again
         if autoblock.record_push(conn, planned_after, now, PUSH_TOOK) and owed:
             decisions.append({"rule": None, "name": None, "verdict": autoblock.PUSHED, "reason": PUSH_TOOK})
     elif kind == "failed":
@@ -1689,7 +1689,9 @@ def undo(
     holds its restart back because the upstreams are down (`adguardcfg.Deferred`), the file and the
     record keep the owner's revert, an `apply` row says `deferred: upstream down`, and the next hourly
     check pushes it. (decision 91) Any other failure of the apply is raised, after an `apply` row says
-    `reapply_failed`. Either way the push is owed (`autoblock.push_owed`) until a later check lands it."""
+    `reapply_failed`. Either way the push is owed (`autoblock.push_owed`) until a later check lands it.
+    The last row an undo writes is the `apply` row that says how its push ended (`autoblock.record_push`
+    or the deferral's), and `tvgw undo` reads its words from that row."""
     from tvgw import adguardcfg
 
     now = time.time() if now is None else now
