@@ -137,7 +137,7 @@ If the app failed during the pause too, the shared lists were not the cause: run
 
 While the lists are off, the TV can reach the trackers that only they block. The blocks your TV's profile adds stay, and so do your own rules and the firewall. A TV on the general profile has no blocks of its own, so for those minutes nothing stops its maker's trackers.
 
-The lists come back even if the gateway restarts during a pause: its hourly check brings them back within an hour of the pause's end. When the gateway keeps no password for the filter, the end asks you to run `sudo tvgw pause --report` at a terminal, which asks for it.
+The lists come back even if the gateway restarts during a pause, or if you stop the end halfway. The timer's next try or the hourly check finishes it, within an hour of the pause's end at the latest. When the gateway keeps no password for the filter, the end asks you to run `sudo tvgw pause --report` at a terminal, which asks for it.
 
 ## The TV
 

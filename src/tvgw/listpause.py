@@ -355,7 +355,7 @@ def _default_apply(s: Settings, prof: Profile) -> Callable[[tuple[str, ...]], ob
     def apply(paused: tuple[str, ...]) -> object:
         from tvgw import analyst  # the apply every rule change goes through: lint, guard, readiness
 
-        return analyst.adguardcfg_apply(s, prof, paused)
+        return analyst.adguardcfg_apply(s, prof, paused=paused)
 
     return apply
 
@@ -410,7 +410,9 @@ def start(
 ) -> Outcome:
     """`sudo tvgw pause [MINUTES]` once the owner said yes: under the autonomy's lock, set the timer that
     ends it, write the row, apply. A refused or deferred apply puts the row back and stops the timer, so
-    nothing is paused; a timer that cannot be set pauses nothing at all."""
+    nothing is paused; a timer that cannot be set pauses nothing at all. A start that is interrupted
+    (Ctrl-C, a kill) keeps its row and its timer: the apply holds signals off until the change is live,
+    so the lists may be off by then, and the pause must still end on time."""
     from tvgw import adguardcfg
     from tvgw.refused import clock as hhmm
 
@@ -444,7 +446,7 @@ def start(
                 _put(conn, before)
                 disarm_fn()
                 return Outcome(DEFERRED, [f"tvgw pause: {e}; nothing was paused"])
-            except (RuntimeError, OSError, ValueError) as e:
+            except Exception as e:  # whatever the apply could not do: nothing is paused, and that is said
                 _put(conn, before)
                 disarm_fn()
                 return Outcome(
@@ -483,9 +485,12 @@ def end(
     sleep: Callable[[float], None] = time.sleep,
     wait: float = LOCK_WAIT,
 ) -> Outcome:
-    """Bring the lists back: under the autonomy's lock (or past `wait` without it), mark the row ended,
-    apply with no list paused, and record the end. A refused or deferred apply leaves the pause in force,
-    to be tried again by the timer or the hourly check. With no pause in force there is nothing to do."""
+    """Bring the lists back, in two writes around the apply: under the autonomy's lock (or past `wait`
+    without it), move the row's end to now, apply with no list paused, and only then record the pause as
+    ended. Between the two the row is a pause past its end (`Pause.overdue`): every other apply already
+    renders the lists on, and an end cut short there, by an interrupt, a kill or a reboot, is finished by
+    the timer's next try or the hourly check (`fallback`). A refused or deferred apply puts the row back
+    as it was, in force, to be tried again. With no pause in force there is nothing to do."""
     from tvgw import adguardcfg
     from tvgw.refused import clock as hhmm
 
@@ -505,7 +510,8 @@ def end(
                 return Outcome(
                     OK, [f"tvgw pause{verb}: this pause ends at {hhmm(p.end, now)}, not now; nothing changed"]
                 )
-            _put(conn, dataclasses.replace(p, ended=now, how=how))  # every other apply renders no pause now
+            # past its end from here on, and not yet over: recorded as ended only once the lists are back
+            _put(conn, dataclasses.replace(p, end=max(p.start, min(p.end, now))))
             try:
                 _apply(apply_fn, (), sleep)
             except adguardcfg.Deferred as e:
@@ -513,7 +519,7 @@ def end(
                 return Outcome(
                     DEFERRED, [f"tvgw pause{verb}: {e}; the shared blocklists stay off for now"], p
                 )
-            except (RuntimeError, OSError, ValueError) as e:
+            except Exception as e:  # said and tried again, never a traceback that ends the timer's tries
                 _put(conn, p)
                 return Outcome(
                     REFUSED,

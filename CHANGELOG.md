@@ -6,6 +6,12 @@
 
 ### Status
 
+### `tvgw pause` starts, and an end that is cut short is finished (2026-11-13)
+
+- **What went wrong.** `sudo tvgw pause` stopped with an error every time and paused nothing, though it said it was paused until the end time; the next unrelated change to AdGuard then made the pause real. And an end that was interrupted halfway, by Ctrl-C, a kill or a reboot, left the shared lists off, with nothing to bring them back and `tvgw status` saying they were on.
+- **Now.** The pause starts, or says it could not and leaves everything as it was, whatever the cause ([design decision 94](docs/design-decisions.md#94-tvgw-pause-starts-and-an-end-that-is-cut-short-is-finished-by-the-next-way-back)). An end first moves the pause's end to now, then brings the lists back, then records the end; if it is cut short, the timer's next try, the hourly check or `sudo tvgw pause --end` finishes it. The question reads "for 1 minute".
+- For developers: `analyst.adguardcfg_apply()` and `adguardcfg.apply()` take their options by name only.
+
 ### What the gateway blocks on its own is one name, its reverts land, and the nightly pack holds no time of day (2026-11-13)
 
 - **This changes nothing you see unless `ANALYST_APPLY=auto`,** which is off unless you turned it on. The nightly pack changes for everyone who uses the analyst.

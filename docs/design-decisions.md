@@ -1727,6 +1727,24 @@ That is a large change to what the TV is told, and the TV keeps what it is told.
 
 **Consequences.** With autonomy on, fewer blocks apply by themselves: no rule for a zone, no new name in an expected category. The gate's margins gain what the rule refuses (`reach_*`). A line written by hand into the machine's file is gone within the hour. Cut after the second reading, each for its reason: a lock around `tvgw adguard apply`, which would stop a deploy that meets a canary; writing the record before the apply, which would count a failed attempt as a block; a check that AdGuard holds exactly the planned rules, which waits for the apply's read-back. Not built here: masking identifier-shaped labels in the names the pack carries. The rule first proposed for it would mask 136 of the 349 names the reference looked up in two weeks, 122 of them in expected categories, most of them ordinary host names; it needs its own design and is the next package.
 
+## 94. `tvgw pause` starts, and an end that is cut short is finished by the next way back
+
+*2026-11-13. Pass 6, package P05. The verification kept two of the investigation's findings and cut the rest of the first design.*
+
+**Context.** Two faults, each reproduced on 0.4.0.
+
+- **The pause never started.** `listpause._default_apply` passed the lists as the third positional argument of `analyst.adguardcfg_apply`, where `guard` stands, so every `sudo tvgw pause` stopped with a TypeError after it had written its row and set its timer. The lists stayed on, `--status` said "paused until", and the next unrelated apply made the pause real. At its end the report said the lists were not the cause, though the TV had been refused by a list that was still on. The reference has never run a pause, so no row exists there.
+- **An end cut short left the lists off, and nothing repaired it.** The end marked the row ended before its apply. An interrupt, a kill, a reboot or an exception outside the three classes caught, in the seconds the apply took, left the row ended and the lists off. The timer, `--end` and the hourly check then said that no pause was in force, and `tvgw status` said the lists were on.
+
+**Decision.**
+
+- **By name only.** `analyst.adguardcfg_apply` and `adguardcfg.apply` take their options by name; the pause passes `paused=paused`. Every other caller already did.
+- **A start that fails of any kind pauses nothing.** `listpause.start` puts the row back and stops the timer on any `Exception` (it was three classes). An interrupt keeps the row and the timer on purpose: the apply holds signals off until the change is live, so the lists may already be off, and the timer is what ends the pause.
+- **An end in two writes.** `listpause.end` first moves the row's `end` to now (`max(start, min(end, now))`), which makes it a pause past its end (`Pause.overdue`): every other apply renders the lists on, and `--status`, `tvgw verify` and the hourly check say it is in force and past its end. It applies with nothing paused, and only then writes `ended` and `how`, built from the original row, so the recorded end and the report are as before. A refusal, a deferral or any `Exception` puts the row back as it was. An end cut short is finished by the timer's next try, the hourly check (`listpause.fallback`) or `--end`.
+- **The question** says "for 1 minute".
+
+**Consequences.** After a cut-short end, a wall clock stepped back below the moved end puts the pause in force again for the size of the step. A wall clock stepped back during a pause delays its end until the hourly check. Both are bounded by an hour and need a clock that is stepped. Not built: an `ending` field (the moved end needs no new state); a handler that takes the row back on an interrupt (it would leave the lists off with nothing to end the pause); `adguardcfg.enable_filters`, a second writer of AdGuard's YAML for refusals that cannot occur at a pause's end today; a FAIL from `list_sentinels` an hour past the end; a second red line, since a FAIL there already reaches the brief; a boot-time clock.
+
 ## Owner decisions pending (2026-11-01)
 
 *Gathered at the integration of research pass 2, from the owner decisions of decisions 41 to 48. Each item is listed once, with the setting that controls it in `/etc/tvgw/tvgw.conf` ([the settings file](reference/settings.md)) and the value it has until the owner chooses. "No setting" means the choice is a change of code, of the profile or of the Pi, not of the settings file. Nothing here changes on its own.*

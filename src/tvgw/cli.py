@@ -2861,7 +2861,8 @@ def cmd_pause(a, s, prof) -> int:
             print("tvgw pause: nothing changed; add --yes to pause without the question")
             return listpause.REFUSED
         try:
-            answer = input(f"Pause the shared blocklists for {minutes} minutes? [y/N] ")
+            span = f"{minutes} minute{'s' if minutes != 1 else ''}"
+            answer = input(f"Pause the shared blocklists for {span}? [y/N] ")
         except EOFError:
             answer = ""
         if answer.strip().lower() not in ("y", "yes"):
