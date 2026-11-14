@@ -79,7 +79,7 @@ def test_seventeen_video_nodes_and_one_tracker_buy_one_reason(tmp_path, lg):
     so the exemption reads the fields the code writes."""
     p = the_pack(tmp_path, lg)
     assert {"total_down", "median_down"} <= set(next(iter(p["shapes"].values())))
-    assert set(dataclasses.asdict(autoblock.Shape(0, 0, 0, 0, 0, 0.0, 0, [], 0, None, None))) >= {
+    assert set(dataclasses.asdict(autoblock.Shape(0, 0, 0, 0, 0, 0.0, 0, [], 0))) >= {
         "total_down",
         "median_down",
     }

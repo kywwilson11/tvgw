@@ -386,8 +386,10 @@ def test_an_apply_that_finds_adguards_lock_held_is_tried_again(site, lg):
             raise adguardcfg.Busy("another tvgw adguard apply is running")
         return site.apply(paused)
 
-    done = listpause.end(site.s, lg, listpause.EARLY, **{**site.hooks(), "apply_fn": busy_twice})
+    slept = []
+    done = listpause.end(site.s, lg, listpause.EARLY, **site.hooks(apply_fn=busy_twice, sleep=slept.append))
     assert done.code == listpause.OK and len(tries) == 3
+    assert slept.count(adguardcfg.BUSY_PAUSE) == 2  # between the tries, through the pause's own sleep
 
 
 def test_the_timer_ends_the_pause_and_a_stray_early_timer_ends_nothing(site, lg):

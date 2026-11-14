@@ -611,11 +611,8 @@ def _forget_store(
         if _exists(conn, "fw_counters"):  # design decision 90: one total of each series, at the floor
             conn.execute(f"DELETE FROM fw_counters WHERE NOT ({FW_LAST})")
             conn.execute("UPDATE fw_counters SET t = ?", (t,))
-        if owed:  # (fin-release) a revert still owed to AdGuard stays owed, under no name, at the floor
-            conn.execute(
-                "INSERT INTO decisions(t, stage, outcome, reason) VALUES (?, 'apply', ?, ?)",
-                (t, autoblock.DEFERRED, "an owed re-apply, kept across tvgw forget"),
-            )
+        if owed:
+            _keep_debt(conn, t)
         conn.executemany("DELETE FROM meta WHERE key=?", [(k,) for k in META_FORGET])
         db.set_meta(conn, FLOOR_KEY, repr(t))
         cursors = (*CURSORS, QUERYLOG_CURSOR) if querylog else CURSORS
@@ -740,13 +737,26 @@ def _fresh_backup(s, backup: Callable[[str, str], object] | None, out: Result) -
     out.steps.append(Step("backup", os.path.join(backup_dir, keep), 1, _size(os.path.join(backup_dir, keep))))
 
 
+def _keep_debt(conn: sqlite3.Connection, t: float) -> None:
+    """(fin-release) A revert still owed to AdGuard stays owed, under no name, at the floor `t`: the
+    next hourly check pushes the machine's file, whatever rule the row that owed it named."""
+    from tvgw import autoblock
+
+    conn.execute(
+        "INSERT INTO decisions(t, stage, outcome, reason) VALUES (?, 'apply', ?, ?)",
+        (t, autoblock.DEFERRED, "an owed re-apply, kept across tvgw forget"),
+    )
+
+
 # ---- after the run -----------------------------------------------------------------------------------
 def drop_late(conn: sqlite3.Connection, now: float | None = None) -> int:
     """Delete any row older than the last forget: late evidence (an idle connection's report, the
     capture's open file, AdGuard's buffered lookups) of the time the owner asked to forget. A no-op
     on a store that was never forgotten; LATE_DAYS after the forget the floor is removed and it is a
-    no-op again. Each predicate can use its table's time index. The caller commits."""
-    from tvgw import ports  # at the call, as `_forget_store` reads it
+    no-op again. Each predicate can use its table's time index. A push owed to AdGuard by one of the
+    late rows (an hourly check that began before the forget and reverted after it) stays owed, as the
+    forget kept its own: under no name. The caller commits."""
+    from tvgw import autoblock, ports  # at the call, as `_forget_store` reads it
 
     now = time.time() if now is None else now
     ports.drop_ntp_seen(conn, now)  # the kept NTP count outlives the floor: its own two weeks
@@ -758,6 +768,7 @@ def drop_late(conn: sqlite3.Connection, now: float | None = None) -> int:
         return 0
     before = conn.execute("PRAGMA secure_delete").fetchone()[0]
     conn.execute("PRAGMA secure_delete=ON")  # the late rows are zeroed like the ones forget deleted
+    owed = autoblock.push_owed(conn)
     n = 0
     try:
         # the counters' kept rows sit at the floor: one below it is a `verify --record` that began
@@ -771,6 +782,8 @@ def drop_late(conn: sqlite3.Connection, now: float | None = None) -> int:
             else:
                 where, args = f"{col} < ?", (t,)
             n += conn.execute(f"DELETE FROM {table} WHERE {where}", args).rowcount
+        if owed and not autoblock.push_owed(conn):  # the row that owed it was a late one
+            _keep_debt(conn, t)
     finally:
         # the prune that follows in the same ingest frees its rows the ordinary way
         conn.execute(f"PRAGMA secure_delete={int(before)}")

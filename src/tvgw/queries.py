@@ -2624,9 +2624,12 @@ def dns_bypass(conn: sqlite3.Connection, since: float, until: float, gw_ip: str)
     ).fetchall()
 
 
-def red_lines(o: dict) -> list[str]:
+def red_lines(o: dict, hours: bool = True) -> list[str]:
     """The few things that must never be true, as sentences for the top of the brief, in the order to
-    act on them: the TV's needs, then what the firewall and its watchdog say, then the pipeline."""
+    act on them: the TV's needs, then what the firewall and its watchdog say, then the pipeline.
+    `hours=False` gives each line its day and no time of day, for a reader outside the home (the
+    analyst's pack, design decision 91)."""
+    stamp = _fmt if hours else (lambda t: _fmt(t)[:10])
     out = []
     for m in o.get("must_allow_blocked", []):
         out.append(f"must-allow name blocked: {m['name']} x{m['lookups']} by {m['rule'] or 'a list'}")
@@ -2642,7 +2645,7 @@ def red_lines(o: dict) -> list[str]:
     # that would let a list refuse a name the TV needs, then one that lifts a block (design decision 68)
     new = (o.get("list_guard") or {}).get("new", [])
     for f in sorted(new, key=lambda f: f.get("kind") != "exposes"):
-        since = _fmt(f.get("first", 0))
+        since = stamp(f.get("first", 0))
         if f.get("kind") == "exposes":
             out.append(
                 f"a list can refuse what the TV needs: {f['list']} carries {f['line']}, which overrides"
@@ -2657,14 +2660,14 @@ def red_lines(o: dict) -> list[str]:
     acr = o.get("acr")
     # lgwebos stores 'ERR <type> <msg>' for a failed read: unknown, not on
     if acr and acr["value"] != "off" and not acr["value"].startswith("ERR"):
-        state = f"{acr['value']} on the TV (since {_fmt(acr['t'])})"
+        state = f"{acr['value']} on the TV (since {stamp(acr['t'])})"
         out.append(f"Live Plus (ACR) is {state}: General > Additional Settings")
     # a radio or a tethering switch the TV reports on is traffic that leaves around the gateway
     for key, label in SECOND_PATHS.items():
         p = (o.get("tv_paths") or {}).get(key)
         if p and is_second_path(key, p["value"]):
             out.append(
-                f"TV has a second network path: {label} is {p['value']} (since {_fmt(p['t'])}):"
+                f"TV has a second network path: {label} is {p['value']} (since {stamp(p['t'])}):"
                 " traffic can leave around the gateway; turn it off under Settings > Network"
             )
     # (threats) a name on a list of known malware and botnet servers that the filter answered with a public
@@ -2716,7 +2719,7 @@ def red_lines(o: dict) -> list[str]:
         day = datetime.fromtimestamp(x["start"]).strftime("%Y-%m-%d")
         when = (
             f"on {day}"
-            if x["bucket"] == "day"
+            if x["bucket"] == "day" or not hours
             else f"in hour {datetime.fromtimestamp(x['start']):%H} of {day}"
             + (f" (the busiest of {x['hours']})" if x.get("hours", 0) > 1 else "")
         )
@@ -2736,7 +2739,7 @@ def red_lines(o: dict) -> list[str]:
     if ech.get("count"):
         names = ", ".join(ech.get("outer_names") or []) or "no outer name"
         out.append(
-            f"Encrypted ClientHello in {ech['count']} handshakes since {_fmt(ech['first'])}"
+            f"Encrypted ClientHello in {ech['count']} handshakes since {stamp(ech['first'])}"
             f" (outer names: {names}): per-connection TLS naming is going dark; keep HTTPS records stripped"
         )
     # (events) the Pi's own lookups left by the uplink instead of the tunnel: the DoH provider saw the
@@ -2767,11 +2770,11 @@ def red_lines(o: dict) -> list[str]:
         if x["flag"].startswith("doc."):  # (W12) the per-document record: the agreement by its name
             name = lgwebos.agreement_name(x["flag"][len("doc.") :])
             out.append(
-                f"TV agreement {name} accepted (at {_fmt(x['t'])}): an agreement was accepted on the TV"
+                f"TV agreement {name} accepted (at {stamp(x['t'])}): an agreement was accepted on the TV"
             )
             continue
         out.append(
-            f"TV consent flag {x['flag']} turned on (at {_fmt(x['t'])}): an agreement was accepted on the TV"
+            f"TV consent flag {x['flag']} turned on (at {stamp(x['t'])}): an agreement was accepted on the TV"
         )
     for line in (o.get("changes_in_effect") or {}).get("red_lines", []):  # (ledger)
         out.append(line)

@@ -75,6 +75,23 @@ class Busy(RuntimeError):
     caller that handles a refused apply handles this one too."""
 
 
+BUSY_TRIES = 6  # tries of an apply that finds AdGuard's own lock held, BUSY_PAUSE seconds apart
+BUSY_PAUSE = 5.0
+
+
+def retry_busy(apply: Callable[[], object], sleep: Callable[[float], None]) -> object:
+    """`apply()`, tried again while another apply holds AdGuard's lock (Busy): BUSY_TRIES times in all,
+    BUSY_PAUSE seconds apart, and the last try's Busy is the caller's. A deploy's apply or an update
+    holds the lock for seconds; a pause that must end or a revert that must land does not lose its turn
+    to one."""
+    for _ in range(BUSY_TRIES - 1):
+        try:
+            return apply()
+        except Busy:
+            sleep(BUSY_PAUSE)
+    return apply()
+
+
 class Deferred(RuntimeError):
     """(lists) A restart of AdGuard was not attempted because its upstreams are down: the message starts
     `deferred: upstream down`. Callers report it and do not retry; nothing was changed. A subclass of

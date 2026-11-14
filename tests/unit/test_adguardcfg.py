@@ -569,3 +569,36 @@ def test_desired_withholds_https_records_from_the_tv_alone():
     assert d.user_rules.count(f"||*^$dnstype=HTTPS|SVCB,client={SETTINGS.tv_ip}") == 1
     planned = adguardcfg.plan(yaml.safe_load(STOCK), d)
     assert planned["dns"]["aaaa_disabled"] is True and planned["dns"]["handle_ddr"] is True
+
+
+@pytest.mark.parametrize(
+    ("busy", "tries", "takes"),
+    [(0, 1, True), (1, 2, True), (5, 6, True), (6, 6, False), (9, 6, False)],
+    ids=["free", "held once", "held for five tries", "held for all six", "held for longer"],
+)
+def test_an_apply_that_finds_adguards_lock_held_is_tried_again_six_times_in_all(busy, tries, takes):
+    held, slept = iter([adguardcfg.Busy("another apply is running")] * busy), []
+
+    def apply():
+        if (fault := next(held, None)) is not None:
+            raise fault
+        return ["applied"]
+
+    if takes:
+        assert adguardcfg.retry_busy(apply, slept.append) == ["applied"]
+    else:
+        with pytest.raises(adguardcfg.Busy):
+            adguardcfg.retry_busy(apply, slept.append)
+    assert slept == [5.0] * (tries - 1) and len(list(held)) == max(0, busy - 6)  # six tries, 5 seconds apart
+
+
+def test_an_apply_that_fails_for_any_other_reason_is_not_tried_again():
+    calls = []
+
+    def apply():
+        calls.append(1)
+        raise adguardcfg.Deferred("deferred: upstream down")
+
+    with pytest.raises(adguardcfg.Deferred):
+        adguardcfg.retry_busy(apply, lambda seconds: pytest.fail("it waited"))
+    assert calls == [1]

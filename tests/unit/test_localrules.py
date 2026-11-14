@@ -439,11 +439,17 @@ def test_the_cli_needs_root_and_lists_the_owners_rules(lg, site, tmp_path, monke
 def test_the_gate_and_the_vetting_refuse_a_name_the_owner_allowed(lg):
     p = {"kind": "block", "name": "x.ads.example", "rule": "||x.ads.example^", "vetted": "ok", "risk": "low"}
     shape = {"days_seen": 5, "conns": 3, "median_down": 10, "total_down": 30}
-    assert autoblock.gate(p, shape, [], 0) == "ok"
-    assert autoblock.gate(p, shape, [], 0, owner_allows=("ads.example",)) == autoblock.OWNER_ALLOWED
+    reach = {"names": 1, "expected": {}, "total_down": 30, "median_down": 10}
+    assert autoblock.gate(p, shape, [], 0, reach=reach) == "ok"
+    assert (
+        autoblock.gate(p, shape, [], 0, owner_allows=("ads.example",), reach=reach) == autoblock.OWNER_ALLOWED
+    )
     # a rule that acts on an allowed name under another heading is caught by its target too
     other = {**p, "name": "x.other.example", "rule": "||ads.example^"}
-    assert autoblock.gate(other, shape, [], 0, owner_allows=("ads.example",)) == autoblock.OWNER_ALLOWED
+    assert (
+        autoblock.gate(other, shape, [], 0, owner_allows=("ads.example",), reach=reach)
+        == autoblock.OWNER_ALLOWED
+    )
     result = {
         "proposals": [{"kind": "block", "name": "x.ads.example", "rule": "||x.ads.example^", "risk": "low"}]
     }

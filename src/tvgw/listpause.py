@@ -59,8 +59,6 @@ FALLBACK_WAIT = 120.0
 RETRY_EVERY = 300.0  # seconds between the timer's tries while AdGuard holds its restart back
 RETRY_FOR = 7200.0  # how long the timer keeps trying; the hourly check tries every hour after that
 EARLY_TIMER = 60.0  # a timer that fires this long before the end is not this pause's: it ends nothing
-BUSY_TRIES = 6  # tries of an apply that finds AdGuard's own lock held, BUSY_PAUSE seconds apart
-BUSY_PAUSE = 5.0
 # exit statuses: done, refused or failed with nothing changed, AdGuard held its restart back (the
 # upstreams are down, cli.DEFERRED_EXIT); (report) could not read the log or ask AdGuard
 OK, REFUSED, DEFERRED = 0, 1, 3
@@ -347,17 +345,10 @@ def _locked(
 
 
 def _apply(apply_fn: Callable[[tuple[str, ...]], object], paused: tuple[str, ...], sleep) -> None:
-    """One apply, tried again while another apply holds AdGuard's own lock (adguardcfg.Busy)."""
+    """One apply, tried again while another apply holds AdGuard's own lock (adguardcfg.retry_busy)."""
     from tvgw import adguardcfg
 
-    for n in range(BUSY_TRIES):
-        try:
-            apply_fn(paused)
-            return
-        except adguardcfg.Busy:
-            if n == BUSY_TRIES - 1:
-                raise
-            sleep(BUSY_PAUSE)
+    adguardcfg.retry_busy(lambda: apply_fn(paused), sleep)
 
 
 def _default_apply(s: Settings, prof: Profile) -> Callable[[tuple[str, ...]], object]:
