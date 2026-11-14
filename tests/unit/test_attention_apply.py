@@ -152,8 +152,12 @@ def listed(sets: dict[str, str]) -> str:
     return stub
 
 
-def set_listing(name: str, type_: str, size: int, flags: str, timeout: str = "") -> str:
-    lines = [f"\t\ttype {type_}", f"\t\tsize {size}", f"\t\tflags {flags}"]
+def set_listing(
+    name: str, type_: str, size: int, flags: str, timeout: str = "", holds: int | None = None
+) -> str:
+    """A set as `nft -t list set` prints it; with `holds`, as nft 1.1.6 does, the count after the size."""
+    counted = "" if holds is None else f"\t# count {holds}"
+    lines = [f"\t\ttype {type_}", f"\t\tsize {size}{counted}", f"\t\tflags {flags}"]
     if timeout:
         lines.append(f"\t\ttimeout {timeout}")
     return "table inet tvgw_attn {\n\tset " + name + " {\n" + "\n".join(lines) + "\n\t}\n}\n"
@@ -168,8 +172,17 @@ AS_WRITTEN = {
 }
 
 
-def test_a_table_whose_sets_are_as_written_is_kept_with_its_essentials_and_samples(tmp_path):
-    out = run_apply(tmp_path, conf=LIVE, stubs={"nft": listed(AS_WRITTEN)})
+COUNTED = AS_WRITTEN | {
+    "platform4": set_listing("platform4", "ipv4_addr", 65536, "timeout", holds=41),
+    "conn4": set_listing("conn4", TUPLE, 65536, "dynamic,timeout", "2m", holds=0),
+}
+
+
+@pytest.mark.parametrize(
+    "sets", [AS_WRITTEN, COUNTED], ids=["as nft 1.1 lists them", "with what each holds, as 1.1.6 does"]
+)
+def test_a_table_whose_sets_are_as_written_is_kept_with_its_essentials_and_samples(tmp_path, sets):
+    out = run_apply(tmp_path, conf=LIVE, stubs={"nft": listed(sets)})
     assert out.returncode == 0, out.stderr
     assert "delete table inet tvgw_attn" not in nft_calls(tmp_path) and "other properties" not in out.stderr
     assert sum(1 for c in nft_calls(tmp_path) if c.startswith("-t list set inet tvgw_attn ")) == len(

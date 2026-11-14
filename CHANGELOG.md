@@ -6,6 +6,11 @@
 
 ### Status
 
+### The firewall's counts survive an apply on nftables 1.1.6 (2026-11-13)
+
+- **What went wrong.** nftables 1.1.6 prints how many elements a set holds after the set's size. `tvgw-apply` compares each set it keeps (the TV's time servers, the attention count's lists) with the one it would write, and read that as a set of another size: every apply deleted the table and made it again, so the count of the TV's time requests started at zero and the attention count's lists started empty. A gateway on an older nftables, which the reference is, was not affected.
+- **Now** the comparison reads past the count. The namespace tests, which caught it when the test machines moved to 1.1.6, compare rulesets without it.
+
 ### Ad breaks, read from the lookups an ad makes (2026-11-13)
 
 - **`tvgw experiment adbreaks`** prints, for each app the TV said was in front, the hours it was in front, how many ad breaks began, the breaks an hour and about how many minutes of ads they held. A break is 3 or more advertising firms (companies, not domains) refused within 10 seconds ([design decision 89](docs/design-decisions.md#89-ad-breaks-are-read-from-the-lookups-an-ad-makes-a-report-first-nothing-stored-nothing-refused)). Read it for the apps whose ads you want to know about; an app with 10 hours or more and no break is one whose ads cannot be seen this way.

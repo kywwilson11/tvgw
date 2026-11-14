@@ -919,11 +919,15 @@ confirm_arm() { # the restore, RESTORE_AFTER seconds from now unless confirm_can
 # (ntp) the NTP count's table, as the (ntp) block below says; a function so that (revert) a held apply,
 # whose restore leaves that table alone, loads it too
 NTP_SIZE=1024 NTP_TIMEOUT=10d
+# what nft may print after a set's size and is no property of the set: from 1.1.6 it lists how many
+# elements the set holds (`size 1024	# count 3`). Read as another size, it would have every apply
+# delete the table and start its counts again
+NFT_COUNT='([[:space:]]+# count [0-9]+)?'
 ntp_load() {
 	local ntp_have
 	ntp_have=$(nft -t list set inet tvgw_ntp ntp4 2>/dev/null || true)
 	if [ -n "$ntp_have" ] && ! { grep -Eq '^[[:space:]]*type ipv4_addr$' <<<"$ntp_have" &&
-		grep -Eq "^[[:space:]]*size $NTP_SIZE\$" <<<"$ntp_have" &&
+		grep -Eq "^[[:space:]]*size $NTP_SIZE$NFT_COUNT\$" <<<"$ntp_have" &&
 		grep -Eq "^[[:space:]]*timeout $NTP_TIMEOUT\$" <<<"$ntp_have" &&
 		grep -Eq '^[[:space:]]*flags (dynamic,timeout|timeout,dynamic)$' <<<"$ntp_have"; }; then
 		nft delete table inet tvgw_ntp 2>/dev/null || true
@@ -1619,7 +1623,7 @@ attn_set_ok() { # $1: a set's name, $2: its type, $3: its flags (a regex), $4: i
 	local have
 	have=$(nft -t list set inet tvgw_attn "$1" 2>/dev/null || true)
 	[ -n "$have" ] || return 0 # not there (or the table is not): the load makes it as written
-	grep -Eq "^[[:space:]]*type $2\$" <<<"$have" && grep -Eq "^[[:space:]]*size $4\$" <<<"$have" &&
+	grep -Eq "^[[:space:]]*type $2\$" <<<"$have" && grep -Eq "^[[:space:]]*size $4$NFT_COUNT\$" <<<"$have" &&
 		grep -Eq "^[[:space:]]*flags ($3)\$" <<<"$have" &&
 		{ [ -z "$5" ] || grep -Eq "^[[:space:]]*timeout $5\$" <<<"$have"; }
 }
