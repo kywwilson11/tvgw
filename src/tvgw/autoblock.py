@@ -560,10 +560,19 @@ def pending(conn: sqlite3.Connection) -> list[dict]:
     return rows(conn, "verdict IS NULL")
 
 
+WATCHED = "verdict IS NULL OR verdict = ?"  # with UNTESTED
+
+
 def watched(conn: sqlite3.Connection) -> list[dict]:
     """Rules the hourly check judges: on trial, or untested (a trial that ran out of days without
     demand stays watched for harm, but holds no trial slot)."""
-    return rows(conn, "verdict IS NULL OR verdict = ?", (UNTESTED,))
+    return rows(conn, WATCHED, (UNTESTED,))
+
+
+def watched_count(conn: sqlite3.Connection) -> int:
+    """How many rules `watched` returns, asked of the one column an `auto_rules` of any age has: a
+    reader that only counts must not need the columns a later schema added."""
+    return conn.execute(f"SELECT COUNT(*) FROM auto_rules WHERE {WATCHED}", (UNTESTED,)).fetchone()[0]
 
 
 def active(conn: sqlite3.Connection) -> list[dict]:

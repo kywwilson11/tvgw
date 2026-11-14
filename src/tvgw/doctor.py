@@ -503,7 +503,7 @@ def plan_for(
             " hand."
         )
     elif name in ("forward_policy", "input_policy"):
-        if c.ok and c.detail != verify.NO_RULESET and not c.detail.endswith(verify.HELD):
+        if c.ok and c.detail != verify.NO_RULESET and not c.held:
             # the warning that another firewall drops by default and lets the TV's traffic through: the
             # commands that would open the TV's port in it are already in effect
             p.notes.append(

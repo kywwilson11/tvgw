@@ -13,10 +13,10 @@ import os
 import re
 
 import pytest
-from conftest import NOW, ROOT
+from conftest import NOW, ROOT, UNITS
 from test_verify import INPATH_TABLE, ROUTER, S, gateway, resolver, vfs
 
-from tvgw import backup, health, inpath, ledger, probe, verify
+from tvgw import autoblock, backup, health, inpath, ledger, probe, scrub, status, verify
 
 NEW = (
     "disk",
@@ -38,6 +38,7 @@ NEW = (
     "web",  # (web) the page on the home network: its own tests are in test_web.py and test_web_verify.py
     "attention",  # (attention) design decision 69: its own tests are in test_attention.py
     "updates",  # (updates) design decision 77: its own tests are in test_updates.py
+    "jobs",  # (decision 92) the timers' services: below
 )
 TV_MAC = "00:00:5e:00:53:17"  # documentation MACs (RFC 7042)
 OTHER_MAC = "00:00:5e:00:53:99"
@@ -63,7 +64,7 @@ def level(c: verify.Check) -> str:
     if not c.ok:
         return "fail"
     if c.warn:
-        return "fail" if c.detail.endswith(verify.HELD) else "warn"
+        return "fail" if c.held else "warn"
     return "ok"
 
 
@@ -92,6 +93,17 @@ def test_held_findings_warn_until_promoted_and_fail_after(monkeypatch):
     assert verify.held("tv_port_neighbours", verify.FAIL, "x") == (True, "x", True)
 
 
+def last_runs(**odd: str | tuple[str, str | None]) -> str:
+    """`systemctl show`'s answer for JOBS: each loaded and successful, but for the ones named, given as
+    their Result or as (LoadState, Result), a Result of None for no such line."""
+    units = {job: ("loaded", "success") for job in verify.JOBS}
+    units |= {job.replace("_", "-"): (("loaded", r) if isinstance(r, str) else r) for job, r in odd.items()}
+    return "\n\n".join(
+        f"Id={job}.service\nLoadState={load}" + (f"\nResult={result}" if result is not None else "")
+        for job, (load, result) in units.items()
+    )
+
+
 def broken_host():
     """A gateway where every new check finds the worst it can, with RFC 5737 addresses, documentation MACs
     and a host name planted in everything those checks read."""
@@ -99,6 +111,7 @@ def broken_host():
     return {
         "overrides": {
             ("timedatectl", "show", "-p", "NTPSynchronized", "--value"): "no\n",
+            verify.JOBS_SHOW: last_runs(tvgw_autoblock="exit-code"),  # (decision 92) with a rule to judge
             ("ip", "-j", "-4", "addr", "show", "dev", "wlan0"): json.dumps(
                 [
                     {
@@ -144,6 +157,7 @@ def broken_host():
             for i in range(7)
         ],
         "meta": {
+            verify.WATCHED: "1",
             "last_run": str(NOW - 3 * 86400),
             "backup_ok_t": str(NOW - 9 * 86400),
             "backup_error": json.dumps({"t": NOW - 3600, "why": backup.CHECK_FAILED}),
@@ -180,7 +194,7 @@ def test_whatever_they_find_the_new_checks_never_fail_a_run_and_carry_no_identif
         assert c.ok and c.warn, c.line()
         for planted in ("192.0.2", "198.51.100", "2001:db8", "00:00:5e", "gateway-under-test", ROUTER):
             assert planted not in c.detail, c.line()
-    held = [n for n in NEW if checks[n].detail.endswith(verify.HELD)]
+    held = [n for n in NEW if checks[n].held]
     assert held == [n for n in NEW if verify.FAIL_AFTER[n] == verify.FAIL]
 
 
@@ -377,6 +391,30 @@ def test_store_meta_reads_the_store_read_only_and_never_raises(tmp_path):
         "schema": "9",
         verify.FIRST_CHECK: "1793010000.25",
     }
+    # (decision 92) and what the hourly check has to do, when it has any: the rules it judges, counted
+    # from the one column a store of any age has, and a revert AdGuard has not taken
+    work = {verify.WATCHED, verify.PUSH_OWED}
+    conn = db.connect(str(path))
+    for rule in ("||a.example^", "||b.example^", "||c.example^"):
+        autoblock.record(conn, rule, rule.strip("|^"), "the analyst", "o", "f", "x", 1793026000.0)
+    autoblock.decide(conn, "||c.example^", "passed", "fine", 1793026100.0)
+    conn.commit()
+    assert verify.store_meta(str(path))[verify.WATCHED] == "2"  # a rule that passed is no longer judged
+    autoblock.decide(conn, "||b.example^", autoblock.UNTESTED, "no demand", 1793026100.0)
+    assert verify.store_meta(str(path))[verify.WATCHED] == "2"  # an untested one still is
+    autoblock.decide(conn, "||a.example^", "reverted", "harm", 1793026200.0)
+    autoblock.log_decision(conn, "judge", "reverted", 1793026200.0, "||a.example^")
+    assert {k: v for k, v in verify.store_meta(str(path)).items() if k in work} == {
+        verify.WATCHED: "1",
+        verify.PUSH_OWED: "1",
+    }
+    autoblock.log_decision(conn, "apply", autoblock.PUSHED, 1793026300.0)
+    autoblock.decide(conn, "||b.example^", "passed", "fine", 1793026300.0)
+    assert not work & set(verify.store_meta(str(path)))  # nothing to do: neither key is there
+    conn.execute("DROP TABLE auto_rules")  # a store from before the machine's rules still reads
+    conn.commit()
+    conn.close()
+    assert "schema" in (read := verify.store_meta(str(path))) and not work & set(read)
     # the newest named copy in the backup directory; a temporary file is not a copy
     copies = tmp_path / "backup"
     copies.mkdir()
@@ -842,3 +880,186 @@ def test_a_legacy_iptables_table_or_variant_is_a_warning_before_a_kernel_upgrade
 ):
     run = lambda cmd: version if cmd == ["iptables", "--version"] else ""  # noqa: E731
     assert verify.iptables_legacy_level(run, lambda path: files.get(path, "")) == (level, detail)
+
+
+# ---- (decision 92) the timers' services, and a held finding ------------------------------------------
+TO_JUDGE = "; tvgw-autoblock has blocks of the gateway's own to judge"
+TO_PUSH = "a revert AdGuard has not taken"
+THE_NINE = (
+    "autoblock",
+    "analyze",
+    "backup",
+    "prune",
+    "doh-update",
+    "update",
+    "analyst",
+    "analyst-weekly",
+    "threat-update",
+)
+
+
+@pytest.mark.parametrize(
+    ("answer", "meta", "line"),
+    [
+        (last_runs(), {}, "OK   jobs"),
+        ("", {}, "OK   jobs: not asked: systemd gave no answer"),
+        (
+            last_runs(tvgw_backup="exit-code", tvgw_prune="timeout"),
+            {verify.WATCHED: "2"},
+            "WARN jobs: the last run failed: tvgw-backup, tvgw-prune",
+        ),
+        (last_runs(tvgw_update=("not-found", "exit-code"), tvgw_analyst=("masked", "")), {}, "OK   jobs"),
+        (last_runs(tvgw_threat_update=("loaded", None)), {}, "OK   jobs"),
+        ("LoadState=loaded\nResult=exit-code", {}, "WARN jobs: the last run failed: ?"),
+        (
+            last_runs(tvgw_autoblock="exit-code"),
+            {"schema": "17", "last_run": "1793026000.0"},
+            "WARN jobs: the last run failed: tvgw-autoblock",
+        ),
+        (
+            last_runs(tvgw_autoblock="signal", tvgw_backup="exit-code"),
+            {verify.WATCHED: "1"},
+            "WARN jobs: the last run failed: tvgw-autoblock, tvgw-backup" + TO_JUDGE + verify.HELD,
+        ),
+        (
+            last_runs(tvgw_autoblock="exit-code"),
+            {verify.PUSH_OWED: "1"},
+            f"WARN jobs: the last run failed: tvgw-autoblock; tvgw-autoblock has {TO_PUSH}" + verify.HELD,
+        ),
+        (
+            last_runs(tvgw_autoblock="exit-code"),
+            {verify.PUSH_OWED: "1", verify.WATCHED: "1"},
+            f"WARN jobs: the last run failed: tvgw-autoblock{TO_JUDGE} and {TO_PUSH}" + verify.HELD,
+        ),
+        (
+            last_runs(tvgw_autoblock="exit-code"),
+            None,
+            "WARN jobs: the last run failed: tvgw-autoblock; the record could not be read to say what"
+            " tvgw-autoblock has to do" + verify.HELD,
+        ),
+        (last_runs(tvgw_backup="exit-code"), None, "WARN jobs: the last run failed: tvgw-backup"),
+    ],
+    ids=[
+        "every job's last run succeeded",
+        "no systemd to ask",
+        "two failed, with rules on trial that the judge still judges",
+        "a job this gateway does not have, and one masked",
+        "a job with no result to show",
+        "a unit systemd did not name",
+        "the judge failed with nothing to do",
+        "the judge failed with a rule to judge",
+        "the judge failed with a revert AdGuard has not taken",
+        "the judge failed with both",
+        "the judge failed and the record cannot be read",
+        "another job failed and the record cannot be read",
+    ],
+)
+def test_a_job_whose_last_run_failed_is_named_and_the_judge_failing_over_a_rule_is_of_fail_level(
+    answer, meta, line
+):
+    """`services` asks whether each timer is active, and a timer stays active whatever its service's last
+    run did: before, nothing a run looked at could say that a nightly backup or the hourly judge of the
+    gateway's own blocks had failed every time for a month. The detail says what the judge has to do,
+    never why it failed: it also exits 1 after judging, for a revert AdGuard refused."""
+    asked = []
+    check = verify.jobs_check(lambda cmd: asked.append(cmd) or answer, meta)
+    assert (check.line(), check.held) == (line, line.endswith(verify.HELD))
+    # one command for the nine services, and not tvgw-verify, which exits 1 whenever a check fails
+    show = ["systemctl", "show", "-p", "Id,LoadState,Result", "--"]
+    assert asked == [show + [f"tvgw-{job}.service" for job in THE_NINE]]
+    # and the nine are every service a timer of this repository runs, but the checks' own
+    assert {f"tvgw-{job}" for job in THE_NINE} == {t.stem for t in UNITS.glob("*.timer")} - {"tvgw-verify"}
+
+
+@pytest.mark.parametrize(
+    ("doh_held", "line"),
+    [
+        (False, "WARN jobs: the last run failed: tvgw-prune, tvgw-doh-update"),
+        (True, "WARN jobs: the last run failed: tvgw-prune"),
+    ],
+    ids=["no hold", "a refresh held back"],
+)
+def test_the_doh_refresh_is_no_failed_job_while_it_holds_a_refresh_back(doh_held, line):
+    """That job exits 1 for every day of a hold, by design (decision 68). `doh4_held` reports the hold
+    and what to do about it; starting the job again, which is this check's advice, would only hold again."""
+    answer = last_runs(tvgw_doh_update="exit-code", tvgw_prune="exit-code")
+    assert verify.jobs_check(lambda cmd: answer, {}, doh_held=doh_held).line() == line
+
+
+def test_a_run_hands_the_jobs_check_the_record_it_read_and_the_doh_hold_it_found(lg):
+    """In a whole run: the judge's failure is held only when the record gives it something to do, and
+    the DoH refresh's exit is no failure while `doh4_held` reports its hold."""
+    failed = {verify.JOBS_SHOW: last_runs(tvgw_autoblock="exit-code", tvgw_doh_update="exit-code")}
+    both = "the last run failed: tvgw-autoblock, tvgw-doh-update"
+    idle = one("jobs", lg, overrides=failed, meta={"schema": "17"})
+    assert (idle.detail, idle.held) == (both, False)
+    assert one("jobs", lg, overrides=failed, meta={"schema": "17", verify.WATCHED: "1"}).held
+    hold = {"since": NOW - 86400, "t": NOW - 3600, "accepted": NOW - 2 * 86400}
+    hold |= {"in_force": 1493, "fetched": 600, "dropped": 900, "max": 20}
+    files = {f"{S.state_dir}/{verify.DOH_HELD}": json.dumps(hold)}
+    held_back = one("jobs", lg, overrides=failed, meta={"schema": "17"}, files=files)
+    assert held_back.detail == "the last run failed: tvgw-autoblock"
+
+
+def test_a_gateway_named_like_a_word_of_the_holds_own_text_still_holds_its_findings():
+    """The scrubber replaces a whole word that is the gateway's host name, and `held` once read the
+    scrubbed detail: on a gateway named `check` no finding was ever held."""
+    token = verify._SCRUBBER.set(scrub.Scrubber(hostname="check"))
+    try:
+        found = verify.Check("disk", *verify.held("disk", verify.FAIL, "read-only"))
+    finally:
+        verify._SCRUBBER.reset(token)
+    assert found.held and not found.detail.endswith(verify.HELD)
+
+
+@pytest.mark.parametrize(
+    ("name", "level", "is_held"),
+    [
+        ("disk", verify.FAIL, True),
+        ("disk", verify.WARN, False),
+        ("disk", verify.OK, False),
+        ("updates", verify.FAIL, False),
+    ],
+    ids=[
+        "a failure held back",
+        "a warning",
+        "a pass",
+        "a failure of a check that is never more than a warning",
+    ],
+)
+def test_a_held_finding_is_one_of_fail_level_that_only_warns(name, level, is_held):
+    assert verify.Check(name, *verify.held(name, level, "found")).held is is_held
+
+
+@pytest.mark.parametrize(
+    ("checks", "line"),
+    [
+        (
+            [verify.Check("ruleset", True), verify.Check("guard_quiet", True, "moved", warn=True)],
+            "ok 1793026800 2\n",
+        ),
+        (
+            [
+                verify.Check("ruleset", True),
+                verify.Check("disk", *verify.held("disk", verify.FAIL, "read-only")),
+                verify.Check("clock_synced", *verify.held("clock_synced", verify.FAIL, "not synchronized")),
+            ],
+            "ok 1793026800 3 held disk clock_synced\n",
+        ),
+        (
+            [
+                verify.Check("services", False),
+                verify.Check("disk", *verify.held("disk", verify.FAIL, "read-only")),
+            ],
+            "fail 1793026800 services\n",
+        ),
+    ],
+    ids=["a plain warning is no news", "held findings are named after the count", "a failure is the news"],
+)
+def test_the_status_line_names_what_a_passing_run_holds_back(checks, line):
+    """(decision 92) Before, a run with a read-only disk and a clock that is not synchronized wrote
+    `ok <t> <n>`, and `tvgw status` said nothing needs your attention."""
+    assert verify.status_line(verify.Result(checks=checks, t=1793026800.4)) == line
+    verdict = status.parse(line)
+    assert verdict.held == [c.name for c in checks if c.held and line.startswith("ok")]
+    assert verdict.failed == [c.name for c in checks if not c.ok]
