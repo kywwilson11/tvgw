@@ -187,10 +187,11 @@ JOURNAL_CURSORS = ("oddport", "gate", "adport", "gate_inpath", "flowlog")
 # with the floor
 PCAPS_KEY = "forget_pcaps"
 NTP_SET = ("inet", "tvgw_ntp", "ntp4")  # the kernel's list of the TV's time servers (tvgw-apply)
+# why that list was not emptied when its count could not be kept first (`residue` prints it)
+UNREAD = "what it holds could not be read first: that needs root, and a gateway that counts NTP"
 # what a failing check may say of the TV's last reading: its time. The verify history is kept, the TV
 # is read only while it is on, and so a failure that named its reading's time was a mark of an hour of
 # use. Since design decision 90 no failure says it; rows stored before are rewritten without it
-UNREAD = "what it holds could not be read first: that needs root, and a gateway that counts NTP"
 READ_AT = re.compile(r" \(read [^)]*\)")
 
 # ---- the files, by name under the state and log directories ---------------------------------------
@@ -495,10 +496,14 @@ def run(
             out.steps.extend(plan_files(s, held, querylog))
             if not dry_run:
                 if conn is not None:
-                    holds = (listed or ntp_set_requests)()  # before the store: the record may lack them
-                    _forget_store(conn, s, (now or time.time)(), querylog, held, holds or 0, out)
+                    t, read = (now or time.time)(), listed or ntp_set_requests
+                    holds = _forget_store(conn, s, t, querylog, held, read, out)
                     named = True
+                    # at once, with only the commit since the list was read: a request the TV makes
+                    # between that read and this flush is lost to the count. Closing those milliseconds
+                    # would take a set swapped in one nft transaction
                     unflushed = UNREAD if holds is None else (flush or flush_ntp_set)()
+                    _compact(conn, s, out)
                 else:
                     unflushed = "there is no store to keep the count the clock port's guard reads"
                 _forget_files(s, out)
@@ -577,11 +582,19 @@ def doomed_pcaps(conn: sqlite3.Connection) -> frozenset[str]:
 
 
 def _forget_store(
-    conn: sqlite3.Connection, s, t: float, querylog: bool, live: set[str] | None, listed: int, out: Result
-) -> None:
+    conn: sqlite3.Connection,
+    s,
+    t: float,
+    querylog: bool,
+    live: set[str] | None,
+    read: Callable[[], int | None],
+    out: Result,
+) -> int | None:
     """Every forgotten table emptied with secure_delete on, in one transaction with the counters'
-    timeline, the floor, the cursor resets and the names of the capture files left open; then VACUUM
-    when the card has room for it, and an integrity check."""
+    timeline, the floor, the cursor resets, the names of the capture files left open and the count the
+    clock port's guard reads. That count is the record's or the kernel's list's (`read`), whichever
+    holds more, and the list is read last, so that what the TV asks while the rows go is counted.
+    Returns what the list held, None when that could not be told: the caller empties it only then."""
     # at the call: ports reads walls, which reads ingest, which reads this module
     from tvgw import autoblock, ports
 
@@ -591,7 +604,7 @@ def _forget_store(
         for table, (policy, _why) in TABLES.items():
             if policy == FORGET and _exists(conn, table):
                 conn.execute(f"DELETE FROM {table}")
-        ports.keep_ntp_seen(conn, t, listed)  # before its rows go: the one count the clock port's guard reads
+        recorded = ports.ntp_seen_recorded(conn, t)  # before its rows go
         for table, where, _why in ROWS_FORGET:  # (attention, ntp)
             if _exists(conn, table):
                 conn.execute(f"DELETE FROM {table} WHERE {where}")
@@ -618,9 +631,25 @@ def _forget_store(
             ).fetchall()
             conn.executemany(
                 "UPDATE verify SET failures = ? WHERE rowid = ?",
-                [(READ_AT.sub("", failures), rowid) for rowid, failures in stamped],
+                [(_without_reading_times(failures), rowid) for rowid, failures in stamped],
             )
         db.set_meta(conn, PCAPS_KEY, json.dumps(_open_pcaps(s.pcap_dir, live)))
+        holds = read()  # last: only the commit stands between this and the caller's flush
+        ports.keep_ntp_seen(conn, t, max(recorded, holds or 0))
+    return holds
+
+
+def _without_reading_times(failures: str) -> str:
+    """A `verify.failures` value, a JSON list of failures, with none saying when the TV was read. Each
+    failure is cleaned by itself, so that one cannot take words from the next."""
+    try:
+        return json.dumps([READ_AT.sub("", failure) for failure in json.loads(failures)])
+    except (ValueError, TypeError):  # not the list verify writes: cleaned as text
+        return READ_AT.sub("", failures)
+
+
+def _compact(conn: sqlite3.Connection, s, out: Result) -> None:
+    """After the forget is committed: VACUUM when the card has room for it, and an integrity check."""
     size = _size(s.db_path)
     try:
         st = os.statvfs(os.path.dirname(os.path.abspath(s.db_path)))

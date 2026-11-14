@@ -131,17 +131,18 @@ def ntp_seen_kept(conn: sqlite3.Connection, now: float) -> int:
         return 0
 
 
-def keep_ntp_seen(conn: sqlite3.Connection, floor: float, listed: int = 0) -> None:
-    """Before `tvgw forget` deletes the NTP count at `floor`: keep, as one number, the requests the record
-    holds from READY_DAYS before it on, or those the kernel's list holds (`listed`) where that is more,
-    with what an earlier forget still vouches for. The record is read to its newest snapshot, wherever
-    the clock stands now; and a request made since that snapshot is in the kernel's list alone. The
+def ntp_seen_recorded(conn: sqlite3.Connection, floor: float) -> int:
+    """The NTP requests the record holds from READY_DAYS before `floor` on, read to its newest snapshot
+    wherever the clock stands now: what `tvgw forget` reads before it deletes them."""
+    return queries.ntp_servers(conn, floor - READY_DAYS * 86400)["requests"]
+
+
+def keep_ntp_seen(conn: sqlite3.Connection, floor: float, seen: int) -> None:
+    """When `tvgw forget` deletes the NTP count at `floor`: keep, as one number, the requests `seen` (the
+    record's, `ntp_seen_recorded`, or the kernel's list's where that holds more: a request made since
+    the newest snapshot is in the list alone), with what an earlier forget still vouches for. The
     caller commits."""
-    try:
-        seen = queries.ntp_servers(conn, floor - READY_DAYS * 86400)["requests"]
-    except sqlite3.OperationalError:  # a store that holds no counters yet
-        seen = 0
-    seen = max(seen, listed) + ntp_seen_kept(conn, floor)
+    seen += ntp_seen_kept(conn, floor)
     if seen:
         db.set_meta(conn, NTP_KEPT, json.dumps({"requests": seen, "until": floor + READY_DAYS * 86400}))
     else:

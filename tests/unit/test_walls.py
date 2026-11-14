@@ -143,21 +143,34 @@ def test_the_count_runs_from_the_newest_snapshot_before_the_window_through_a_rel
     assert start == WINDOW_START - 400 and counts == {QUIC: 4 + 2 + 3}
 
 
-def test_after_a_forget_inside_the_window_the_count_starts_at_the_totals_it_left(store):
+FORGOTTEN = WINDOW_START + 600
+
+
+@pytest.mark.parametrize(
+    ("floor", "counted"),
+    [
+        (None, ({}, None)),
+        (FORGOTTEN, ({QUIC: 4 + 6}, FORGOTTEN)),
+        (WINDOW_START - 3 * 3600, ({}, None)),
+        (NOW + 600, ({}, None)),
+    ],
+    ids=["never forgotten", "forgotten in the window", "three hours before it", "after its end"],
+)
+def test_after_a_forget_inside_the_window_the_count_starts_at_the_totals_it_left(store, floor, counted):
     """`tvgw forget` leaves one total of each series at its own time and nothing before it (design
     decision 90). A window that began before the forget has no snapshot to start from: it starts at
-    those totals, and counts what a store never forgotten counts from then."""
-    forgotten = WINDOW_START + 600
-    snap(store, forgotten, quic=100)
-    snap(store, forgotten + 600, quic=104)
-    assert walls.window_counts(store, WINDOW_START, NOW, reading({QUIC: 110})) == ({}, None)
-    for floor, counted in (
-        (forgotten, ({QUIC: 4 + 6}, forgotten)),
-        (WINDOW_START, ({}, None)),
-        (NOW + 1, ({}, None)),
+    those totals, and counts what a store never forgotten counts from then. A forget outside the window
+    is no start for it, though the store holds a snapshot at each of these times."""
+    for t, quic in (
+        (WINDOW_START - 3 * 3600, 90),
+        (FORGOTTEN, 100),
+        (FORGOTTEN + 600, 104),
+        (NOW + 600, 120),
     ):
-        db.set_meta(store, forget.FLOOR_KEY, repr(floor))  # in the window; at its start; after its end
-        assert walls.window_counts(store, WINDOW_START, NOW, reading({QUIC: 110})) == counted
+        snap(store, t, quic=quic)
+    if floor is not None:
+        db.set_meta(store, forget.FLOOR_KEY, repr(floor))
+    assert walls.window_counts(store, WINDOW_START, NOW, reading({QUIC: 110})) == counted
 
 
 def test_without_a_snapshot_the_count_starts_at_the_last_apply_and_without_either_there_is_none(store):

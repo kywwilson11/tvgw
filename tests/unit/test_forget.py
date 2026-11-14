@@ -853,6 +853,56 @@ def test_the_count_kept_is_the_larger_of_the_records_and_the_kernels(evenings, l
     assert at_the_flush == [kept]
 
 
+def test_the_list_is_read_as_the_store_work_ends_and_emptied_before_the_store_is_compacted(
+    evenings, monkeypatch
+):
+    """A request the TV makes while forget works on the store must be in the count. So the list is read
+    last, after every row has gone and before the commit; it is emptied as soon as that commit holds
+    the count; and the slow part, VACUUM and the integrity check, comes after. Before, the list was read
+    first and emptied last, with all of that between."""
+    s, _day0, _watched = evenings
+    connect, said, at = db.connect, [], {}
+
+    def traced(*args, **kwargs):
+        conn = connect(*args, **kwargs)
+        conn.set_trace_callback(said.append)
+        return conn
+
+    monkeypatch.setattr(forget.db, "connect", traced)
+    forget.run(
+        s,
+        live=live(s),
+        lock=False,
+        now=lambda: NOW,
+        listed=lambda: at.setdefault("the read", list(said)) and 500,
+        flush=lambda: at.setdefault("the flush", list(said)) and None,
+    )
+
+    def done(when: str, statement: str) -> bool:
+        return any(sql.startswith(statement) for sql in at[when])
+
+    assert done("the read", "DELETE FROM fw_counters") and not done("the read", "COMMIT")
+    assert done("the flush", "COMMIT") and not done("the flush", "VACUUM")
+    assert any(sql.startswith("VACUUM") for sql in said)
+
+
+def test_a_store_that_fails_after_the_list_was_read_keeps_its_rows_and_the_list(evenings, monkeypatch):
+    s, _day0, _watched = evenings
+
+    def full(conn, floor, seen):
+        raise sqlite3.OperationalError("database or disk is full")
+
+    monkeypatch.setattr(ports, "keep_ntp_seen", full)
+    conn = db.connect(s.db_path, readonly=True)
+    before = conn.execute("SELECT COUNT(*) FROM dns").fetchone()[0]
+    conn.close()
+    with pytest.raises(sqlite3.OperationalError, match="full"):
+        forget.run(s, live=live(s), lock=False, now=lambda: NOW, flush=lambda: pytest.fail("emptied"))
+    conn = db.connect(s.db_path, readonly=True)
+    assert conn.execute("SELECT COUNT(*) FROM dns").fetchone()[0] == before > 0
+    conn.close()
+
+
 def test_a_list_that_cannot_be_read_is_left_alone_and_said_so(evenings, kernel_untouched):
     s, _day0, _watched = evenings
     r = forget.run(s, live=live(s), lock=False, now=lambda: NOW, listed=lambda: None)
@@ -880,6 +930,18 @@ def test_with_no_store_there_is_nowhere_to_keep_the_count_so_the_list_is_left(ga
     assert asked == [] and kernel_untouched == []
     assert any("there is no store to keep the count" in line for line in r.residue)
     assert any("with no store yet there is nowhere to note them" in line for line in r.residue)
+
+
+@pytest.mark.parametrize(
+    ("named", "open_files", "said"),
+    [(False, {"open.pcap"}, True), (False, None, True), (False, set(), False), (True, {"open.pcap"}, False)],
+    ids=["a file open", "it cannot be told", "no capture running", "noted in the store"],
+)
+def test_the_capture_is_residue_only_when_a_file_may_be_open_and_nothing_could_note_it(
+    tree, named, open_files, said
+):
+    lines = forget.residue(tree, live=open_files, named=named)
+    assert any("nowhere to note them for deletion" in line for line in lines) == said
 
 
 def nft_listing(*servers: tuple[str, int | None]) -> str:
@@ -1001,6 +1063,21 @@ def test_a_stored_failure_that_named_its_readings_time_is_rewritten_without_it(t
     ]
     conn.close()
     assert stored == [["tv_paths: second path: Wi-Fi connected", "other: as it was"], ["other: as it was"]]
+
+
+@pytest.mark.parametrize(
+    ("was", "cleaned"),
+    [
+        (["a: (as) it (read 15:20) was", "b (read 15:30) c (read 15:40) d"], ["a: (as) it was", "b c d"]),
+        (["a: (read with no end", 'b: (x) and "y"'], ["a: (read with no end", 'b: (x) and "y"']),
+        ("not a list (read 15:20) of failures", "not a list of failures"),
+    ],
+    ids=["each reading time, and no other bracket", "one failure takes no words from the next", "text"],
+)
+def test_reading_times_are_taken_out_of_each_failure_by_itself(was, cleaned):
+    stored = was if isinstance(was, str) else json.dumps(was)
+    got = forget._without_reading_times(stored)
+    assert (got if isinstance(was, str) else json.loads(got)) == cleaned
 
 
 # ---- the names of the capture files left open ------------------------------------------------------------
