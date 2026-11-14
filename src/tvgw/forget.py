@@ -76,7 +76,11 @@ TABLES: dict[str, tuple[str, str]] = {
     "auto_queue": (FORGET, "(autonomy) blocks waiting their turn: names the analyst was shown"),
     "changes": (FORGET, "(ledger) the change ledger: TV link edges and consent flips say when it was used"),
     "gw_samples": (FORGET, "(ledger) ten-minute samples with the TV port's byte counters"),
-    "judge_shadow": (FORGET, "(ledger) judge v2's verdict per hour, with the hour's TV class"),
+    "judge_shadow": (
+        FORGET,
+        "(ledger) judge v2's verdict per hour, with the hour's TV class; (exposure) the kernel's, with the"
+        " apps in front when the rule's name was used",
+    ),
     # research pass 4 (schema 11)
     "gate_inpath": (FORGET, "(inpath) connections to addresses the in-path gate set did not hold"),
     # research pass 5 (schema 15)

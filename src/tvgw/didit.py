@@ -40,8 +40,9 @@ the command that says why.
 
 `since()` is the probation hook. A wall that has begun to refuse asks it "did anything break since T?" and
 gets BROKE (failed starts and their likely causes), CLEAN (apps started, their bytes are in and show them
-working, the record of lookups reaches past them, and none failed) or UNKNOWN (anything less, starts still
-settling among it). UNKNOWN is never CLEAN.
+working, (exposure) one of them at least with the wall's own refusals in its minutes, the record of lookups
+reaches past them, and none failed) or UNKNOWN (anything less, starts still settling among it). UNKNOWN is
+never CLEAN.
 
 What is minute-level stays out of persisted reports: `summary()` is counts only, and every line that names
 an app, a time or a refused name is for an interactive run (design decision 67).
@@ -57,7 +58,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from tvgw import appfront, companies, names, plain, queries, receipt, refused
+from tvgw import appfront, companies, names, plain, queries, receipt, refused, rulestats
 from tvgw.appfront import APP, HOME, HOURLY, LIVE, Conn, Event, Session, Timeline
 from tvgw.profile import HARMLESS_QTYPES, Profile
 
@@ -245,13 +246,15 @@ class FailedStart:
 
 
 # ---- reading the record -----------------------------------------------------------------------------------
-def refusals(conn: sqlite3.Connection, a: float, b: float) -> list[Refusal]:
+def refusals(conn: sqlite3.Connection, a: float, b: float, rule: str | None = None) -> list[Refusal]:
     """The TV's refused lookups of internet names in [a, b), from the store: record types the TV goes
-    without (`profile.HARMLESS_QTYPES`) left out, as `tvgw refused` leaves them out."""
+    without (`profile.HARMLESS_QTYPES`) left out, as `tvgw refused` leaves them out. (exposure) With a
+    `rule`, only that rule's own, among AdGuard's custom rules as `autoblock.exposed_hours` reads them."""
+    own = f" AND rule = ? AND {rulestats.CUSTOM}" if rule is not None else ""
     rows = conn.execute(
-        "SELECT t, qname, rule FROM dns WHERE t >= ? AND t < ? AND blocked = 1"
+        f"SELECT t, qname, rule FROM dns WHERE t >= ? AND t < ? AND blocked = 1{own}"
         f" AND COALESCE(qtype, '') NOT IN ({', '.join('?' * len(_HARMLESS))}) ORDER BY t",
-        (a, b, *_HARMLESS),
+        (a, b, *((rule,) if rule is not None else ()), *_HARMLESS),
     ).fetchall()
     return [Refusal(t, names.normalize(q), rule) for t, q, rule in rows if names.is_public_name(q)]
 
@@ -397,21 +400,29 @@ def episodes(
     return sorted(out, key=lambda e: (e.start, e.app)), waiting
 
 
-def worked(tl: Timeline, conns: Iterable[Conn], a: float, b: float, now: float) -> int:
+def worked(tl: Timeline, conns: Iterable[Conn], a: float, b: float, now: float) -> list[Session]:
     """App starts in [a, b) whose settled bytes show them working: a start the TV reported that stayed in
     front SHORT or longer and brought at least LITTLE_DOWN down; an hourly session awake and not idle that
     brought at least HOURLY_LITTLE_DOWN down. Time in front alone proves nothing."""
     down = _downs(tl, conns)
-    n = 0
+    out = []
     for s in tl.sessions:
         if s.kind != APP or not a <= s.start < b or now - s.end < receipt.SETTLE:
             continue
         got = down.get(id(s), 0)
         if s.timed == LIVE and s.began == "app" and s.start_exact:
-            n += s.seconds >= SHORT and got >= LITTLE_DOWN
-        elif s.timed == HOURLY and not s.idle:
-            n += got >= HOURLY_LITTLE_DOWN
-    return n
+            ok = s.seconds >= SHORT and got >= LITTLE_DOWN
+        else:
+            ok = s.timed == HOURLY and not s.idle and got >= HOURLY_LITTLE_DOWN
+        if ok:
+            out.append(s)
+    return out
+
+
+def _minutes(s: Session) -> tuple[float, float]:
+    """(exposure) Where a refusal counts as in a start's minutes, as `FailedStart.window` has it: SLACK
+    either side of a live stay, the time between the two readings of an hourly one."""
+    return (s.start, s.end) if s.timed == HOURLY else (s.start - SLACK, s.end + SLACK)
 
 
 def find(
@@ -428,7 +439,8 @@ def find(
     """The failed starts that began in [a, b), each with the names refused in its minutes, ranked; only
     those of an `eligible` app that FailedStart.reported keeps. `ev` is the apps' pictures (`evidence()`
     when not given); `extra` adds refusals the store does not hold (the minutes the hourly ingest has not
-    loaded yet, another reader's refusals)."""
+    loaded yet, another reader's refusals). (exposure) A row of `extra` the store holds already, as a
+    machine rule's own refusals are, counts once."""
     conns = list(conns)
     candidates, _pending = episodes(tl, conns, a, b, now)
     if not candidates:
@@ -440,7 +452,9 @@ def find(
         if not eligible(e.app, ev, e.start):
             continue
         lo, hi = e.window
-        rows = refusals(conn, lo, hi) + [r for r in extra if lo <= r.t < hi]
+        rows = refusals(conn, lo, hi)
+        held = set(rows)
+        rows += [r for r in extra if lo <= r.t < hi and r not in held]
         e.causes = judge(conn, profile, rows, lo, e.app, ev)
         if e.reported:
             out.append(e)
@@ -470,6 +484,11 @@ class Verdict:
     pending: int  # app starts since then whose bytes have not settled: judged at a later ask
     covered_until: float | None  # the newest lookup the record holds: a refusal after it is not seen
     why: str  # one plain sentence
+    # (exposure) the apps with a start that worked, the apps the gateway has a picture of (whose starts it
+    # can judge), and the worked starts with one of the caller's own refusals (`extra`) in their minutes
+    apps_worked: list[str] = field(default_factory=list)
+    apps_known: list[str] = field(default_factory=list)
+    exposed: int = 0
 
     @property
     def causes(self) -> list[Cause]:
@@ -491,6 +510,9 @@ class Verdict:
             "covered_until": self.covered_until,
             "why": self.why,
             "causes": [c.as_dict() for c in self.causes],
+            "apps_worked": self.apps_worked,
+            "apps_known": self.apps_known,
+            "exposed": self.exposed,
         }
 
 
@@ -510,16 +532,18 @@ def since(
     It reads the store: the live record, the hourly readings, the connections, the refused lookups since
     `t`, and the apps' pictures. The hourly ingest loads them up to an hour late, so a caller that must
     answer sooner passes the live reading's own lines (`events`, `appfront.read_events()` of
-    `tvlive-events.log`, with `known_until` the time that file was last written) and the refusals the store
-    does not hold yet (`extra`: AdGuard's query log through `adguard.records_since()`, or a wall's own
-    refusals as Refusal rows with their own `source` and `seen_before`).
+    `tvlive-events.log`, with `known_until` the time that file was last written) and its own refusals
+    (`extra`: a machine rule's from the store or AdGuard's query log through `adguard.records_since()`,
+    or a wall's as Refusal rows with their own `source` and `seen_before`).
 
     BROKE: at least one failed start since `t` (FailedStart.reported); `causes` ranks their likely causes,
     and a caller undoes only what it can tie to its own refusals. CLEAN only when none failed, none is
     still settling (conntrack logs a connection when it lets it go, up to `receipt.SETTLE` later), at
-    least one app start's settled bytes show it working (`worked()`), and the record of lookups reaches
-    past the end of the last app stay since `t`. UNKNOWN otherwise, which says nothing either way.
-    sqlite3.Error is the caller's."""
+    least one app start's settled bytes show it working (`worked()`) with one of the caller's own
+    refusals in its minutes (`exposed`: an evening spent in an app the refusals never touched says
+    nothing of them, design decision 99), and the record of lookups reaches past the end of the last app
+    stay since `t`. UNKNOWN otherwise, which says nothing either way. `apps_worked` beside `apps_known`
+    says how much of what the TV runs the span showed working. sqlite3.Error is the caller's."""
     now = time.time() if now is None else now
     back = t - LIVE_LOOKBACK
     evs = appfront.stored_events(conn, back, now) + list(events)
@@ -531,9 +555,13 @@ def since(
     failed = find(conn, profile, tl, conns, t, now, now, ev=ev, extra=extra) if candidates else []
     pending = sum(1 for p in waiting if eligible(p.app, ev, p.start))
     good = worked(tl, conns, t, now, now)
+    exposed = sum(1 for lo, hi in map(_minutes, good) if any(lo <= r.t < hi for r in extra))
+    apps_worked = sorted({s.app for s in good})
+    apps_known = sorted(app for app in ev.seen if eligible(app, ev, t))
     newest = conn.execute("SELECT MAX(t) FROM dns WHERE t < ?", (now,)).fetchone()[0]
     covered = max([x for x in (newest, *(r.t for r in extra if r.t < now)) if x is not None], default=None)
-    stays = [s.end for s in tl.sessions if s.kind == APP and t <= s.start < now]
+    opened = [s for s in tl.sessions if s.kind == APP and t <= s.start < now]
+    stays = [s.end for s in opened]
     at = datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M")
     if failed:
         n = len(failed)
@@ -548,11 +576,27 @@ def since(
     elif stays and covered < max(stays):
         when = datetime.fromtimestamp(covered).strftime("%H:%M")
         state, why = UNKNOWN, f"the record of lookups reaches only {when}, before the last app stay ended"
+    elif exposed:
+        state, why = CLEAN, apps_words({s.app for s in opened}, apps_worked, apps_known, at)
     elif good:
-        state, why = CLEAN, f"{good} app start{'s' if good > 1 else ''} worked since {at}, and none failed"
+        n = len(good)
+        state, why = (
+            UNKNOWN,
+            f"{n} app start{'s' if n > 1 else ''} worked since {at}, but none met its refusals",
+        )
     else:
         state, why = UNKNOWN, f"no app start since {at} shows apps working"
-    return Verdict(state, t, now, failed, good, pending, covered, why)
+    return Verdict(state, t, now, failed, len(good), pending, covered, why, apps_worked, apps_known, exposed)
+
+
+def apps_words(opened: set[str], worked_: list[str], known: list[str], at: str) -> str:
+    """(exposure) `2 of 6 apps opened since <at>, and both worked`: the apps a CLEAN span showed working,
+    of those the gateway knows (with a picture, or opened in the span)."""
+    n, m, k = len(opened), len(opened | set(known)), len(worked_)
+    head = f"{n} of {m} app{'s' if m > 1 else ''} opened since {at}"
+    if k < n:
+        return f"{head}; {k} worked, and none failed"
+    return f"{head}, and {'it' if n == 1 else 'both' if n == 2 else f'all {n}'} worked"
 
 
 # ---- the words ------------------------------------------------------------------------------------------

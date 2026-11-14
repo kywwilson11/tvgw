@@ -44,7 +44,7 @@ import statistics
 import time
 from collections.abc import Callable, Iterator
 
-from tvgw import durable, localrules, minimize, queries
+from tvgw import durable, localrules, minimize, queries, rulestats
 from tvgw.names import PUBLIC_SUFFIXES, is_public_name, normalize
 from tvgw.profile import Profile, rule_target
 
@@ -883,11 +883,16 @@ def streaming_rate(conn: sqlite3.Connection, prof: Profile, a: float, b: float) 
     return (down / hours if hours else 0.0), float(hours)
 
 
-def demand_hours(conn: sqlite3.Connection, prof: Profile, a: float, b: float) -> set[int]:
+def demand_hours(
+    conn: sqlite3.Connection, prof: Profile, a: float, b: float, unread: bool = False
+) -> set[int]:
     """The clock hours (epoch hour numbers) in [a, b) in which the TV was awake and someone could
     have been streaming: a reading with a streaming app in front, or an expected-category connection
     opened in the hour. An hour on an input (HDMI), at the launcher or with the TV off has no
-    streaming bytes by construction; judging a rule on it blames the rule for the household's evening."""
+    streaming bytes by construction; judging a rule on it blames the rule for the household's evening.
+    (exposure) `unread`, for a TV no reader reads: an hour in which it opened an expected-category
+    connection was an hour it was awake, since it has no reading to say so. Only the kernel's shadow
+    verdict passes it, so the shipped judge's hours are as they were (design decision 99)."""
     awake_hours: set[int] = set()
     app_hours: set[int] = set()
     for t, app in conn.execute(
@@ -897,7 +902,7 @@ def demand_hours(conn: sqlite3.Connection, prof: Profile, a: float, b: float) ->
         awake_hours.add(int(t // 3600))
         if demand_app(app):
             app_hours.add(int(t // 3600))
-    if not awake_hours:
+    if not awake_hours and not unread:
         return set()
     cats = tuple(prof.expected_categories) or ("Streaming",)
     marks = ",".join("?" * len(cats))
@@ -911,29 +916,51 @@ def demand_hours(conn: sqlite3.Connection, prof: Profile, a: float, b: float) ->
             (a, b, *cats),
         )
     }
+    if unread:
+        awake_hours |= start_hours
     return awake_hours & (app_hours | start_hours)
 
 
-def demand_rate(conn: sqlite3.Connection, prof: Profile, a: float, b: float) -> tuple[float, int]:
+def exposed_hours(conn: sqlite3.Connection, row: dict, a: float, b: float) -> set[int]:
+    """(exposure) The clock hours (epoch hour numbers) in [a, b) in which the trial's rule itself
+    refused a lookup: a refused row of `dns` whose `rule` is the rule's text, among AdGuard's custom
+    rules (`rulestats.CUSTOM`), where the machine's rules are. A downloaded list's line of the same text
+    is not the rule, and a name another rule refused first is not its doing: an hour without one of its
+    refusals is an hour the rule did nothing in, whatever the volume did (design decision 99)."""
+    return {
+        int(h)
+        for (h,) in conn.execute(
+            "SELECT DISTINCT CAST(t / 3600 AS INTEGER) FROM dns WHERE t >= ? AND t < ? AND blocked = 1"
+            f" AND rule = ? AND {rulestats.CUSTOM}",
+            (a, b, row["rule"]),
+        )
+    }
+
+
+def demand_rate(
+    conn: sqlite3.Connection, prof: Profile, a: float, b: float, unread: bool = False
+) -> tuple[float, int]:
     """(bytes down in the expected categories per TV hour with demand, those hours) over [a, b): the
-    judge's measure on both sides of a block, so an HDMI evening dilutes neither."""
-    hours = demand_hours(conn, prof, a, b)
+    judge's measure on both sides of a block, so an HDMI evening dilutes neither. `unread` as for
+    `demand_hours`."""
+    hours = demand_hours(conn, prof, a, b, unread)
     if not hours:
         return 0.0, 0
     return _expected_down(conn, prof, a, b) / len(hours), len(hours)
 
 
 def low_run(
-    conn: sqlite3.Connection, prof: Profile, added: float, now: float, before: float
+    conn: sqlite3.Connection, prof: Profile, added: float, now: float, before: float, unread: bool = False
 ) -> list[tuple[int, float]] | None:
     """LOW_HOURS_TO_REVERT consecutive full hours after the block, among the last LOW_RUN_LOOKBACK,
     each with demand and each under HOURLY_COLLAPSE of `before`: [(hour, share of before), ...], or
-    None. Never the minimum of n hours: one innocent low hour is common, a run of them is not."""
+    None. Never the minimum of n hours: one innocent low hour is common, a run of them is not. `unread`
+    as for `demand_hours`."""
     last = int(now // 3600) - 1  # the last full hour
     first = max(-(-int(added) // 3600), last - LOW_RUN_LOOKBACK + 1)  # the first hour wholly after
     if last - first + 1 < LOW_HOURS_TO_REVERT:
         return None
-    demand = demand_hours(conn, prof, first * 3600, (last + 1) * 3600)
+    demand = demand_hours(conn, prof, first * 3600, (last + 1) * 3600, unread)
     run: list[tuple[int, float]] = []
     for h in range(first, last + 1):
         share = None

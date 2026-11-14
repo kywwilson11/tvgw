@@ -50,7 +50,9 @@ import sqlite3
 # 17: (attention) research pass 5: attention, the attention count's samples, each a
 #    connection the TV opened outside its essentials while its screen saver was on or an input was in front
 #    (design decision 69); kept TV_EVENTS_DAYS, as tv_events is
-SCHEMA_VERSION = 17
+# 18: (exposure) judge_shadow.kernel, the exposure-gated verdict beside the two judges', as JSON
+#    (design decision 99)
+SCHEMA_VERSION = 18
 # (reliability) EXTRA, not FULL. With a rollback journal FULL makes a commit atomic but not durable: the
 # journal's unlink, which is the commit, can still be lost to a power cut, and the next open then rolls the
 # committed transaction back. EXTRA fsyncs the directory after the unlink, one more fsync per commit
@@ -162,7 +164,8 @@ CREATE TABLE IF NOT EXISTS gw_samples(t REAL PRIMARY KEY, boot_id TEXT, tv_cc IN
   io_errors_store INTEGER, usb_resets INTEGER);
 CREATE TABLE IF NOT EXISTS judge_shadow(t REAL NOT NULL, rule TEXT NOT NULL, added_t REAL NOT NULL,
   hour REAL NOT NULL, hour_class TEXT, v1 TEXT, v1_reason TEXT, v2 TEXT NOT NULL, v2_reason TEXT,
-  clean_hours INTEGER, k INTEGER, final INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(rule, added_t, hour));
+  clean_hours INTEGER, k INTEGER, final INTEGER NOT NULL DEFAULT 0, kernel TEXT,
+  PRIMARY KEY(rule, added_t, hour));
 CREATE INDEX IF NOT EXISTS judge_shadow_t ON judge_shadow(t);
 -- (threats) schema 16: one row per local day, name and list (tif or nrd) of the TV's names a downloaded
 -- list covers, with the entry that matched, the list's label, copy day and newly-registered band, the
@@ -303,6 +306,7 @@ ADDED_COLUMNS = (
     ("gw_samples", "io_errors", "INTEGER"),
     ("gw_samples", "io_errors_store", "INTEGER"),
     ("gw_samples", "usb_resets", "INTEGER"),
+    ("judge_shadow", "kernel", "TEXT"),  # (exposure) schema 18: the exposure-gated verdict, as JSON
 )
 # indexes on columns ADDED_COLUMNS may have just added: created after them, or an old store's open
 # would fail on a column it does not have yet

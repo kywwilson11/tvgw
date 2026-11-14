@@ -378,14 +378,79 @@ def test_since_says_clean_only_when_settled_bytes_show_an_app_working_and_the_re
     events = opened(T - 600, (NF, T, 1800))
     store.talk(T + 5, "nflxvideo.net", down_=300 * 1024 * 1024)
     store.lookup(T + 1, "nflxvideo.net")
-    v = didit.since(store.conn, lg, T - 60, LATER, gw_ip=GW, events=events)
-    assert v.state == "unknown" and "reaches only 20:14, before the last app stay ended" in v.why
+    own = [didit.Refusal(T + 900, "api.example.net", "probation", "firewall", seen_before=True)]
+    v = didit.since(store.conn, lg, T - 60, LATER, gw_ip=GW, events=events, extra=own)
+    assert v.state == "unknown" and "reaches only 20:29, before the last app stay ended" in v.why
     store.lookup(T + 1900, "nflxvideo.net")  # the record of lookups now reaches past the stay
-    v = didit.since(store.conn, lg, T - 60, LATER, gw_ip=GW, events=events)
-    assert (v.state, v.worked, v.failed, v.pending) == ("clean", 1, [], 0)
-    assert v.why.startswith("1 app start worked since ")
-    early = didit.since(store.conn, lg, T - 60, T + 2000, gw_ip=GW, events=events)
+    v = didit.since(store.conn, lg, T - 60, LATER, gw_ip=GW, events=events, extra=own)
+    assert (v.state, v.worked, v.failed, v.pending, v.exposed) == ("clean", 1, [], 0, 1)
+    assert v.why == "1 of 2 apps opened since 2026-10-29 20:13, and it worked"
+    early = didit.since(store.conn, lg, T - 60, T + 2000, gw_ip=GW, events=events, extra=own)
     assert (early.state, early.worked) == ("unknown", 0)  # its bytes not settled: nothing shows it working
+
+
+def test_an_evening_the_walls_refusals_never_touched_is_never_clean(store, lg):
+    """(exposure) A start that worked says nothing of a wall whose refusals came at another time: before,
+    one worked start anywhere made the span CLEAN, whatever the other apps would have done (L2-16)."""
+    stored(store, opened(T - 600, (NF, T, 1800), (YT, T + 2000, 1800), (NEW_APP, T + 4000, 100)))
+    store.talk(T + 5, "nflxvideo.net", down_=300 * 1024 * 1024)
+    store.talk(T + 2005, "googlevideo.com", down_=300 * 1024 * 1024)
+    store.talk(T + 4005, "peacocktv.com", down_=9_000)  # an app seen today only: not one it knows yet
+    store.lookup(T + 4200, "lgtvonline.lge.com")
+    v = didit.since(store.conn, lg, T - 60, LATER, gw_ip=GW)
+    assert (v.state, v.worked, v.exposed) == ("unknown", 2, 0)
+    assert v.why == "2 app starts worked since 2026-10-29 20:13, but none met its refusals"
+    after = [didit.Refusal(T + 3800 + didit.SLACK, "api.example.net", "probation", "firewall")]
+    assert didit.since(store.conn, lg, T - 60, LATER, gw_ip=GW, extra=after).exposed == 0
+    own = [didit.Refusal(T + 3800 + didit.SLACK - 1, "api.example.net", "probation", "firewall")]
+    v = didit.since(store.conn, lg, T - 60, LATER, gw_ip=GW, extra=own)
+    assert (v.state, v.exposed, v.apps_worked, v.apps_known) == ("clean", 1, [NF, YT], [NF, YT])
+    assert v.why == "3 of 3 apps opened since 2026-10-29 20:13; 2 worked, and none failed"
+    assert v.as_dict()["exposed"] == 1
+
+
+def test_an_hourly_start_that_worked_meets_the_refusals_between_its_two_readings(store, lg):
+    readings(store)
+    store.talk(T + 600, "nflxvideo.net", down_=50 * 1024 * 1024)
+    store.lookup(T + 3700, "lgtvonline.lge.com")
+    for at, exposed in ((T - 3, 0), (T + 900, 1)):  # the readings' times are its minutes, with no slack
+        own = [didit.Refusal(at, "api.example.net", "probation", "firewall")]
+        v = didit.since(store.conn, lg, T - 60, LATER, gw_ip=GW, extra=own)
+        assert (v.worked, v.exposed, v.state) == (1, exposed, "clean" if exposed else "unknown")
+
+
+@pytest.mark.parametrize(
+    ("opened_", "worked_", "known", "words"),
+    [
+        ({NF}, [NF], [NF, YT, NEW_APP], "1 of 3 apps opened since 20:13, and it worked"),
+        ({NF, YT, NEW_APP}, [NF, YT, NEW_APP], [NF], "3 of 3 apps opened since 20:13, and all 3 worked"),
+        ({NF, YT}, [YT], [], "2 of 2 apps opened since 20:13; 1 worked, and none failed"),
+        ({NF, YT}, [NF, YT], [NF], "2 of 2 apps opened since 20:13, and both worked"),
+        ({NF}, [NF], [], "1 of 1 app opened since 20:13, and it worked"),
+    ],
+)
+def test_the_words_say_how_much_of_what_the_tv_runs_was_seen_working(opened_, worked_, known, words):
+    assert didit.apps_words(opened_, worked_, known, "20:13") == words
+
+
+def test_a_rules_own_refusals_are_its_rows_among_the_custom_rules_alone(store):
+    """A downloaded list's line of the same text (filter 3) is not the machine's rule; a custom rule's row
+    written before AdGuard logged filter ids (NULL) is."""
+    rows = [(T + 1, "||a.example^", 0), (T + 2, "||a.example^", None), (T + 3, "||a.example^", 3)]
+    rows.append((T + 4, "||b.example^", 0))
+    store.conn.executemany(
+        "INSERT INTO dns(t, qname, qtype, blocked, rule, filter_id) VALUES (?, 'a.example', 'A', 1, ?, ?)",
+        rows,
+    )
+    assert [r.t for r in didit.refusals(store.conn, T, T + 60, "||a.example^")] == [T + 1, T + 2]
+    assert len(didit.refusals(store.conn, T, T + 60)) == 4
+
+
+def test_a_refusal_the_store_holds_and_the_caller_passes_again_counts_once(store, lg):
+    store.lookup(T + 2, "api.example.net", blocked=1)
+    (again,) = didit.refusals(store.conn, T, T + 60)
+    (f,) = found(store, lg, opened(T - 600, (NF, T, 15)), extra=[again, again])
+    assert [(c.name, c.lookups) for c in f.causes] == [("api.example.net", 1)]
 
 
 def test_time_in_front_alone_does_not_show_an_app_working(store, lg):
