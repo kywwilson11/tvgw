@@ -24,32 +24,38 @@ Refused names only: a name the filter answers is kept by the TV for as long as t
 lookups are no clock, and general names the database also files under advertising (a search engine's, a
 social network's) are answered and so never count.
 
-**A timer keeps a steady beat and comes alone.** Some firms' names are asked whatever is on the screen,
-by an app's own measurement or by the TV. Such a name is told from an ad's by two things together. Its
-gaps are alike: within each of its runs, STEADY_SHARE of the time lies in gaps no longer than STEADY
-times the run's usual one, where an ad's name has a minute's gaps inside a break and many minutes
-between breaks. And it comes alone: under ALONE of its lookups have NEED - 1 other firms refused within
-WINDOW seconds, where an ad's name is refused with the other firms of the ad. Neither alone will do:
-breaks that come at an even spacing make a name asked once a break look steady, and a firm that few ads
-call is often alone. Counting the five-minute bins a name is in, the first rule tried, cannot tell a
-timer from the firms of a service that breaks every few minutes.
+**No break lasts ten minutes,** and two things follow from it.
 
-**No break lasts ten minutes.** The timer test has an edge it cannot see past: enough names on timers
-(about a dozen in the tests) fall within WINDOW of one another by chance so often that none is alone,
-and then they open and carry on "breaks" for as long as the TV is on. A narrower window would cure
-that and lose the ads that call only three firms, whose names are refused seconds apart once the TV
-holds some of them. So a stretch that runs past LONG_BREAK is not counted as a break: the report sets
-it aside and says so, which is also what happens to a break carried on by one fast name that is not
-yet known for a timer (under TIMER_SPAN of it).
+A name asked without a pause for longer than that is asked on a timer, whatever is on the screen, by an
+app's own measurement or by the TV. It is known when over UNBROKEN_SHARE of its lookups come in such
+stretches: no gap over UNBROKEN for more than LONG_BREAK. Most of its lookups, because one freak of a
+break that long must not make timers of an ad's firms for the whole window. Such a name is no label,
+and it is no other name's company either. This is the test that knows the fast timers, the ones on a
+beat of about a minute, however many there are and whoever else is refused beside them.
+
+And a stretch of labels that runs past LONG_BREAK is not counted as a break. The report sets it aside
+and says so.
+
+**A slower timer keeps a steady beat and comes alone.** A name asked every few minutes pauses as long
+as an ad's name does between two breaks, so it is told by two other things together. Its gaps are
+alike: within each of its runs, STEADY_SHARE of the time lies in gaps no longer than STEADY times the
+run's usual one, where an ad's name has a minute's gaps inside a break and many minutes between breaks.
+And it comes alone: under ALONE of its lookups have NEED - 1 other firms refused within WINDOW seconds,
+where an ad's name is refused with the other firms of the ad. Neither alone will do: breaks that come
+at an even spacing make a name asked once a break look steady, and a firm that few ads call is often
+alone. Counting the five-minute bins a name is in, the first rule tried, cannot tell a timer from the
+firms of a service that breaks every few minutes.
 
 **What it cannot see, and what it estimates.** An ad whose player calls fewer than NEED refused firms
 opens nothing, and neither does an ad the service reports from its own servers: there may be more
 breaks than it counts. A service with many hours and no break is one this rule cannot see, and the
-report says so. Two or three firms asked together on one beat would read as a break at each turn;
-none was seen on the reference. A break's start is known to the second and its end to within one ad, so the
-minutes are an estimate; on a TV that asks a refused name again much sooner than a minute they run
-long, and the report says that when `hold` finds it. Nothing here has yet been checked against breaks
-marked by hand, and the report says that too.
+report says so. The slower timers have an edge: about a dozen of them fall within WINDOW of one another
+by chance so often that none is alone, and NEED firms that keep one slow beat are one another's
+company at every turn. What those open is set aside when it runs past LONG_BREAK and counted when it
+does not; none was seen on the reference. A break's start is known to the second and its end to
+within one ad, so the minutes are an estimate; on a TV that asks a refused name again much sooner than
+a minute they run long, and the report says that when `hold` finds it. Nothing here has yet been
+checked against breaks marked by hand, and the report says that too.
 """
 
 from __future__ import annotations
@@ -67,10 +73,14 @@ from tvgw import appfront, companies
 # seconds a break runs on after its last label
 WINDOW, NEED, CHAIN, TAIL = 10.0, 3, 65.0, 20.0
 MERGE = 5.0  # seconds a firm must be quiet before its next lookup is a new label
-# a timer (`timers`). A name's lookups fall into runs, a gap longer than TIMER_PAUSE being an absence
-# that ends one. It is judged once it has TIMER_GAPS gaps that come to TIMER_SPAN seconds. It is steady
-# when STEADY_SHARE of that time lies in gaps of at most STEADY times the usual (median) gap of their
-# run, and alone when under ALONE of its lookups have company: other firms refused within WINDOW seconds
+LONG_BREAK = 600.0  # seconds no break lasts: a longer stretch of labels is set aside
+# a fast timer (`timers`): over UNBROKEN_SHARE of the name's lookups come in stretches longer than
+# LONG_BREAK with no gap over UNBROKEN, which is two chains, so that one missed beat is no pause
+UNBROKEN, UNBROKEN_SHARE = 2 * CHAIN, 0.5
+# a slower timer (`timers`). A name's lookups fall into runs, a gap longer than TIMER_PAUSE being an
+# absence that ends one. It is judged once it has TIMER_GAPS gaps that come to TIMER_SPAN seconds. It is
+# steady when STEADY_SHARE of that time lies in gaps of at most STEADY times the usual (median) gap of
+# their run, and alone when under ALONE of its lookups have company: other firms refused within WINDOW
 TIMER_GAPS, TIMER_SPAN, TIMER_PAUSE = 20, 1800.0, 2700.0
 STEADY, STEADY_SHARE, ALONE = 3.0, 0.70, 0.5
 # the hold: gaps between a name's refusals, from HOLD_OVER seconds (under it, one lookup's repeats) to
@@ -79,7 +89,6 @@ HOLD_OVER, HOLD_UNDER, HOLD_GAPS = 5.0, 3600.0, 20
 HOLD_SHORT = 45.0  # a TV that asks again sooner than this is not the TV the rule's minutes are set for
 LISTED_HOURS = 1.0  # an app is listed with this many hours in front, or with a break
 BLIND_HOURS = 10.0  # hours in front without one break after which an app's ads "cannot be seen this way"
-LONG_BREAK = 600.0  # seconds no break lasts: a longer stretch is names on timers, and is set aside
 
 Lookup = tuple[float, str]  # when a name was refused, and the name
 Label = tuple[float, str]  # when a firm was refused, and the firm (its company's name)
@@ -98,26 +107,44 @@ class Break:
         return self.last + TAIL - self.start
 
 
+def _unbroken(times: Sequence[float]) -> int:
+    """How many of a name's lookups, refused at `times`, came in stretches that went on for longer than
+    any break lasts without a pause: more than LONG_BREAK with no gap over UNBROKEN."""
+    inside = first = 0
+    for i in range(1, len(times) + 1):
+        if i == len(times) or times[i] - times[i - 1] > UNBROKEN:  # the stretch times[first:i] ends
+            if times[i - 1] - times[first] > LONG_BREAK:
+                inside += i - first
+            first = i
+    return inside
+
+
 def timers(refused: Sequence[Lookup], adfirms: Mapping[str, str]) -> frozenset[str]:
     """The advertising firms' names among `refused` (in time order) that are refused on a timer, whatever
-    is on the screen: those that keep a steady beat and come alone. A name with under TIMER_GAPS gaps,
-    or under TIMER_SPAN seconds of them, is not judged: it is no timer yet."""
+    is on the screen: those asked mostly in stretches longer than any break lasts, and of the rest
+    those that keep a steady beat and come alone, the first kind being no one's company. A name with
+    under TIMER_GAPS gaps, or under TIMER_SPAN seconds of them, is not judged steady or alone: unless
+    it is of the first kind, it is no timer yet."""
     firm_of: dict[str, str | None] = {}
     asked: dict[str, list[float]] = {}  # a firm's name -> when it was refused, as `labels` merges a firm
     last: dict[str, float] = {}
-    marks: list[Label] = []  # every refusal of a firm's name: the company the others may keep
+    of_firms: list[Lookup] = []
     for t, name in refused:
         if name not in firm_of:
             firm_of[name] = companies.company(name, adfirms)
         if firm_of[name] is None:
             continue
-        marks.append((t, firm_of[name]))
+        of_firms.append((t, name))
         if name not in last or t - last[name] > MERGE:
             asked.setdefault(name, []).append(t)
         last[name] = t
+    regular = {name for name, times in asked.items() if _unbroken(times) > UNBROKEN_SHARE * len(times)}
+    # the company the others may keep: every refusal of a firm's name that is not such a timer's
+    marks: list[Label] = [(t, firm_of[name]) for t, name in of_firms if name not in regular]
     when = [t for t, _firm in marks]
-    regular = set()
     for name, times in asked.items():
+        if name in regular:
+            continue
         runs: list[list[float]] = [[]]  # the gaps of each run
         for earlier, later in itertools.pairwise(times):
             if later - earlier > TIMER_PAUSE:
@@ -316,7 +343,7 @@ def render(r: dict) -> list[str]:
         lines.append(
             f"  Not counted: {r['long']['stretches']} stretch{'' if r['long']['stretches'] == 1 else 'es'} of"
             f" such lookups that ran past {LONG_BREAK / 60:g} minutes, {r['long']['minutes']:.0f} minutes in"
-            " all. No break lasts that long: these are names asked on timers."
+            " all. A break is not that long as a rule: most likely these are names asked on timers."
         )
     return [
         *lines,
