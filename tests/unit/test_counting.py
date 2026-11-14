@@ -688,6 +688,7 @@ def test_the_file_holds_keys_states_and_dates_only_and_status_reads_it(conn, lg,
         "inpath off - -",
         "probe off - -",
         "live counting 2026-11-17 2026-12-01",
+        "trials off - -",
     ]
     assert counting.status_lines(text, T0 + 15 * DAY) == [
         "Counting, and refusing nothing until you decide:",

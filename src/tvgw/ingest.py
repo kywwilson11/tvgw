@@ -1142,6 +1142,10 @@ def run(
         # from the files AdGuard already downloaded (design decision 68)
         step("lists", lambda: listguard.run(conn, s, profile, t0))
         step("threats", threat_match)  # (threats) design decision 80
+        if s.trial == "record":  # (trials) the coins and the measured days, refusing nothing (decision 98)
+            from tvgw import trials  # here: only a gateway that keeps the record needs it
+
+            step("trials", lambda: trials.hourly(conn, s, t0))
         step(
             "prune",
             lambda: setattr(

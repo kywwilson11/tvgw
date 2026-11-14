@@ -2,10 +2,11 @@
 and the earliest day its two weeks end (design decision 72).
 
 A new wall counts for two weeks before it may refuse anything (design decision 17's two clean weeks, the
-rule decision 20 and research pass 4 kept), and whether it then refuses is the owner's decision. Five
+rule decision 20 and research pass 4 kept), and whether it then refuses is the owner's decision. Six
 mechanisms count today (`MECHANISMS`): the clock servers the TV asks (the NTP count), the upload budget,
-the address gate's in-path filler, the probe from the TV's position, and the live reading of the app in
-front. A later one adds one `Mechanism` to the tuple.
+the address gate's in-path filler, the probe from the TV's position, the live reading of the app in
+front, and the trial record's coins and app starts (design decision 98). A later one adds one
+`Mechanism` to the tuple.
 
 **The runs.** A mechanism's two weeks are one run without a break. Every 10 minutes `tvgw verify
 --record` looks at what its own run shows of each (`observe()`: the counters it stored, the probe's
@@ -393,6 +394,34 @@ def _inpath_judge(conn, since, until, profile, ceiling) -> Judgement:
     )
 
 
+def _trials_active(o: Observation) -> bool:
+    return getattr(o.s, "trial", "off") == "record"
+
+
+def _trials_backfill(conn: sqlite3.Connection, now: float) -> tuple[float, float] | None:
+    """(trials) The trial record's run is its own rows': from its first to its newest."""
+    from tvgw import trials
+
+    first, newest = conn.execute(
+        "SELECT MIN(t), MAX(t) FROM decisions WHERE stage = ? AND t <= ?", (trials.STAGE, now)
+    ).fetchone()
+    return None if first is None else (first, newest)
+
+
+def _trials_judge(conn, since, until, profile, ceiling) -> Judgement:
+    """(trials) The record is the owner's to read: what it measured, never a day's arm."""
+    from tvgw import trials
+
+    days = [d for d in trials.record(conn) if since <= trials.day_start(d.day) < until]
+    starts, bad = sum(d.exposed for d in days), sum(d.bad for d in days)
+    recorded = "1 day was" if len(days) == 1 else f"{len(days)} days were"
+    return Judgement(
+        None,
+        f"{_n(len(days), 'day')} measured, {_n(starts, 'app start')}, {_n(bad, 'day')} with a failed start",
+        f"{recorded} recorded and nothing was refused",
+    )
+
+
 def _live_judge(conn, since, until, profile, ceiling) -> Judgement:
     return Judgement(
         None,
@@ -507,6 +536,18 @@ MECHANISMS: tuple[Mechanism, ...] = (
         "",
         "Whether an app rule could be tried: sudo tvgw receipt --replay.",
         breaks=_live_stood_down,
+    ),
+    Mechanism(
+        "trials",
+        "Trial record (coin flips and app starts; nothing is refused)",
+        "The trial record",
+        "coin flips and app starts, nothing refused",
+        "TRIAL=record",
+        _trials_active,
+        _trials_backfill,
+        _trials_judge,
+        "",
+        "What it says so far: sudo tvgw trial aa.",
     ),
 )
 

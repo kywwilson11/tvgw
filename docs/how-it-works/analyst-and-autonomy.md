@@ -333,6 +333,15 @@ What uses it:
 
 *The ledger marks the hours a class-A change touched, judge v2 counts only the clean demand hours and records its verdict (NODATA here; suspended, reverted or passed in other trials), and the shipped judge still decides.*
 
+## The trial record
+
+(trials) A wall on trial could be on for some viewing days and off for the others by a coin, so that what it costs is measured against the same household's other days ([design decision 98](../design-decisions.md#98-the-trial-record-a-keyed-coin-for-each-viewing-day-drawn-before-it-begins-and-what-each-app-start-showed-with-nothing-refused)). With `TRIAL=record` ([the settings file](../reference/settings.md)) the gateway keeps the record such a trial would need, and refuses nothing.
+
+- At the end of each hourly ingest, `trials.hourly()` draws the next viewing day (05:00 to 05:00 local) for the subject `all`, every app start: a `drawn` row in `decisions` with the day's number, a commitment of 16 hex characters and the key's fingerprint, never the arm. The coin is an HMAC-SHA256 of the day under a subkey of `trial.key`, 32 random bytes in `/var/lib/tvgw/name-keys/`. A day that has begun is never drawn.
+- Once a day's end is `receipt.SETTLE` (3 h 14 min) behind, a `measured` row holds its arm and its app starts: the stays the live reading heard begin, to the second, without the TV maker's own apps. Each start is a failed one in two forms, back at the home screen within `didit.STALL_MAX` (600 s) with under `didit.LITTLE_DOWN` (1 MB) down, and left within `LEFT_WITHIN` (600 s) for anything but standby with under `BIG` (1 MB) down; each form counts the day's starts up to its first failed one. A day the ingest missed for `INGEST_GAP` (2 h 10 min), whose runs warned of lost lookups or connections, or drawn under another key, is `unmeasured` with why.
+- `tvgw trial` prints what was drawn and measured and how long a wall's trial would take at this rate; `tvgw trial aa` judges the record under 1,000 other keys: the harm rule (failed days on the refused arm, less `CONTROL_WEIGHT` (2) times those on the other, reach `STRIKES` (3)), the balance alarm (`BALANCE_P` = 0.005 each side), the failed-start rate with its intervals, and how the failures cluster by day. All constants are in src/tvgw/trials.py. Neither command prints a day's arm.
+- The brief's [Counting section](../reference/brief-sections.md#counting) counts the record as a mechanism of its own.
+
 ## The TV's state and the 26-hour probe
 
 (ledger) The hourly reading misses whole sessions: a 20-minute evening falls between two readings two times in three. `sudo tvgw tvprobe --hours 26` holds one read-only session over the existing pairing instead, subscribes to `getPowerState` and `getForegroundAppInfo`, and appends each change with the gateway's time to `/var/lib/tvgw/probe/tvprobe.jsonl` (mode 0600 in a 0700 directory). It logs the carrier of `TV_IF` too (`link` lines). The rules it keeps:

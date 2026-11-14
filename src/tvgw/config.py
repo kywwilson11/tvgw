@@ -209,6 +209,10 @@ class Settings:
     web_key: str = "/etc/tvgw/web-key.pem"
     web_password: str = "/etc/tvgw/web-password"
     # ---- (web) end
+    # (trials) record: the hourly ingest draws a keyed coin for each viewing day before it begins and
+    # measures each day's app starts once settled, refusing nothing (design decision 98); off: nothing is
+    # drawn. A later stage's word (one, several) is refused until that stage has landed
+    trial: str = "off"
 
 
 # conf key -> Settings field (only the keys an operator is meant to set)
@@ -295,6 +299,7 @@ CONF_KEYS = {
     "WEB_PORT": "web_port",
     "WEB_BIND": "web_bind",
     "REVERT_SUPPORTED": "revert_supported",  # (revert) read by tvgw-apply; verify reads the hold it leaves
+    "TRIAL": "trial",  # (trials) read by the hourly ingest and tvgw trial
 }
 # switches tvgw-apply reads with an exact `case`; a near miss (`Yes`, `on`) must fail here, not there
 # the analyst's reasoning depth, checked here (tvgw-apply never reads it, so it is not in CHOICES)
@@ -340,7 +345,10 @@ MODES = {
     "THREAT_LISTS": ("off", "count"),  # (threats) read by tvgw threats, the hourly ingest and tvgw check
     "WEB": ("off", "on"),  # (web) read by tvgw web serve, tvgw verify and install.sh
     "WEB_BIND": ("uplink", "loopback"),  # (web)
+    "TRIAL": ("off", "record"),  # (trials) read by the hourly ingest and tvgw trial; nothing refuses
 }
+# (trials) the trial's later stages, each refused by name until it has landed: they would refuse
+TRIAL_LATER = ("one", "several")
 # (web) the page's port: no capability in its unit, so at least 1024
 WEB_PORTS = range(1024, 65536)
 # (updates) a GitHub repository as owner/name: the update check puts it into an API path, so nothing
@@ -491,6 +499,11 @@ def _check_reserved(s: Settings) -> None:
     """(reserved) The keys nothing reads yet, refused on the same terms as the rest: a near miss
     (`TV_DHCP=Pinned`) must fail at the first command, not stay quiet until the change that reads the
     key ships and then mean something else."""
+    if s.trial in TRIAL_LATER:
+        raise ValueError(
+            f"TRIAL={s.trial!r} in tvgw.conf: its stage has not landed, and only it may refuse; expected one"
+            f" of {', '.join(MODES['TRIAL'])}"
+        )
     for key, allowed in MODES.items():
         value = getattr(s, CONF_KEYS[key])
         if value not in allowed:
