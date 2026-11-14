@@ -679,7 +679,7 @@ def test_the_counting_line_follows_the_never_series_and_the_owner_judges(tmp_pat
     conn = db.connect(str(tmp_path / "tvgw.db"))
     since = NOW - 15 * 86400
     rules = {key: rule for _part, key, rule in mintshadow.SERIES}
-    for t, n in ((since, 0), (NOW - 3600, 3)):
+    for t, n in ((since, 0), (since + counting.TWO_WEEKS - 3600, 3)):  # the last hour of the two weeks
         for key in (NEVER, LAPSED, CROWDED, UNASSESSED, "doubtful"):
             conn.execute(
                 "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?, ?, ?, 0)", (t, rules[key], n)
