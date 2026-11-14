@@ -412,7 +412,12 @@ def _trials_judge(conn, since, until, profile, ceiling) -> Judgement:
     """(trials) The record is the owner's to read: what it measured, never a day's arm."""
     from tvgw import trials
 
-    days = [d for d in trials.record(conn) if since <= trials.day_start(d.day) < until]
+    # the days whole inside the window: one that ends after it is not measured when its two weeks are kept
+    days = [
+        d
+        for d in trials.record(conn)
+        if since <= trials.day_start(d.day) and trials.day_start(d.day + 1) <= until
+    ]
     starts, bad = sum(d.exposed for d in days), sum(d.bad for d in days)
     recorded = "1 day was" if len(days) == 1 else f"{len(days)} days were"
     return Judgement(

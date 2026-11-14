@@ -44,7 +44,7 @@ This is the only column reference for the store. The tables are listed in the or
 | `attention` | One connection the attention count counted outside the TV's essentials, with the TV's state then (attention) | `tvgw ingest` | By `TV_EVENTS_DAYS` |
 | `auto_rules` | One block rule the gateway applied on its own | `tvgw analyst`, `tvgw autoblock check`, `tvgw undo` | No |
 | `judgments` | The latest verdict on one proposed name | `tvgw analyst` | No |
-| `decisions` | One step of the autonomy: a gate decision, a queue event, a second-model answer, an apply, a canary outcome, a judge verdict or an owner revert; (trials) a viewing day of the trial record, drawn, measured or not measured; never updated | `tvgw analyst`, `tvgw autoblock check`, `tvgw undo` | Own rule (`DECISIONS_DAYS`) |
+| `decisions` | One step of the autonomy: a gate decision, a queue event, a second-model answer, an apply, a canary outcome, a judge verdict or an owner revert; (trials) a viewing day of the trial record, drawn, measured or not measured; never updated | `tvgw analyst`, `tvgw autoblock check`, `tvgw undo`, the hourly ingest (trials) | Own rule (`DECISIONS_DAYS`) |
 | `auto_queue` | One vetted block waiting for the trial in progress | `tvgw analyst` | No |
 | `hosts` | One public name seen in `dns`, `tls` or `http` | `tvgw ingest` | No |
 | `rules` | One policy rule, with when it appeared and left | `tvgw ingest` | No |

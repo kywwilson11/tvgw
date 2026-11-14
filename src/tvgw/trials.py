@@ -34,7 +34,7 @@ lookups or connections, or drawn under another key, is `unmeasured`, with why.
 app, no name. The rows are kept as `DECISIONS_DAYS` says and deleted by `tvgw forget`, and the analyst's
 pack reads none of them.
 
-Nothing here can refuse: the module reads the store, writes `decisions` rows and its key, and imports
+Nothing here can refuse: the module reads the store, writes `decisions` rows and its key, and calls
 nothing that writes AdGuard, the firewall or the TV.
 """
 
@@ -70,7 +70,9 @@ BALANCE_P = 0.005  # each tail of the balance alarm: exposed days this lopsided 
 BAR = 1 / 20  # the rate a wall's trial must rule out (Q7)
 FIRST_LOOK = 0.02  # the error a trial's first planned look may spend
 INGEST_GAP = 2 * 3600.0 + 600  # seconds between two ingest runs that leave part of a day unread
-LOSSES = ("flows:", "dns:", "tvlive:", "pcaps:")  # warnings that the record lost lookups or connections
+# warnings that the record lost lookups, connections or the live record; a capture's (pcaps:) names only
+# which name a connection had, which the subject `all` does not read, and its deferrals lose nothing
+LOSSES = ("flows:", "dns:", "tvlive:")
 
 
 # ---- the key and the coin ---------------------------------------------------------------------------------
@@ -81,12 +83,15 @@ def key_path(state_dir: str) -> str:
 def key(s: Settings) -> bytes | None:
     """The trial key: read, or made once, KEY_BYTES random bytes root-only in the name-key directory
     (0700), as `ledger.wan_salt` makes its own. None when it cannot be read or made (not root): no coin is
-    then drawn, and never an unkeyed one."""
+    then drawn, and never an unkeyed one. A short file is one whose making was cut off before it was
+    ever used (a key is used only once written whole), so it is made again."""
     path = key_path(s.state_dir)
     try:
         with open(path, "rb") as fh:
             k = fh.read()
-        return k if len(k) == KEY_BYTES else None
+        if len(k) == KEY_BYTES:
+            return k
+        os.remove(path)
     except FileNotFoundError:
         pass
     except OSError:
@@ -425,16 +430,16 @@ def status_lines(conn: sqlite3.Connection, setting: str, subject: str = ALL) -> 
     """`tvgw trial`: what is drawn and measured, what the record says so far, and how long a wall's trial
     would take at its rate. Never the arm of a day: a measured day's arm is in the record, and only `tvgw
     trial aa` reads it, as one of a thousand draws."""
-    on = setting == "record"
+    recording = setting == "record"
     head = (
         "The trial record (TRIAL=record): a coin for each viewing day, drawn before it begins. Nothing is"
         " refused."
-        if on
+        if recording
         else "The trial record is off (TRIAL=record starts it). Nothing is refused."
     )
     n = counts(conn, subject)
     if not n:
-        return [head, "No day has been drawn yet." if on else "Nothing has been recorded."]
+        return [head, "No day has been drawn yet." if recording else "Nothing has been recorded."]
     days = record(conn, subject)
     unmeasured = {k.split(": ", 1)[1]: v for k, v in n.items() if k.startswith("unmeasured: ")}
     gaps = "; ".join(f"{why}: {v}" for why, v in sorted(unmeasured.items()))

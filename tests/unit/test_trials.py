@@ -125,15 +125,16 @@ def test_a_viewing_day_begins_at_five_in_the_morning_through_the_change_of_the_c
         assert appfront.viewing_day(trials.day_start(day) - 1) == day - 1
 
 
-def test_the_key_is_made_once_root_only_and_none_when_it_cannot_be(tmp_path):
+def test_the_key_is_made_once_root_only_again_if_cut_short_and_none_when_it_cannot_be(tmp_path):
     s = Settings(state_dir=str(tmp_path))
     k = trials.key(s)
     path = trials.key_path(s.state_dir)
     assert len(k) == trials.KEY_BYTES and trials.key(s) == k
     assert os.stat(path).st_mode & 0o777 == 0o600 and os.path.dirname(path) == minimize.key_dir(s.state_dir)
     with open(path, "wb") as fh:
-        fh.write(b"short")
-    assert trials.key(s) is None  # never a short key
+        fh.write(b"short")  # a making cut off: never used, since a key is used only once written whole
+    again = trials.key(s)
+    assert len(again) == trials.KEY_BYTES and again != k and trials.key(s) == again
     blocked = tmp_path / "file"
     blocked.write_text("x")
     assert trials.key(Settings(state_dir=str(blocked))) is None
@@ -300,6 +301,9 @@ def test_a_day_waits_until_it_settles_and_a_record_with_a_hole_is_not_measured(s
         (-3600, "tvlive: x", 3600, "the record lost lookups or connections"),
         (-3600, "dns: x", 3600, "the record lost lookups or connections"),
         (-3600, "threats: x", 3600, None),
+        (-3600, "pcaps: deferred to the next run (time budget)", 3600, None),  # names, not losses
+        (-3600, "flows: x", 25 * 3600, "the record lost lookups or connections"),  # while the day settled
+        (3600, "", 0, "the ingest missed part of it"),  # nothing ran for its first hour
         (-7200, "flows: x", -3600, None),  # the day before's
         (3 * 3600, "", 0, "the ingest missed part of it"),  # it began three hours into the day
     ],
@@ -405,13 +409,12 @@ def test_under_other_keys_with_nothing_refused_the_tests_fire_within_their_bound
     """The A/A: each key is one more draw of the coins on a record where refusing changed nothing."""
     every = [trials.aa(simulated(seed), keys=100, seed=seed) for seed in range(10)]  # 7 starts a day
     some = [trials.aa(simulated(seed, starts=2), keys=100, seed=seed) for seed in range(10)]
-    assert sum(r["harm_rule_fired"] for r in every) / 10 < 0.24  # Wald's bound
-    assert sum(r["harm_rule_fired"] for r in some) / 10 < 0.20
-    assert sum(r["balance_alarm"] for r in every + some) / 20 < 0.03  # nominal 1%
-    got = every
+    assert 0.18 < sum(r["harm_rule_fired"] for r in every) / 10 < 0.24  # under Wald's bound, and firing
+    assert 0.12 < sum(r["harm_rule_fired"] for r in some) / 10 < 0.20
+    assert 0.0 < sum(r["balance_alarm"] for r in every + some) / 20 < 0.03  # nominal 1%
     quiet = trials.aa(simulated(0, p0=0.0), keys=1)["per_start"]  # none failed: bounded by its count alone
     assert (quiet["bad"], quiet["interval"]) == (0, list(evidencekit.wilson(0, quiet["of"])))
-    r = got[0]
+    r = every[0]
     lo, hi = r["per_start"]["interval"]
     assert lo < r["per_start"]["share"] < hi and r["per_start"]["of"] == sum(d.analysed for d in simulated(0))
 
@@ -465,6 +468,7 @@ def test_the_aa_says_how_the_failures_cluster_on_their_days():
         8,
         2,
     )
+    assert r["per_start"]["interval"][0] == 0.0  # whole days resampled: a draw of the clean day alone
     assert trials.aa(days[2:], keys=10)["clustered"] is None
 
 
@@ -483,6 +487,10 @@ def test_the_command_says_what_is_recorded_and_never_an_arm(store, s, capsys, tm
     household(store, s)
     lines = trials.status_lines(store.conn, "record")
     assert lines[0].endswith("Nothing is refused.") and lines[1] == "Days drawn 7, measured 5."
+    assert lines[2] == (
+        "App starts the TV reported: 12 on 4 of 5 days. Failed, back at the home screen: 3, on 3 days; left"
+        " within 10 minutes with little down: on 3 days."
+    )
     assert "arm" not in " ".join(lines).lower().replace("harm", "")
     assert trials.status_lines(db.connect(str(tmp_path / "e.db")), "off")[1] == "Nothing has been recorded."
     conf = tmp_path / "tvgw.conf"
@@ -515,13 +523,17 @@ def test_the_brief_counts_the_record_says_nothing_is_refused_and_names_nothing(s
     counting.observe(store.conn, counting.Observation(s), now)
     rows = {r.key: r for r in counting.status(store.conn, now, profile=lg)}
     first = rows["trials"]
-    assert (first.state, first.since) == ("counting", rows["trials"].since)
+    assert first.state == "counting"
     assert first.since == autoblock.decisions(store.conn, "stage = 'trial'")[0]["t"]  # its own record
     m = next(m for m in counting.MECHANISMS if m.key == "trials")
     j = counting.judge(m, store.conn, trials.day_start(D0), now, lg, "auto")
     assert j.clean is None and j.found == "5 days measured, 12 app starts, 3 days with a failed start"
     later = counting.judge(m, store.conn, trials.day_start(D0 + 3), now, lg, "auto")  # its own two weeks
     assert later.found == "3 days measured, 6 app starts, 1 day with a failed start"
+    whole = counting.judge(
+        m, store.conn, trials.day_start(D0 + 3), trials.day_start(D0 + 5) + 3600, lg, "auto"
+    )
+    assert whole.found.startswith("2 days measured")  # D0 + 5 had not ended: it is the next window's
     line = counting.plain_line(
         {"key": "trials", "plain": m.plain, "since": "2026-10-27", "said": j.said}, now
     )
@@ -554,3 +566,7 @@ def test_the_ingest_runs_the_record_only_with_trial_record_and_a_failure_is_one_
     assert not [w for w in run("record").warnings if w.startswith("trials")] and called == ["record"]
     monkeypatch.setattr(trials, "hourly", lambda conn, s, now: 1 / 0)
     assert "trials: ZeroDivisionError: division by zero" in run("record").warnings
+    monkeypatch.setattr(
+        trials, "hourly", lambda conn, s, now: {"waiting": "the trial key could not be read or made"}
+    )
+    assert "trials: the trial key could not be read or made" in run("record").warnings
