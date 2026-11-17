@@ -8,10 +8,14 @@ the client's own try of the ports against this computer's loopback, where nothin
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import socket
 import struct
 import sys
+import threading
+import time
+from types import SimpleNamespace
 
 import pytest
 from test_probe import DOWN, GOOD, PORT, UP, S, obs, outcomes
@@ -115,6 +119,14 @@ ROWS = [
     # an error the probe cannot attribute (a TCP try the raw socket did not see): never a pass
     (P, ports(tcp_80="unattributed"), UP, UNKNOWN, "TCP 80 met an error the probe cannot attribute"),
     (P, ports(tcp_80="error"), UP, UNKNOWN, "cannot attribute"),
+    # (walls) a reset names no sender: the gateway's beside the next hop's time-exceeded for another TCP
+    # try, else unknown. Until 2026-11-17 a next hop that resets everything failed the web here
+    (P, ports(tcp_80="reset"), UP, UNKNOWN, "TCP 80 was reset, by the gateway or by the next hop"),
+    (P, ports(tcp_80="reset"), DOWN, UNKNOWN, "TCP 80 was reset"),  # the uplink is said for no route alone
+    (P, ports(tcp_80="reset", tcp_443="expired"), UP, FAIL, "the gateway refuses TCP 80"),
+    (P, ports(tcp_80="reset", udp_123="expired"), UP, UNKNOWN, "TCP 80 was reset"),  # no TCP word of the hop
+    (P, ports(tcp_80="expired", tcp_443="expired"), UP, PASS, ""),  # the web let out, as it must be
+    (STRICT, ports(udp_5000="expired"), UP, FAIL, "was not refused"),  # it died at the next hop: let out
     (P, obs(ports=None), UP, UNKNOWN, "tried no port"),
     (P, obs(ports={}), UP, UNKNOWN, "tried no port"),
     (P, obs(ports={"tcp/80": "silent"}), UP, UNKNOWN, "TCP 443 was not tried"),
@@ -189,8 +201,10 @@ def test_only_the_gateways_own_refusal_reads_as_refused():
     assert probe._refusal_word(101, gw, gw, (11, 0)) == "unroutable"  # time exceeded is no refusal either
     assert probe._refusal_word(113, "198.51.100.1", gw, (3, 1)) == "unreachable"  # the home router's error
     assert probe._refusal_word(111, "198.51.100.1", gw, (3, 3)) == "unreachable"  # whatever its code
-    assert probe._refusal_word(probe.errno.ECONNREFUSED, None, gw) == "refused"  # TCP: a reset or ICMP
-    assert probe._refusal_word(probe.errno.ECONNRESET, None, gw) == "refused"
+    assert probe._refusal_word(113, "198.51.100.1", gw, (11, 0)) == "expired"  # its time ran out there
+    # a reset with no ICMP error beside it: whose, only the judge can tell (it was `refused` before)
+    assert probe._refusal_word(probe.errno.ECONNREFUSED, None, gw) == "reset"
+    assert probe._refusal_word(probe.errno.ECONNRESET, None, gw) == "reset"
     assert probe._refusal_word(probe.errno.EHOSTUNREACH, None, gw) == "unattributed"
     assert probe._refusal_word(probe.errno.ENETUNREACH, None, gw) == "unattributed"
     assert probe._refusal_word(0, None, gw) == "connected"
@@ -257,43 +271,76 @@ def test_a_tcp_trys_icmp_error_is_read_with_its_sender_and_code_from_the_raw_soc
     assert probe._raw_errors(None, wall) == {}
 
 
-def test_the_client_tries_the_ports_it_is_handed_after_the_walls(monkeypatch):
+def test_the_client_tries_the_ports_it_is_handed_with_the_walls_in_one_try(monkeypatch):
+    """L6-9: the walls went out on tries of their own, with no time to live, whose ending named no sender.
+    Now they are ports that must be refused, tried with the rest, and each reads back its own word."""
     tried = []
+    walls = [probe.WALLS["dot"], probe.WALLS["quic"]]
     monkeypatch.setattr(probe, "ask", lambda name, server, timeout=2.0: ["0.0.0.0"])
-    monkeypatch.setattr(probe, "tcp_try", lambda addr, port, timeout=3.0: "refused")
-    monkeypatch.setattr(probe, "udp_try", lambda addr, port, payload, timeout=1.2: "refused")
     monkeypatch.setattr(
         probe,
         "ports_try",
         lambda addr, ports, gw, wait=1.0, refuse=(): (
-            tried.append((addr, ports, gw, refuse)) or {"tcp/80": "x"}
+            tried.append((addr, ports, gw, refuse)) or {f"{p}/{n}": f"word {n}" for p, n in ports}
         ),
     )
     seen, _ = probe.observe(P.spec(connect=False))
-    assert tried == [(probe.WALL_ADDR, list(P.ports), "10.10.10.1", [])] and seen["ports"] == {"tcp/80": "x"}
+    assert tried == [(probe.WALL_ADDR, [*P.ports, *walls], "10.10.10.1", walls)]
+    assert seen["ports"] == {f"{p}/{n}": f"word {n}" for p, n in P.ports}
+    assert (seen["dot"], seen["quic"], seen["adtech"]) == ("word 853", "word 443", None)
     tried.clear()
     probe.observe(STRICT.spec(connect=False))  # the ports that must be refused are waited for longer
-    assert tried[0][3] == [("udp", probe.ODD_PORT)]
+    assert tried[0][3] == [("udp", probe.ODD_PORT), *walls]
     tried.clear()
     seen, _ = probe.observe({**P.spec(connect=False), "ports": []})
-    assert tried == [] and seen["ports"] is None
+    assert tried[0][1] == walls and seen["ports"] is None and seen["dot"] == "word 853"
+
+
+@contextlib.contextmanager
+def closed_ports():
+    """A TCP and a UDP port of loopback where nothing answers, held for the test so that nothing else on
+    the machine can take them meanwhile: the TCP socket is bound and never listens (a connection to it is
+    reset), the UDP one is connected elsewhere (a datagram to it meets a port-unreachable). Before
+    2026-11-17 the tests freed the ports before trying them, and a parallel test could take one."""
+    with (
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp,
+        socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp,
+    ):
+        tcp.bind(("127.0.0.1", 0))
+        udp.bind(("127.0.0.1", 0))
+        udp.connect(("127.0.0.1", 9))
+        yield tcp.getsockname()[1], udp.getsockname()[1]
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the extended error report is Linux's")
 def test_on_linux_the_client_reads_a_refusal_from_whoever_sent_it():
     """Loopback, where nothing listens on these ports: TCP gets a reset and UDP an ICMP port-unreachable,
-    both from 127.0.0.1. With the gateway named as 127.0.0.1 both are its refusal; named as anyone else,
-    the UDP one is someone else's error, which the TCP one cannot tell."""
-    free = []
-    for kind in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
-        with socket.socket(socket.AF_INET, kind) as s:
-            s.bind(("127.0.0.1", 0))
-            free.append(s.getsockname()[1])
-    tcp, udp = free
-    seen = probe.ports_try("127.0.0.1", [("tcp", tcp), ("udp", udp)], "127.0.0.1", wait=1.0)
-    assert seen == {f"tcp/{tcp}": "refused", f"udp/{udp}": "refused"}
-    other = probe.ports_try("127.0.0.1", [("udp", udp)], "192.0.2.1", wait=1.0)
-    assert other == {f"udp/{udp}": "unreachable"}
+    both from 127.0.0.1. With the gateway named as 127.0.0.1 the UDP one is its refusal; named as anyone
+    else, someone else's error. The reset names no sender either way (the judge decides, _owned)."""
+    with closed_ports() as (tcp, udp):
+        seen = probe.ports_try("127.0.0.1", [("tcp", tcp), ("udp", udp)], "127.0.0.1", wait=1.0)
+        assert seen == {f"tcp/{tcp}": "reset", f"udp/{udp}": "refused"}
+        other = probe.ports_try("127.0.0.1", [("udp", udp)], "192.0.2.1", wait=1.0)
+        assert other == {f"udp/{udp}": "unreachable"}
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the extended error report is Linux's")
+def test_on_linux_a_refusal_that_came_while_the_client_waited_for_the_cpu_is_read_not_called_silence(
+    monkeypatch,
+):
+    """The try's clock was looked at before what had arrived was read: a client held off the CPU past its
+    wait (a loaded CI runner, a busy gateway) called a refused port silent, a let-out, and a must-refuse
+    port a fail. Here the clock jumps a minute while the refusal is already in the socket's error queue."""
+    looks: list[float] = []
+
+    def monotonic() -> float:  # the try starts at 0, and its next look at the clock is a minute later
+        looks.append(0.0 if not looks else time.sleep(0.05) or 60.0)
+        return looks[-1]
+
+    monkeypatch.setattr(probe, "time", SimpleNamespace(monotonic=monotonic))
+    with closed_ports() as (_tcp, udp):
+        seen = probe.ports_try("127.0.0.1", [("udp", udp)], "127.0.0.1", wait=1.0, refuse=[("udp", udp)])
+    assert seen == {f"udp/{udp}": "refused"}
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the extended error report is Linux's")
@@ -305,4 +352,52 @@ def test_on_linux_a_try_no_refusal_is_expected_for_is_decided_without_the_whole_
     started = clock.monotonic()
     seen = probe.ports_try(probe.WALL_ADDR, [("udp", probe.ODD_PORT)], "192.0.2.1", wait=1.5)
     assert clock.monotonic() - started < 1.0
-    assert seen[f"udp/{probe.ODD_PORT}"] in ("silent", "unreachable", "unattributed", "error")
+    # let out, whoever this machine's next hop is: a container's answers the expired datagram (`expired`)
+    assert seen[f"udp/{probe.ODD_PORT}"] in ("silent", "unreachable", "expired", "unattributed", "error")
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the extended error report is Linux's")
+def test_on_linux_the_quic_wall_sends_its_quic_datagram_and_sends_it_again_while_it_waits(monkeypatch):
+    """The QUIC wall's datagram is the QUIC one, the first time and again after PORT_RESEND, while the try
+    still waits for a refusal. Here a socket of loopback stands for a wall that is missing: it takes the
+    datagrams and answers nothing."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as far:
+        far.bind(("127.0.0.1", 0))
+        far.settimeout(3)
+        monkeypatch.setitem(probe.WALLS, "quic", ("udp", far.getsockname()[1]))
+        got: list[tuple[bytes, float]] = []
+
+        def take():
+            with contextlib.suppress(OSError):
+                while len(got) < 2:
+                    got.append((far.recv(2048), time.monotonic()))
+
+        listener = threading.Thread(target=take, daemon=True)
+        listener.start()
+        quic = probe.WALLS["quic"]
+        seen = probe.ports_try("127.0.0.1", [quic], "127.0.0.1", wait=1.5, refuse=[quic])
+        ended = time.monotonic()
+        listener.join(3)
+    assert seen == {f"udp/{quic[1]}": "silent"}
+    assert [data for data, _at in got] == [probe.QUIC_PROBE] * 2
+    assert got[1][1] < ended - 0.3  # sent again while the try waited, not as it gave up
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="a full accept queue drops a SYN on Linux")
+def test_on_linux_a_reset_of_a_must_refuse_port_keeps_the_webs_tries_waited_for():
+    """A reset names no sender: it is the gateway's only beside the next hop's time-exceeded for a TCP try
+    let through, so while one is reset the try keeps waiting for those, up to its wait, where it would end
+    at PORT_QUIET. Here a listener whose queue is full drops a SYN, as a next hop that is slow to answer."""
+    with closed_ports() as (closed, _udp), socket.socket() as full, contextlib.ExitStack() as taken:
+        full.bind(("127.0.0.1", 0))
+        full.listen(1)  # Linux queues one connection more than the backlog: two take every place
+        for _ in range(2):
+            taken.enter_context(socket.create_connection(full.getsockname(), timeout=2))
+        slow = full.getsockname()[1]
+        started = time.monotonic()
+        seen = probe.ports_try(
+            "127.0.0.1", [("tcp", closed), ("tcp", slow)], "10.10.10.1", wait=1.2, refuse=[("tcp", closed)]
+        )
+        took = time.monotonic() - started
+    assert seen == {f"tcp/{closed}": "reset", f"tcp/{slow}": "silent"}
+    assert took >= 1.1  # the whole wait, not PORT_QUIET

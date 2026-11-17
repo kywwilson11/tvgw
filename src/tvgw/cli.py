@@ -2087,9 +2087,13 @@ def cmd_tvprobe(a, s, prof) -> int:
 
 
 def cmd_probe(a, s, prof) -> int:
-    """(probe) `tvgw probe`: exit 0 pass, 3 fail, 4 unknown (probe.EXIT)."""
+    """(probe) `tvgw probe`: exit 0 pass, 3 fail, 4 unknown (probe.EXIT). (budget) `--budget` prints the
+    seconds within which the verdict after an apply is out, for tvgw-apply's wait."""
     from tvgw import probe
 
+    if a.budget:
+        print(f"{probe.BUDGET:g}")
+        return 0
     return probe.main(s, prof, as_json=a.json, directory=a.across, netns=a.netns)
 
 
@@ -2384,13 +2388,14 @@ def build_parser() -> argparse.ArgumentParser:
     tp.add_argument("--out", help="the events file (default <STATE_DIR>/probe/tvprobe.jsonl)")
     tp.add_argument("--key-file", default="/var/lib/tvgw/lgtv-keys.sqlite")
     tp.set_defaults(fn=cmd_tvprobe)
-    # (probe) the test client beside the TV's port (design decision 65); --across and --netns are tvgw-apply's
-    # and the namespace tier's, not a person's
+    # (probe) the test client beside the TV's port (design decision 65); --across, --budget and --netns are
+    # tvgw-apply's and the namespace tier's, not a person's
     pb = sub.add_parser(
         "probe", help="is the gateway's path for the TV whole? a test client beside the TV's port (root)"
     )
     pb.add_argument("--json", action="store_true")
     pb.add_argument("--across", metavar="DIR", help=argparse.SUPPRESS)
+    pb.add_argument("--budget", action="store_true", help=argparse.SUPPRESS)
     pb.add_argument("--netns", default="", help=argparse.SUPPRESS)
     pb.set_defaults(fn=cmd_probe)
     an.set_defaults(fn=cmd_analyst)

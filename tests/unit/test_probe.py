@@ -9,13 +9,20 @@ probe's address is in none of the sources the ingest keeps."""
 
 import dataclasses
 import errno
+import io
 import ipaddress
 import json
+import math
 import os
 import re
+import signal
 import socket
 import sqlite3
+import struct
+import subprocess
+import sys
 import threading
+import time
 
 import pytest
 from conftest import DNS_ALLOWED, FLOW_TCP, GFTS_TV_ALLOWED, NOW, ROOT
@@ -104,16 +111,20 @@ def test_the_connection_out_goes_to_a_neutral_server_and_never_to_the_tvs_vendor
 
 
 def recorded(monkeypatch, answers):
-    """The client's primitives, recorded: (lookups, handshakes, wall attempts). The port tries are answered
-    here too, as a gateway that lets each one out: left to the real `ports_try`, this suite sent them from
-    the machine it runs on, and passed or not by what that machine's own router said."""
+    """The client's primitives, recorded: (lookups, handshakes, port tries). The port tries are answered
+    here too, as a gateway that refuses what must be refused and lets the rest out: left to the real
+    `ports_try`, this suite sent them from the machine it runs on, and passed or not by what that
+    machine's own router said."""
     asked, shaken, tried = [], [], []
 
-    def let_out(addr, ports, gw, wait=0.0, refuse=()):
+    def gateway(addr, ports, gw, wait=0.0, refuse=()):
         assert addr == probe.WALL_ADDR, "a port is tried at the documentation address and nowhere else"
-        return dict.fromkeys((f"{proto}/{port}" for proto, port in ports), "silent")
+        tried.append((list(ports), list(refuse)))
+        return {
+            f"{proto}/{port}": "refused" if (proto, port) in refuse else "silent" for proto, port in ports
+        }
 
-    monkeypatch.setattr(probe, "ports_try", let_out)
+    monkeypatch.setattr(probe, "ports_try", gateway)
     monkeypatch.setattr(
         probe, "ask", lambda name, server, timeout=2.0: asked.append((name, server)) or answers(name)
     )
@@ -122,19 +133,17 @@ def recorded(monkeypatch, answers):
         "handshake",
         lambda addr, name, timeout=3.0, device="": shaken.append((addr, name, device)) or ("ok", None),
     )
-    monkeypatch.setattr(
-        probe, "tcp_try", lambda addr, port, timeout=3.0: tried.append((addr, port)) or "refused"
-    )
-    monkeypatch.setattr(
-        probe, "udp_try", lambda addr, port, payload, timeout=1.2: tried.append((addr, port)) or "refused"
-    )
     return asked, shaken, tried
+
+
+DOT, QUIC, ADTECH = probe.WALLS["dot"], probe.WALLS["quic"], probe.WALLS["adtech"]
 
 
 def test_the_only_packet_of_the_client_that_can_leave_the_home_is_one_handshake_with_the_target(monkeypatch):
     """What the client sends: lookups at the gateway's resolver, one handshake with the target's address,
-    and three attempts at the documentation address. A must-allow name's address is never connected to,
-    and no real resolver is ever addressed."""
+    and one try of the ports and the walls together at the documentation address (ports_try, whose time to
+    live ends at the next hop). A must-allow name's address is never connected to, and no real resolver
+    is ever addressed."""
     table = {**{n: [VENDOR] for n in NAMES}, TARGET: [ADDR], "alphonso.tv": ["0.0.0.0"]}
     asked, shaken, tried = recorded(monkeypatch, table.__getitem__)
     seen, held = probe.observe(P.spec())
@@ -145,12 +154,11 @@ def test_the_only_packet_of_the_client_that_can_leave_the_home_is_one_handshake_
         ("alphonso.tv", "10.10.10.1"),
         ("alphonso.tv", WALL),  # the redirect: only the gateway can answer a lookup aimed there
     ]
-    assert tried == [(WALL, 853), (WALL, 443)]
-    assert {a for a, *_ in shaken} | {a for a, _ in tried} | {s for _, s in asked} == {
-        ADDR,
-        WALL,
-        "10.10.10.1",
-    }
+    # the walls with the ports, each of them a port that must be refused (ports_try asserts the address)
+    assert tried == [([*P.ports, DOT, QUIC], [DOT, QUIC])]
+    assert (seen["dot"], seen["quic"], seen["adtech"]) == ("refused", "refused", None)
+    assert set(seen["ports"]) == {f"{proto}/{port}" for proto, port in P.ports}
+    assert {a for a, *_ in shaken} | {s for _, s in asked} == {ADDR, WALL, "10.10.10.1"}
     assert probe.judge(P, seen, PORT, UP, never).verdict == PASS
     # a run that makes no connection out: the same without the target, and no handshake at all
     asked.clear(), shaken.clear()
@@ -185,6 +193,7 @@ SILENT = obs(allow=[{"name": n, "answers": None} for n in NAMES], blocked=None, 
 ONE_BLOCKED = obs(allow=[{"name": NAMES[0], "answers": ["0.0.0.0"]}, {"name": NAMES[1], "answers": [VENDOR]}])
 RULED = obs(path=[{"name": TARGET, "answers": [ADDR], "addr": ADDR, "tls": "refused", "ruled": True}])
 TARGET_BLOCKED = obs(path=[{"name": TARGET, "answers": ["0.0.0.0"], "addr": None, "tls": None}])
+HOP = {**GOOD["ports"], "tcp/443": "expired"}  # the next hop answered the web's try by time-exceeded
 ROWS = [
     # step, what was seen, the port, the uplink, the gateway's own try, the outcome, words of the detail
     ("port", GOOD, PORT, UP, None, PASS, ""),
@@ -285,6 +294,24 @@ ROWS = [
     ("quic", obs(quic="silent"), PORT, UP, None, FAIL, "QUIC was not refused by the gateway"),
     ("quic", obs(quic="answered"), PORT, UP, None, FAIL, "was not refused"),
     ("quic", obs(quic="silent"), PORT, DOWN, None, UNKNOWN, "the uplink is down"),
+    # (walls) only the gateway's own refusal passes: a reset names no sender, and is the gateway's only
+    # beside the next hop's time-exceeded for another TCP try (HOP). Until 2026-11-17 any reset passed
+    ("dot", obs(dot="expired"), PORT, UP, None, FAIL, "was not refused"),  # it died at the next hop: let out
+    ("dot", obs(dot="reset"), PORT, UP, None, UNKNOWN, "reset, by the gateway or by the next hop"),
+    ("dot", obs(dot="reset", ports=HOP), PORT, UP, None, PASS, ""),
+    ("quic", obs(quic="reset", ports=HOP), PORT, UP, None, UNKNOWN, "cannot be told apart"),  # UDP has none
+    ("dot", obs(dot="unroutable"), PORT, UP, None, UNKNOWN, "the gateway had no route out for DNS over TLS"),
+    ("dot", obs(dot="unattributed"), PORT, UP, None, UNKNOWN, "an error the probe cannot attribute"),
+    ("dot", obs(dot=None), PORT, UP, None, UNKNOWN, "DNS over TLS was not tried"),
+    (
+        "dot",
+        obs(dot="reset", ports=HOP),
+        PORT,
+        DOWN,
+        None,
+        PASS,
+        "",
+    ),  # the gateway's own, whatever the uplink
     ("redirect", GOOD, PORT, UP, None, PASS, ""),
     (
         "redirect",
@@ -392,7 +419,6 @@ def test_the_held_connection_names_the_2026_10_30_fault():
     assert probe.held_stage(E("77"), None, "open").outcome == FAIL
     # the far end's own goodbye removes the entry too: nothing to judge, and no verdict moved by it
     assert probe.held_stage(E("77"), None, "closed").outcome == SKIPPED
-    assert probe.held_stage(E("77"), None, "reset").outcome == SKIPPED
     assert probe.held_stage(None, None, None).outcome == SKIPPED  # no conntrack tool, or nothing held
     # the uplink lost its carrier or took a new address meanwhile: the kernel ended it, not the apply
     assert probe.held_stage(E("77"), None, "open", steady=False).outcome == SKIPPED
@@ -400,6 +426,27 @@ def test_the_held_connection_names_the_2026_10_30_fault():
     assert (
         probe.judge(P, GOOD, PORT, UP, never, held=probe.held_stage(E("7"), None, "closed")).verdict == PASS
     )
+
+
+@pytest.mark.parametrize(
+    ("peer", "said"),
+    [
+        ("reset", "the held connection was reset across the apply; who reset it cannot be told"),
+        (None, "the test client did not answer"),
+        ("garbled", "the test client did not answer"),
+    ],
+)
+def test_a_held_connection_that_was_reset_or_not_reported_is_unknown_never_the_far_ends_goodbye(peer, said):
+    """L6-10: a reset is what the client sees when new rules reject the old flow, and a client that sent
+    no second line said nothing at all; both were skipped as "the far end closed the held connection
+    first", and the stage built to catch a cut connection let a loud cut stay a pass. Unknown undoes
+    nothing, so no revert is made possible by it."""
+    E = probe.Entry
+    for after in (None, E("91")):  # the entry gone, or another in its place
+        assert probe.held_stage(E("77"), after, peer) == Stage("held", UNKNOWN, said)
+    assert probe.held_stage(E("77"), E("77"), peer).outcome == PASS  # the same entry: nothing was cut
+    assert probe.held_stage(E("77"), None, peer, steady=False).outcome == SKIPPED  # the uplink's doing
+    assert probe.judge(P, GOOD, PORT, UP, never, held=probe.held_stage(E("7"), None, peer)).verdict == UNKNOWN
 
 
 def test_a_new_entry_with_the_old_ones_id_is_told_by_its_start_and_its_count(tmp_path):
@@ -619,7 +666,7 @@ def test_a_port_that_does_not_forward_keeps_the_probes_packets_back_too(tmp_path
 
 
 def test_a_failure_is_taken_again_before_it_stands(tmp_path, lg, monkeypatch):
-    monkeypatch.setattr(probe, "control", lambda p, o, dev="": {"path": True})
+    monkeypatch.setattr(probe, "control", lambda p, o, dev="", left=None: {"path": True})
     slept: list[float] = []
     once = Host(answers={CLIENT: client_says(whole(lg, FAILED_TLS), whole(lg))})
     env = once.env(tmp_path)
@@ -631,7 +678,7 @@ def test_a_failure_is_taken_again_before_it_stands(tmp_path, lg, monkeypatch):
 
 
 def test_a_target_in_a_set_the_tvs_rules_refuse_is_found_before_any_blame(tmp_path, lg, monkeypatch):
-    monkeypatch.setattr(probe, "control", lambda p, o, dev="": {"path": True})
+    monkeypatch.setattr(probe, "control", lambda p, o, dev="", left=None: {"path": True})
     refused = obs(path=[{"name": TARGET, "answers": [ADDR], "addr": ADDR, "tls": "refused"}])
     in_doh4 = {
         ("nft", "get", "element", "inet", "tvgw", "doh4", f"{{ {ADDR} }}"): (0, ""),
@@ -709,6 +756,227 @@ def test_one_run_at_a_time(tmp_path, lg):
     assert probe.run(S, lg, env).verdict == PASS  # and the next one runs
 
 
+@pytest.mark.parametrize("made", ["a directory", "a link"])
+def test_a_lock_that_cannot_be_opened_is_unknown_and_never_a_run_without_one(tmp_path, lg, made):
+    """L6-11: the lock lay in the world-writable /run/lock, and one that could not be opened let the run go
+    on unlocked: any account could leave a file there that root may not open (fs.protected_regular), and
+    two runs at once removed each other's namespace. Here the lock's path is a directory, or a link, which
+    is never followed. Nothing is made or removed, before an apply or by the 10-minute check."""
+    host = Host(answers={CLIENT: client_says(whole(lg))})
+    env = host.env(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    os.mkdir(env.lock) if made == "a directory" else os.symlink(elsewhere, env.lock)
+    v = probe.run(S, lg, env)
+    assert v.verdict == UNKNOWN and v.reason.startswith("probe: the probe's lock cannot be opened: ")
+    (tmp_path / "confirm").mkdir()
+    assert probe.across(S, lg, str(tmp_path / "confirm"), env) == 4
+    assert (tmp_path / "confirm" / "pre").read_text(encoding="utf-8").startswith("unknown probe\n")
+    assert (
+        not [c for c in host.calls if c[:2] in (("ip", "netns"), ("ip", "link"))] and not elsewhere.exists()
+    )
+    host.euid = 1000  # without root nothing is opened, made or removed, and the run says why
+    assert probe.run(S, lg, env).reason == "probe: the probe needs root: run it with sudo"
+
+
+def test_the_lock_lives_in_tvgws_own_directory_which_a_reboot_empties_and_the_run_makes(tmp_path, lg):
+    """/run/tvgw is root's alone (tvgw-apply makes it 0755), and /run is emptied at every boot: the
+    10-minute check may be the first of tvgw's programs to run after one."""
+    assert os.path.dirname(probe.LOCK) == os.path.dirname(probe.LAST) == "/run/tvgw"
+    env = Host(answers={CLIENT: client_says(whole(lg))}).env(tmp_path)
+    env.lock = str(tmp_path / "tvgw" / "tvgw-probe.lock")
+    was = os.umask(
+        0o077
+    )  # the mode is the run's own, as tvgw-apply's `install -d -m 755`, whatever the umask
+    try:
+        assert probe.run(S, lg, env).verdict == PASS
+    finally:
+        os.umask(was)
+    assert (tmp_path / "tvgw").is_dir() and (tmp_path / "tvgw").stat().st_mode & 0o777 == 0o755
+
+
+class Held:
+    """The held client of a run on Clock's time: what `across` writes to it, and nothing else."""
+
+    stdin = io.StringIO()
+
+    def kill(self): ...
+
+    def communicate(self, timeout=None):
+        return "", ""
+
+
+SLOW, HUNG = 19.5, 1e9  # the client's longest run with nothing answering; a client that never answers
+# the walls gone and the internet beyond the router black-holed: both neutral servers out of reach
+DARK = [{"name": n, "answers": [ADDR], "addr": ADDR, "tls": "silent"} for n in ("a.example", TARGET)]
+BROKEN = obs(dot="expired", quic="expired", path=DARK)
+
+
+def on_the_clock(tmp_path, lg, monkeypatch, after, again, gateway, settle_read=0.0) -> list:
+    """`across` on a clock that moves only while it waits, each wait taking what its part takes and never
+    more than it was given: `after` and `again` are the client's look after the apply and a second one,
+    each (seconds, observation or None for no answer); the gateway's own handshake completes at once or,
+    black-holed, waits out each timeout it is given, connect and TLS; `settle_read` is the conntrack read
+    after the apply. Returns [(the first line, its time)] of what was published, pre then post."""
+    now, published = [0.0], []
+
+    def spend(seconds: float, most: float = math.inf) -> bool:
+        now[0] += min(seconds, most)
+        return seconds <= most
+
+    lines = iter([(1.0, whole(lg)), after])
+
+    def client_line(_proc, timeout):
+        cost, seen = next(lines)
+        return (
+            {"obs": seen and whole(lg, seen), "held": HELD, "held_state": "open"}
+            if spend(cost, timeout)
+            else None
+        )
+
+    host, reads = Host(answers={("conntrack", "-L"): (0, "tcp 6 id=77\n")}), iter([0.0, settle_read])
+
+    def run(cmd, timeout=15.0):
+        if "--client" in cmd:  # a second look is a client run of its own
+            cost, seen = again
+            return (
+                (0, json.dumps({"obs": whole(lg, seen)}) + "\n")
+                if spend(cost, timeout) and seen
+                else (127, "")
+            )
+        if cmd[0] == "conntrack":
+            spend(next(reads))
+        return host.run(cmd, timeout)
+
+    def handshake(addr, name, timeout=3.0, device=""):
+        assert timeout > 0, "a socket is never given a timeout of no time"
+        black = gateway == "black-holed"
+        return spend(2 * timeout if black else 0.1) and ("silent" if black else "ok"), None
+
+    env = host.env(tmp_path)
+    env.run, env.sleep, env.clock = run, spend, lambda: now[0]
+    monkeypatch.setattr(probe, "_client_line", client_line)
+    monkeypatch.setattr(probe, "handshake", handshake)
+    monkeypatch.setattr(probe.subprocess, "Popen", lambda *a, **k: Held())
+    monkeypatch.setattr(
+        probe, "_line", lambda v: published.append((f"{v.verdict} {v.word or '-'}", v.reason, now[0])) or ""
+    )
+    (tmp_path / "confirm").mkdir()
+    (tmp_path / "confirm" / "go").touch()  # the apply is done at once
+    probe.across(S, lg, str(tmp_path / "confirm"), env)
+    return published
+
+
+NONE_DUE = (HUNG, None)  # a second look nobody expects: one made anyway would read unknown
+
+
+ONCE = "probe: dot: DNS over TLS was not refused by the gateway, once, and no time was left to take it again"
+UNFINISHED = "probe: the test client did not finish"
+
+
+@pytest.mark.parametrize(
+    ("after", "again", "gateway", "settle_read", "want"),
+    [
+        ((1.0, GOOD), NONE_DUE, "completes", 0.0, ("pass -", "")),
+        ((1.0, FAILED_TLS), (1.0, GOOD), "completes", 0.0, ("pass -", "")),  # one lost packet, taken again
+        (
+            (SLOW, BROKEN),
+            (SLOW, BROKEN),
+            "black-holed",
+            0.0,
+            ("fail dot", "dot: DNS over TLS was not refused by the gateway"),
+        ),  # 76 s before
+        ((HUNG, None), NONE_DUE, "completes", 0.0, ("unknown probe", UNFINISHED)),  # no line after the apply
+        ((HUNG, None), NONE_DUE, "completes", 40.0, ("unknown probe", UNFINISHED)),  # nor in what is left
+        (
+            (SLOW, BROKEN),
+            (HUNG, None),
+            "black-holed",
+            0.0,
+            ("unknown probe", UNFINISHED),
+        ),  # the second look hangs
+        ((SLOW, BROKEN), NONE_DUE, "black-holed", 40.0, ("unknown probe", ONCE)),  # no time left for one
+        ((SLOW, BROKEN), NONE_DUE, "black-holed", 30.0, ("unknown probe", ONCE)),  # less than its pause
+    ],
+    ids=[
+        "working",
+        "taken-again",
+        "black-holed",
+        "client-silent",
+        "client-silent-late",
+        "second-look-hangs",
+        "no-time-left",
+        "less-than-the-pause",
+    ],
+)
+def test_every_path_of_across_publishes_its_verdict_after_within_the_budget(
+    tmp_path, lg, monkeypatch, after, again, gateway, settle_read, want
+):
+    """L6-22: tvgw-apply waits WAIT_AFTER for the verdict after; two slow looks and the gateway's own
+    handshakes beside each took 76 s with the internet beyond the router black-holed and the walls broken,
+    and a fail that late read as no verdict. Now every wait after `go` gets what is left of BUDGET. A
+    failure there is no time to take again is unknown, never a fail: a failure stands only twice."""
+    (pre, _, at_go), (post, why, at_post) = on_the_clock(
+        tmp_path, lg, monkeypatch, after, again, gateway, settle_read
+    )
+    assert (pre, (post, why)) == ("pass -", want)
+    assert at_post - at_go <= probe.BUDGET + 1e-9
+
+
+def test_the_gateway_makes_no_try_of_its_own_with_no_time_left():
+    """(budget) A socket given no time would raise, and the verdict would be the probe's own error."""
+    made = []
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(probe, "handshake", lambda *a, **k: made.append(a) or ("ok", None))
+        mp.setattr(probe, "ask", lambda *a, **k: made.append(a) or [ADDR])
+        assert probe.control(P, FAILED_TLS, "wlan0", left=lambda: 0.0) == {"path": False}
+        assert probe.control(P, SILENT, "wlan0", left=lambda: 0.0) == {}
+        assert made == []
+        assert probe.control(P, SILENT, "wlan0", left=lambda: 1.0) == {"resolver": True}
+
+
+def test_the_budget_is_what_tvgw_apply_waits_for_less_the_time_to_read_it(tmp_path, capsys):
+    """`tvgw probe --budget` prints the bound for tvgw-apply to read (its WAIT_AFTER is still its own
+    constant: whoever next edits it makes it read this)."""
+    text = (ROOT / "deploy" / "nftables" / "tvgw-apply").read_text(encoding="utf-8")
+    wait_after = int(re.search(r"^WAIT_AFTER=(\d+)$", text, re.M).group(1))
+    assert wait_after - 5 == probe.BUDGET
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text("TV_PROBE=on\n", encoding="utf-8")
+    assert cli.main(["--conf", str(conf), "probe", "--budget"]) == 0 and capsys.readouterr().out == "65\n"
+
+
+def test_verify_runs_the_probe_so_that_a_sigterm_unwinds_it(tmp_path):
+    """L6-21: `tvgw verify --record` runs the probe in its own process, without the handler `tvgw probe`
+    installs: a unit stop or its timeout ended Python where it stood, and the pair, its routes and the
+    namespace stayed until the next run. A real SIGTERM, in a child that runs a probe stand-in under
+    `unwinding`: what it made is removed on the way out, and the exit is the signal's."""
+    cleared = tmp_path / "cleared"
+    child = (
+        "import contextlib, time\nfrom tvgw import probe\n"
+        "@contextlib.contextmanager\ndef namespace():\n"
+        f"    try: yield\n    finally: open({str(cleared)!r}, 'w').close()\n"
+        "def run():\n    with namespace(): print('made', flush=True); time.sleep(30)\n"
+        "probe.unwinding(run)\n"
+    )
+    src = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+    proc = subprocess.Popen([sys.executable, "-c", child], stdout=subprocess.PIPE, env=src, text=True)
+    assert proc.stdout.readline() == "made\n"
+    proc.terminate()
+    assert proc.wait(10) == 143 and cleared.exists()
+    proc.stdout.close()
+
+    # in this process: the handler is the probe's while it runs, and the caller's own after it
+    def callers(*_):
+        return None
+
+    before = signal.signal(signal.SIGTERM, callers)
+    try:
+        assert probe.unwinding(signal.getsignal, signal.SIGTERM) is probe._ended
+        assert signal.getsignal(signal.SIGTERM) is callers
+    finally:
+        signal.signal(signal.SIGTERM, before)
+
+
 # ---- the client's own pieces, over loopback ---------------------------------------------------------------
 
 
@@ -724,35 +992,92 @@ def test_the_words_for_how_an_attempt_ended():
     assert probe._saw(OSError(errno.EPERM, "x")) == "error"
 
 
-def test_a_closed_port_is_refused_and_an_open_one_connected():
+def test_the_quic_wall_is_tried_with_a_datagram_a_quic_server_must_answer():
+    assert probe._payload("udp", "443") == probe.QUIC_PROBE and probe.QUIC_PROBE[0] & 0x80  # a long header
+    assert len(probe.QUIC_PROBE) == 1200  # the least a client's first datagram may carry
+    assert probe._payload("udp", probe.ODD_PORT) == probe._payload("udp", 123) == probe.PORT_PROBE
+
+
+def dns_reply(query: bytes, *addrs: str) -> bytes:
+    """A resolver's reply to `query`: its question again, then an A record for each of `addrs`."""
+    head = query[:2] + b"\x81\x80" + query[4:6] + len(addrs).to_bytes(2, "big") + bytes(4)
+    rrs = b"".join(b"\xc0\x0c\x00\x01\x00\x01\x00\x00\x00\x3c\x00\x04" + socket.inet_aton(a) for a in addrs)
+    return head + query[12:] + rrs
+
+
+@pytest.mark.parametrize(
+    ("reply", "want"),
+    [
+        (lambda q: dns_reply(q, ADDR, VENDOR), [ADDR, VENDOR]),
+        (dns_reply, []),  # an answer without an address
+        (lambda q: q[:2] + b"\x81\x80\x00\x01\x00\x05", []),  # one that cannot be read
+        (None, None),  # none at all
+    ],
+)
+def test_a_lookup_takes_the_resolvers_own_reply_and_no_other(reply, want):
+    """`ask` over loopback (L6-20: the client's socket half was never run by the suite). Its socket is
+    connected: a reply from any other address or port is not taken, however well formed."""
+    with (
+        socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as resolver,
+        socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as stray,
+    ):
+        resolver.bind(("127.0.0.1", 0))
+
+        def serve():
+            query, peer = resolver.recvfrom(512)
+            stray.sendto(dns_reply(query, "192.0.2.99"), peer)
+            if reply is not None:
+                resolver.sendto(reply(query), peer)
+
+        threading.Thread(target=serve, daemon=True).start()
+        assert probe.ask("name.example", "127.0.0.1", timeout=0.5, port=resolver.getsockname()[1]) == want
+
+
+@pytest.mark.parametrize(("far_end", "state"), [("holds", "open"), ("closes", "closed"), ("resets", "reset")])
+def test_the_held_connections_state_is_read_from_its_own_socket(far_end, state):
+    """`_peer_state` over loopback: what the far end sent after its handshake is read away on the way, and
+    an end of the stream or a reset behind it is found."""
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         listener.listen(1)
-        port = listener.getsockname()[1]
-        assert probe.tcp_try("127.0.0.1", port, timeout=2) == "connected"
-    assert probe.tcp_try("127.0.0.1", port, timeout=2) == "refused"
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as quiet:
-        quiet.bind(("127.0.0.1", 0))
-        assert probe.udp_try("127.0.0.1", quiet.getsockname()[1], b"x", timeout=0.2) == "silent"
-        closed = quiet.getsockname()[1]
-    assert probe.udp_try("127.0.0.1", closed, b"x", timeout=1) == "refused"
+        with socket.create_connection(listener.getsockname(), timeout=2) as held:
+            conn, _ = listener.accept()
+            conn.sendall(b"session tickets")
+            if far_end == "resets":
+                conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            if far_end != "holds":
+                conn.close()
+            got, until = probe._peer_state(held), time.monotonic() + 2
+            while got == "open" and far_end != "holds" and time.monotonic() < until:  # loopback is fast
+                got = probe._peer_state(held)
+            conn.close()
+    assert got == state
 
 
-def test_a_datagram_that_is_answered_got_through():
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as echo:
-        echo.bind(("127.0.0.1", 0))
-
-        def answer():
-            data, peer = echo.recvfrom(2048)
-            echo.sendto(data[:8], peer)
-
-        t = threading.Thread(target=answer, daemon=True)
-        t.start()
-        assert probe.udp_try("127.0.0.1", echo.getsockname()[1], probe.QUIC_PROBE, timeout=2) == "answered"
-        t.join(2)
-    assert (
-        len(probe.QUIC_PROBE) == 1200 and probe.QUIC_PROBE[0] & 0x80
-    )  # a long header a QUIC server must answer
+def test_the_client_holds_its_connection_across_the_apply_and_says_how_it_stood(monkeypatch, capsys):
+    """`client_main`'s hold over loopback: the first line names the held connection, the plan after the
+    apply comes on stdin, and the second line says how the connection stood (here, the far end closed it).
+    No plan in time, and it ends after its first line."""
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        held = socket.create_connection(listener.getsockname(), timeout=2)
+        conn, _ = listener.accept()
+        sport = held.getsockname()[1]
+        looks = iter([(GOOD, held), (GOOD, None), (GOOD, held)])
+        monkeypatch.setattr(probe, "observe", lambda spec, keep=False: next(looks))
+        r, w = os.pipe()
+        monkeypatch.setattr(probe.sys, "stdin", os.fdopen(r, encoding="utf-8"))
+        with os.fdopen(w, "w", encoding="utf-8") as plan:
+            plan.write(json.dumps({"spec": P.spec()}) + "\n")
+        conn.close()
+        assert probe.client_main([json.dumps(P.spec()), "--hold", "5"]) == 0
+        first, second = (json.loads(line) for line in capsys.readouterr().out.splitlines())
+        assert first == {"obs": GOOD, "held": {"dst": "127.0.0.1", "sport": sport}}
+        assert second == {"obs": GOOD, "held_state": "closed"}
+        assert probe.client_main([json.dumps(P.spec()), "--hold", "0.05"]) == 0  # stdin at its end: no plan
+        assert len(capsys.readouterr().out.splitlines()) == 1
+        held.close()
 
 
 def test_a_handshake_with_something_that_is_not_tls_is_not_ok():
@@ -811,7 +1136,7 @@ def run_across(tmp_path, lg, monkeypatch, first, second, ids=("77", "77"), go=Tr
     host = Host(answers={("conntrack", "-L"): entry, **(answers or {})})
     client = Client(first, second)
     monkeypatch.setattr(probe.subprocess, "Popen", lambda *a, **k: client)
-    monkeypatch.setattr(probe, "control", lambda p, o, dev="": {"path": True})
+    monkeypatch.setattr(probe, "control", lambda p, o, dev="", left=None: {"path": True})
     d = tmp_path / "confirm"
     d.mkdir()
     env = host.env(tmp_path)
@@ -992,7 +1317,8 @@ def test_only_the_recorded_run_of_a_gateway_with_the_probe_on_sends_it(tmp_path,
     ran: list[str] = []
 
     def fake(s, profile, env=None, connect=True):
-        ran.append((s.tv_probe, connect))
+        # (L6-21) and under the handler that unwinds it on a SIGTERM, as `tvgw probe` has it
+        ran.append((s.tv_probe, connect) if signal.getsignal(signal.SIGTERM) is probe._ended else "bare")
         return probe.judge(P, obs(blocked=[ADDR]), PORT, UP, never)
 
     monkeypatch.setattr(probe, "run", fake)
@@ -1004,8 +1330,14 @@ def test_only_the_recorded_run_of_a_gateway_with_the_probe_on_sends_it(tmp_path,
     off = dataclasses.replace(on, tv_probe="off")
     assert verify.main(on, lg) == 0 and ran == []  # a plain verify sends nothing
     assert verify.main(off, lg, record_to_store=True) == 0 and ran == []  # nor a recorded one with it off
-    # an unknown fails no run; and the check leaves it to the probe whether a connection out is due
-    assert verify.main(on, lg, record_to_store=True) == 0 and ran == [("on", None)]
+    # an unknown fails no run; and the check leaves it to the probe whether a connection out is due. The
+    # process's own handler first: `tvgw probe`'s, which a test before may have left, would hide a bare run
+    before = signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    try:
+        assert verify.main(on, lg, record_to_store=True) == 0 and ran == [("on", None)]
+        assert signal.getsignal(signal.SIGTERM) is signal.SIG_DFL  # and it is the process's own after it
+    finally:
+        signal.signal(signal.SIGTERM, before)
     conn = db.connect(store, readonly=True)
     rows = conn.execute("SELECT tv_probe FROM gw_samples ORDER BY t").fetchall()
     conn.close()
@@ -1172,26 +1504,38 @@ def test_the_adtech_wall_is_planned_from_the_settings_as_the_apply_renders_it(lg
 def test_the_adtech_port_is_tried_at_the_documentation_address_only_where_its_wall_stands(monkeypatch):
     table = {**{n: [VENDOR] for n in NAMES}, TARGET: [ADDR], "alphonso.tv": ["0.0.0.0"]}
     _asked, _shaken, tried = recorded(monkeypatch, table.__getitem__)
-    seen, _ = probe.observe(dataclasses.replace(P, adtech=True).spec(connect=False))
-    assert tried == [(WALL, 853), (WALL, 443), (WALL, probe.ADTECH_PORT)] and seen["adtech"] == "refused"
+    seen, _ = probe.observe(dataclasses.replace(P, adtech=True, quic=False).spec(connect=False))
+    assert tried == [([*P.ports, DOT, ADTECH], [DOT, ADTECH])] and seen["adtech"] == "refused"
+    assert seen["quic"] is None  # BLOCK_QUIC=no: not tried
     tried.clear()
     seen, _ = probe.observe(P.spec(connect=False))
-    assert tried == [(WALL, 853), (WALL, 443)] and seen["adtech"] is None
+    assert tried == [([*P.ports, DOT, QUIC], [DOT, QUIC])] and seen["adtech"] is None
+
+
+EXPIRED = {**GOOD["ports"], "tcp/80": "expired"}  # the next hop's time-exceeded for the web's try
 
 
 @pytest.mark.parametrize(
-    ("name", "saw", "uplink", "outcome"),
+    ("saw", "ports", "dot", "uplink", "outcome"),
     [
-        ("adtech", "refused", UP, PASS),  # the wall's reset
-        ("adtech", "silent", UP, FAIL),  # the SYN went out: the wall is missing
-        ("adtech", "connected", UP, FAIL),
-        ("adtech", "silent", DOWN, UNKNOWN),
+        ("reset", EXPIRED, "refused", UP, PASS),  # the wall's reset, the next hop seen to let tries die
+        ("reset", GOOD["ports"], "expired", UP, PASS),  # the DoT try that died there says it as well
+        ("reset", GOOD["ports"], "refused", UP, UNKNOWN),  # a reset the next hop may have sent
+        ("reset", {**EXPIRED, "tcp/80": "reset"}, "refused", UP, UNKNOWN),  # a hop that resets the web too
+        ("reset", {**GOOD["ports"], "udp/123": "expired"}, "refused", UP, UNKNOWN),  # a UDP hop proves no TCP
+        ("reset", {**GOOD["ports"], "tcp/80": "unreachable"}, "refused", UP, UNKNOWN),  # nor another error
+        ("silent", EXPIRED, "refused", UP, FAIL),  # the SYN went out: the wall is missing
+        ("expired", GOOD["ports"], "refused", UP, FAIL),  # and died at the next hop, which said so
+        ("connected", EXPIRED, "refused", UP, FAIL),
+        ("silent", EXPIRED, "refused", DOWN, UNKNOWN),
     ],
 )
-def test_the_adtech_wall_passes_only_on_a_refusal(name, saw, uplink, outcome):
+def test_the_adtech_wall_passes_only_on_the_gateways_own_reset(saw, ports, dot, uplink, outcome):
+    """L6-9: the wall answers with a reset, which names no sender. Until 2026-11-17 any reset passed, and
+    a router that resets connections to unrouted addresses held the stage up with the wall gone."""
     plan = dataclasses.replace(P, adtech=True)
-    v = probe.judge(plan, obs(**{name: saw}), PORT, uplink, never)
-    assert outcomes(v)[name] == outcome
+    v = probe.judge(plan, obs(adtech=saw, ports=ports, dot=dot), PORT, uplink, never)
+    assert outcomes(v)["adtech"] == outcome
 
 
 def test_a_must_allow_address_in_a_refused_list_fails_the_lists_step():

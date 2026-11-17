@@ -21,8 +21,10 @@ injects. The module re-applies the default scenario when it ends."""
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -714,35 +716,80 @@ def test_a_repair_during_a_confirmed_applys_wait_runs_at_once(clean, net):
     assert gw.tv_reaches_the_web() == f"pass:{vnet.GW_WLAN}"
 
 
-@pytest.mark.parametrize(
-    ("step", "settings", "fault"),
-    [
-        (
-            "adtech",
-            {"PROFILE": "lg-webos"},
-            (
-                'counter reject with tcp reset comment \\"LG adtech port\\"',
-                'counter accept comment \\"LG adtech port\\"',
-            ),
-        ),
-    ],
+WALL_ADDR = "192.0.2.53"  # probe.WALL_ADDR, where the walls and the ports are tried
+# (walls) copies of the script whose DoT and adtech walls let their packets through
+DOT_OPEN = ('853, 8853 } counter reject comment "DoT/DoQ"', '853, 8853 } counter accept comment "DoT/DoQ"')
+ADTECH_OPEN = (
+    'counter reject with tcp reset comment \\"LG adtech port\\"',
+    'counter accept comment \\"LG adtech port\\"',
 )
-def test_the_port_walls_are_probed_where_they_stand(clean, net, step, settings, fault):
-    """(revert) Decision 65's item 5: the probe did not exercise LG's adtech wall (STRICT_PORTS is the
-    `ports` step's, package D). It is tried at the documentation address: refused where it stands, and a
-    copy of the script whose wall lets the packet through fails the step. (With PROFILE=lg-webos the
-    stand-in filter answers the profile's blocked name with an address, so that run's verdict is unknown
-    at `blocked`; the step is what is read.)"""
-    gw = clean
+# the adtech wall is LG's alone (design decision 62). The stand-in filter answers this profile's blocked
+# name with an address, so its runs are unknown at `blocked`: the walls' steps are what is read
+LG = {"PROFILE": "lg-webos"}
+
+
+@contextlib.contextmanager
+def next_hop(net, owns_the_wall: bool = False):
+    """(walls) The internet side as a router, which it is not otherwise (it forwards nothing, so a try that
+    dies there dies in silence): it forwards, so a try that reaches it with one hop left to live is
+    answered at once with a time-exceeded of its own, from its own address, unlimited as the gateway's
+    errors are here; and it counts what it forwards to the walls' address, which is what would travel the
+    internet. With `owns_the_wall` it holds that address itself, as a router that answers unrouted
+    addresses would: every TCP try there is reset, by it. Yields a reader of the count."""
+    router = {"net.ipv4.ip_forward": "1", "net.ipv4.icmp_ratelimit": "0"}
+    was = {key: net.ns(net.wan, "sysctl", "-n", key).stdout.strip() for key in router}
+    count = (
+        "table inet beyond {\n\tchain forward {\n\t\ttype filter hook forward priority 0;\n"
+        f"\t\tip daddr {WALL_ADDR} counter\n\t}}\n}}\n"
+    )
+    net.ns(net.wan, "nft", "-f", "-", input=count)
+    for key, value in router.items():
+        net.ns(net.wan, "sysctl", "-qw", f"{key}={value}")
+    if owns_the_wall:
+        net.ns(net.wan, "ip", "addr", "add", f"{WALL_ADDR}/32", "dev", "lo")
+
+    def beyond() -> int:
+        listing = net.ns(net.wan, "nft", "list", "chain", "inet", "beyond", "forward").stdout
+        return int(re.search(r"counter packets (\d+)", listing).group(1))
+
     try:
-        assert gw.apply(conf(**settings)).returncode == 0
-        rc, verdict = gw.probe(conf(**settings))
-        net.save(f"probe/wall-{step}.json", json.dumps(verdict, indent=1))
-        assert gw.stages(verdict)[step] == "pass", verdict
-        assert gw.apply(conf(**settings), gw.script(fault)).returncode == 0
-        rc, verdict = gw.probe(conf(**settings))
-        net.save(f"probe/wall-{step}-missing.json", json.dumps(verdict, indent=1))
-        assert gw.stages(verdict)[step] == "fail" and rc == 3, verdict
+        yield beyond
+    finally:
+        net.ns(net.wan, "ip", "addr", "del", f"{WALL_ADDR}/32", "dev", "lo", check=False)
+        net.ns(net.wan, "nft", "delete", "table", "inet", "beyond", check=False)
+        for key, value in was.items():
+            net.ns(net.wan, "sysctl", "-qw", f"{key}={value}", check=False)
+
+
+def test_a_wall_passes_on_the_gateways_own_refusal_alone_and_a_missing_one_lets_nothing_past_the_next_hop(
+    clean, net
+):
+    """L6-9, on a kernel: the walls were tried on tries of their own, with no time to live, and any reset
+    passed. Now they go with the ports (PORT_TTL), and only the gateway's own refusal passes. (1) The
+    walls stand: DoT and QUIC pass on the gateway's ICMP error, read with its sender; the adtech wall on
+    its reset, since the next hop answered the web's tries by time-exceeded. (2) The DoT and adtech walls
+    removed: both fail, and the router forwarded nothing towards the wall's address (3 packets before).
+    (3) The router holds that address and resets every TCP try: the missing walls are unknown, never a
+    pass (both passed before), and so is the web's reset (a fail of the `ports` step before); QUIC, which
+    the gateway refuses, passes. Put back, DoT passes again and the adtech reset stays unknown."""
+    gw = clean
+
+    def stages(*names: str) -> tuple:
+        _, verdict = gw.probe(conf(**LG))
+        net.save(f"probe/walls-{gw.n}-{'-'.join(names)}.json", json.dumps(verdict, indent=1))
+        return tuple(gw.stages(verdict).get(n) for n in names)
+
+    try:
+        with next_hop(net) as beyond:
+            assert gw.apply(conf(**LG)).returncode == 0
+            assert stages("dot", "quic", "adtech", "ports") == ("pass",) * 4
+            assert gw.apply(conf(**LG), gw.script(DOT_OPEN, ADTECH_OPEN)).returncode == 0
+            assert stages("dot", "adtech", "quic") == ("fail", "fail", "pass")
+            assert beyond() == 0  # every try a missing wall let out ended at the next hop
+        with next_hop(net, owns_the_wall=True):
+            assert stages("dot", "adtech", "ports", "quic") == ("unknown", "unknown", "unknown", "pass")
+            assert gw.apply(conf(**LG)).returncode == 0
+            assert stages("dot", "adtech", "ports", "quic") == ("pass", "unknown", "unknown", "pass")
     finally:
         assert gw.apply(conf()).returncode == 0
 
