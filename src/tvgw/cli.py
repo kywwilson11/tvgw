@@ -667,18 +667,19 @@ def render_names_live(live: dict, out=None) -> None:
     )
 
 
-def coverage_lines(cov: dict) -> list[str]:
+def coverage_lines(cov: dict, dated: bool = False) -> list[str]:
     """(coverage) The brief's Coverage lines after the sources: how much of the bytes the TV's port carried
     to the TV the flow record accounts for, and the holes it leaves, then each source's gaps, "not known
-    from 19:20 to 20:40" (design decision 100). Nothing for a window with no counter and no gap."""
+    from 19:20 to 20:40", with weekdays when `dated` (design decision 100). Nothing for a window with no
+    counter and no gap."""
     out = []
     gaps = {src: [coverage.Gap(**g) for g in found] for src, found in (cov.get("gaps") or {}).items()}
     share = (cov.get("reconcile") or {}).get("share")
     if share is not None:
         holes = [g for g in gaps.get("flows", []) if g.why == coverage.WHY_PORT]
-        where = coverage.span(holes) if holes else "none"
+        where = coverage.span(holes, dated) if holes else "none"
         out.append(f"flow record: {share:.0%} of the TV port's bytes; holes: {where}")
-    out += [f"{src}: not known {coverage.span(found)}" for src, found in gaps.items() if found]
+    out += [f"{src}: not known {coverage.span(found, dated)}" for src, found in gaps.items() if found]
     return out
 
 
@@ -703,7 +704,13 @@ def render_brief(o: dict, out=None) -> None:
         print(f"Coverage: {', '.join(parts)}; last ingest {ts(cov['last_run'], '%m-%d %H:%M')}", file=out)
         if cov["not_assessed"]:
             print(f"NOT ASSESSED (source not read recently): {', '.join(cov['not_assessed'])}", file=out)
-        for line in coverage_lines(cov):  # (coverage) what each source was not looking at, by the window
+        # (coverage) what each source was not looking at; a window across days names the day of each stretch
+        days = (
+            {datetime.fromtimestamp(t).date() for t in (o["since"], o["until"] - 1e-6)}
+            if "since" in o
+            else ()
+        )
+        for line in coverage_lines(cov, len(days) > 1):
             print(line, file=out)
         for w in cov["warnings"]:
             print(f"ingest warning: {clean(w)}", file=out)

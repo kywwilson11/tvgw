@@ -147,13 +147,13 @@ def observed(
 
 def _unnamed(conn: sqlite3.Connection, a: float, b: float) -> dict[str, int]:
     """The window's completed connections that no hello named, to a public address, counted by address. A
-    connection with no start time is placed by its end."""
+    connection with no start time is placed by its end; the two ranges each read an index of their own."""
     out: dict[str, int] = {}
     for dst, bu, pu, bd, pd in conn.execute(
         f"""SELECT f.dst, f.bytes_up, f.pkts_up, f.bytes_down, f.pkts_down FROM flows f
-            WHERE COALESCE(f.t_start, f.t_end) >= ? AND COALESCE(f.t_start, f.t_end) < ?
+            WHERE ((f.t_start >= ? AND f.t_start < ?) OR (f.t_start IS NULL AND f.t_end >= ? AND f.t_end < ?))
               AND {queries.FLOW_NAME} IS NULL""",
-        (a, b),
+        (a, b, a, b),
     ):
         if is_public_address(dst) and completed(bu, pu, bd, pd):
             out[dst] = out.get(dst, 0) + 1

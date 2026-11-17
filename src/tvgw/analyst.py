@@ -79,6 +79,7 @@ HEALTH_RED_LINES = (
     "firewall checks",
     "ingest warnings",
     "TV was on but no ",
+    "the live reading has been silent",  # (coverage) a producer gone quiet, as the line above (decision 100)
     "the Pi's own lookups",
     "machine rule ",
     "gateway hardware:",  # (reliability)

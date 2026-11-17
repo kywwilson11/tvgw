@@ -14,7 +14,20 @@ from appfront_store import GW, HOUR, YT, Store, evening, watched
 from conftest import NOW as GATEWAY_NOW
 from conftest import fake_extract, fake_oddport
 
-from tvgw import cli, companies, coverage, db, drafts, ingest, plain, queries, receipt, refused, tvlive
+from tvgw import (
+    analyst,
+    cli,
+    companies,
+    coverage,
+    db,
+    drafts,
+    ingest,
+    plain,
+    queries,
+    receipt,
+    refused,
+    tvlive,
+)
 from tvgw.coverage import Gap
 
 DAY_A, DAY_B = evening(0, 0), evening(1, 0)  # the evening's day, midnight to midnight
@@ -327,10 +340,11 @@ def test_a_connection_covers_an_interval_when_it_began_before_its_end_and_ended_
 
 def test_an_interval_across_the_windows_edge_counts_by_its_share_of_time_and_a_quiet_port_by_none(conn):
     samples(conn, (at(20), 0), (at(20) + 600, 6000))
-    conn.execute(  # a connection is counted where it ended: one with no start time too
+    # a connection is counted where it ended, one with no start time too: at the window's start, not its end
+    conn.executemany(
         "INSERT INTO flows(t_start, t_end, proto, dst, dport, sport, bytes_down)"
-        " VALUES (NULL, ?, 'tcp', '198.51.100.7', 443, 1, 900)",
-        (at(20.5),),
+        " VALUES (NULL, ?, 'tcp', '198.51.100.7', 443, 1, ?)",
+        [(at(20.5), 800), (at(20) + 150, 100), (DAY_B, 7)],
     )
     assert coverage.reconcile(conn, at(20) + 150, DAY_B) == (4500, 900, 0.2)
     assert coverage.reconcile(conn, at(21), DAY_B) == (0, 0, None)
@@ -370,15 +384,16 @@ def test_gaps_join_only_with_their_own_kind_and_their_words_merge_every_kind():
 
 
 @pytest.mark.parametrize(
-    ("a", "b", "words"),
+    ("a", "b", "words", "dated"),
     [
-        (at(19 + 20 / 60), at(20 + 40 / 60), "from 19:20 to 20:40"),
-        (at(19.2), DAY_B, "from 19:12 to 24:00"),  # to the end of the day, not "to 00:00" of the next
-        (at(23), evening(1, 1), "from Mon 23:00 to 01:00"),  # across midnight: the start's weekday
+        (at(19 + 20 / 60), at(20 + 40 / 60), "from 19:20 to 20:40", "from Mon 19:20 to Mon 20:40"),
+        (at(19.2), DAY_B, "from 19:12 to 24:00", "from Mon 19:12 to Mon 24:00"),  # not "to 00:00" of the next
+        (at(23), evening(1, 1), "from Mon 23:00 to 01:00", "from Mon 23:00 to Tue 01:00"),  # across midnight
     ],
 )
-def test_a_gap_in_words(a, b, words):
+def test_a_gap_in_words_and_on_a_window_of_several_days_with_its_weekdays(a, b, words, dated):
     assert coverage.span([Gap("dns", a, b, "")]) == words
+    assert coverage.span([Gap("dns", a, b, "")], dated=True) == dated
     assert plain.absent("No lookup was refused.", [Gap("dns", a, b, "")]) == f"not known {words}"
 
 
@@ -396,6 +411,9 @@ def test_an_older_days_brief_shows_the_gaps_it_had_then_though_the_source_is_ali
     assert "dns: not known from 13:20 to 19:20" in lines and "flows: not known from 13:20 to 19:20" in lines
     later = queries.coverage(conn, evening(2, 0), evening(3, 0), now=evening(3, 1))
     assert later["gaps"] == {"dns": [], "flows": [], "tvlive": []}
+    out = io.StringIO()  # a brief of three days says on which one
+    cli.render_brief(queries.window_report(conn, DAY_A, evening(3, 0), lg, now=evening(3, 1), gw_ip=GW), out)
+    assert "dns: not known from Mon 13:20 to Mon 19:20" in out.getvalue().splitlines()
 
 
 def test_the_brief_names_the_share_of_the_ports_bytes_the_flow_record_holds_and_its_holes(conn):
@@ -414,43 +432,59 @@ def test_the_brief_names_the_share_of_the_ports_bytes_the_flow_record_holds_and_
     assert cli.coverage_lines({"gaps": {}, "reconcile": {"share": None}}) == []
 
 
-@pytest.mark.parametrize("back", [None, at(20)], ids=["quiet still", "quiet, then back"])
-def test_a_live_reading_quiet_while_the_tv_was_on_is_a_red_line_while_it_stays_quiet(conn, lg, back):
+@pytest.mark.parametrize(
+    ("beating", "now", "since"),
+    [
+        ([(18.1, 19.2)], NOW, "19:06"),  # quiet since 19:06, and still quiet
+        ([(18.1, 19.2), (20, 36)], NOW, None),  # quiet from 19:06, back at 20:00
+        (
+            [(18.1, 23.5), (24.5, 36)],
+            evening(1, 6),
+            None,
+        ),  # quiet from 23:26, back at 00:30, briefed at 06:00
+        ([(18.1, 19.2), (20, 21)], NOW, "21:00"),  # back at 20:00, quiet again after 21:00: the later one
+        ([(18.1, 24.5)], NOW, None),  # quiet only from 00:26, after the day: tomorrow's brief says so
+    ],
+    ids=["quiet still", "back", "back after midnight", "quiet twice", "quiet after the day"],
+)
+def test_a_live_reading_quiet_while_the_tv_was_on_is_a_red_line_while_it_stays_quiet(
+    conn, lg, beating, now, since
+):
     """The tabled gap: the heartbeats stop after 19:06 with no disconnect while the readings say the TV is on;
     the brief raised nothing, and the session quietly became "to the hour"."""
     on_all_day(conn)
-    beats(conn, at(18.1), at(19.2))
-    if back:
-        beats(conn, back, NOW)
-    o = queries.window_report(conn, DAY_A, DAY_B, lg, now=NOW, gw_ip=GW)
+    for start, end in beating:
+        beats(conn, at(start), at(end))
+    o = queries.window_report(conn, DAY_A, DAY_B, lg, now=now, gw_ip=GW)
     lines = [x for x in o["red_lines"] if x.startswith("the live reading")]
-    assert spans(coverage.Gap(**g) for g in o["coverage"]["gaps"]["tvlive"]) == [
-        (LAST_BEAT, back or DAY_B, coverage.WHY_BEAT)
-    ]
-    assert lines == (
-        [] if back else ["the live reading has been silent since 2026-10-26 19:06 while the TV was on"]
-    )
-    if not back:
-        tier, sentence, action = plain.tier(lines[0])
+    in_the_day = beating[0][1] < 24  # a quiet that began in the day shows in Coverage, whatever came after
+    assert bool(o["coverage"]["gaps"]["tvlive"]) is in_the_day
+    said = f"the live reading has been silent since 2026-10-26 {since} while the TV was on"
+    assert lines == ([said] if since else [])
+    if since:  # the household's to act on, and like every producer gone quiet it buys no analyst request
+        tier, sentence, action = plain.tier(said)
         assert (
             tier == "act" and action.endswith("sudo systemctl restart tvgw-tvlive") and sentence.endswith(".")
         )
+        pack = {"red_lines": [said], "tv": {"readings_on": 3}, "totals": {"dns": {"lookups": 5}}}
+        assert not any("red line" in reason for reason in analyst.novelty(pack))
 
 
 @pytest.mark.parametrize(
-    ("baseline", "line"),
+    ("before", "line"),
     [
-        (False, "Firewall held from 06:40: adtech ports 50; 6 checks, 0 failed"),
-        (True, "Firewall held: adtech ports 60; 6 checks, 0 failed"),
+        (None, "Firewall held from 06:40: adtech ports 50; 6 checks, 0 failed"),
+        (3000, "Firewall held: adtech ports 60; 6 checks, 0 failed"),  # within FW_BASELINE: the baseline
+        (3700, "Firewall held from 06:40: adtech ports 50; 6 checks, 0 failed"),  # too old to be one
     ],
-    ids=["no snapshot before the window", "one in the hour before"],
+    ids=["no snapshot before the window", "one in the hour before", "one before that"],
 )
 def test_the_firewall_line_says_from_when_its_counts_run_when_that_is_after_the_window_begins(
-    conn, lg, baseline, line
+    conn, lg, before, line
 ):
     """With no snapshot in the hour before, the counts began at the window's first, and nothing said so."""
     snaps = every(at(6 + 40 / 60), at(7.5), 600)
-    rows = [(t, 10 * k) for k, t in enumerate(snaps, 1)] + ([(DAY_A - 600, 0)] if baseline else [])
+    rows = [(t, 10 * k) for k, t in enumerate(snaps, 1)] + ([(DAY_A - before, 0)] if before else [])
     conn.executemany(
         "INSERT INTO fw_counters(t, rule, packets, bytes) VALUES (?, 'LG adtech port', ?, 0)", rows
     )
@@ -589,10 +623,19 @@ def test_the_first_line_speaks_only_of_the_part_of_the_window_the_query_log_hold
 
 # ---- tvgw requests -----------------------------------------------------------------------------------------
 def kept(
-    tmp_path, lg, *, dst="203.0.113.50", down=90_000, answers=(TRACKER,), given=-3.0, start=22.0, seconds=60.0
+    tmp_path,
+    lg,
+    *,
+    dst="203.0.113.50",
+    down=90_000,
+    answers=(TRACKER,),
+    given=-3.0,
+    start=22.0,
+    unstarted=False,
+    **talk,
 ):
-    """A company every lookup of which was refused in the window, and one connection no hello named to `dst`,
-    an address the `answers` names were given `given` days from the evening (three before)."""
+    """A company every lookup of which was refused in the window, and connections no hello named to `dst`
+    (one, or `n`), an address the `answers` names were given `given` days from the evening (three before)."""
     s = Store(tmp_path / "k.db")
     runs(s.conn, hourly())
     for i, name in enumerate(answers, 1):
@@ -601,7 +644,14 @@ def kept(
             "INSERT INTO answer_ip(dns_id, t, ip, ttl) VALUES (?, ?, ?, 60)", (i, at(20) + given * 86400, dst)
         )
     s.lookup(at(21), TRACKER, blocked=1)
-    s.talk(at(start), None, up_=2_000_000, down_=down, dst=dst, seconds=seconds)
+    for k in range(talk.pop("n", 1)):
+        s.talk(at(start) + 120 * k, None, up_=2_000_000, down_=down, dst=dst, **talk)
+    if unstarted:  # and one conntrack gave no start time, ending in the window
+        s.conn.execute(
+            "INSERT INTO flows(t_start, t_end, proto, dst, dport, sport, pkts_up, bytes_up, pkts_down,"
+            " bytes_down) VALUES (NULL, ?, 'tcp', ?, 443, 9, 10, 1000, 10, 9000)",
+            (at(22), dst),
+        )
     return drafts.observed(s.conn, lg, DAY_A, DAY_B, now=NOW)
 
 
@@ -650,10 +700,16 @@ def test_a_refused_company_moves_only_for_a_completed_unnamed_connection_in_the_
     ]
 
 
-def test_two_names_of_one_company_given_one_address_count_its_connection_once(tmp_path, lg):
-    assert [
-        e["kept"] for e in kept(tmp_path, lg, answers=(TRACKER, "ad.doubleclick.net"))[drafts.ANSWERED]
-    ] == [1]
+def test_each_connection_counts_once_for_its_company_however_many_of_its_names_gave_the_address(tmp_path, lg):
+    found = kept(tmp_path, lg, answers=(TRACKER, "ad.doubleclick.net"), n=2)
+    assert [e["kept"] for e in found[drafts.ANSWERED]] == [2]
+
+
+@pytest.mark.parametrize("unstarted", [False, True])
+def test_an_unnamed_connection_with_no_start_time_counts_where_it_ended(tmp_path, lg, unstarted):
+    """One connection the day before, and with `unstarted` one with no start time that ended in the window."""
+    found = kept(tmp_path, lg, answers=("www.example.com",), start=-26.0, unstarted=unstarted)
+    assert found["sent_nothing_known"] is not unstarted
 
 
 @pytest.mark.parametrize(
@@ -666,10 +722,13 @@ def test_only_an_unnamed_connection_to_a_public_address_keeps_sent_nothing_from_
 
 
 # ---- the guard: no new sentence of absence without the gate ------------------------------------------------
-ABSENCE = re.compile(
-    r"\bNo (?:[a-z'-]+ ){0,4}(?:was|were)\b|\bNothing (?:new |likely [a-z ]+ )?(?:was|were)\b"
-    r"|\bsent (?:these|them|it) nothing\b|\blooked up nothing\b",
-    re.IGNORECASE,
+ABSENCE = (
+    re.compile(  # the shapes of "it did not happen": no / none of / not one ... was, nothing was, never did
+        r"\bNo (?:[a-z'-]+ ){0,4}(?:was|were)\b|\bNothing (?:new |likely [a-z ]+ )?(?:was|were)\b"
+        r"|(?-i:\bNone of\b)|\bnone of the\b|\bNot one\b|\bnever (?:looked up|reached|sent|asked)\b"
+        r"|\bsent (?:these|them|it) nothing\b|\blooked up nothing\b",
+        re.IGNORECASE,
+    )
 )
 MODULES = ("queries", "receipt", "refused", "drafts")
 BASELINE = os.path.join(os.path.dirname(__file__), "absence_baseline.txt")
@@ -707,6 +766,21 @@ def test_no_sentence_of_absence_is_new_unless_it_is_gated_and_the_baseline_only_
     assert baseline() <= ungated, (
         f"take these out of absence_baseline.txt, gated or gone: {baseline() - ungated}"
     )
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "No lookup was refused for this app.",
+        "None of its lookups was refused.",
+        "Not one lookup was refused while it was in front.",
+        "The TV never looked up a tracker while it was in front.",
+        "Nothing new was refused for the TV.",
+        "so the TV sent these nothing through it.",
+    ],
+)
+def test_the_guard_knows_each_shape_of_a_sentence_of_absence(sentence):
+    assert ABSENCE.search(sentence)
 
 
 def test_the_guard_reads_a_sentence_added_without_the_gate_as_new(tmp_path):

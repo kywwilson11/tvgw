@@ -1318,17 +1318,17 @@ def coverage(conn: sqlite3.Connection, since: float, until: float, now: float | 
     adguard = conn.execute("SELECT value FROM meta WHERE key='adguard_version'").fetchone()
     # (coverage) each source judged over the window, never by whether it is alive now (design decision
     # 100): the stretches nothing was looking at, and how much of what the TV's port carried the flow record
-    # holds; a live reading quiet up to the end of what was judged is quiet still
+    # holds; and a quiet of the live reading that began by the window's end and runs on to now
     gaps = cover.all_gaps(conn, since, until, now)
     port, flows, share = cover.reconcile(conn, since, until)
-    quiet = gaps["tvlive"][-1:]
+    quiet = cover.covered(conn, "tvlive", since, now, now)[-1:]
     return {
         "last_run": float(last_run[0]) if last_run else None,
         "warnings": warn_list,
         "sources": sources,
         "gaps": {src: [asdict(g) for g in found] for src, found in gaps.items()},
         "reconcile": {"port_bytes": port, "flow_bytes": flows, "share": share},
-        "live_silent_since": quiet[0].a if quiet and quiet[0].b >= min(until, now) else None,
+        "live_silent_since": quiet[0].a if quiet and quiet[0].b >= now and quiet[0].a < until else None,
         "not_assessed": [s for s, v in sources.items() if not v["assessed"]],
         "adguard_version": adguard[0] if adguard else None,  # recorded by `tvgw verify --record`
         "vpn": vpn_boundary(conn),  # (events)

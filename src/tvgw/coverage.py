@@ -218,14 +218,18 @@ def reconcile(conn: sqlite3.Connection, a: float, b: float) -> tuple[int, int, f
     return port, flows, (flows / port if port else None)
 
 
-def span(gaps: list[Gap]) -> str:
+def span(gaps: list[Gap], dated: bool = False) -> str:
     """The gaps in words, `from 19:20 to 20:40`, those that overlap as one and several joined with `; `. A
-    gap that ends at midnight ends at 24:00, and a start on another day than its end carries its weekday."""
+    gap that ends at midnight ends at 24:00, and a start on another day than its end carries its weekday;
+    `dated` (a window across more than one day) gives both ends theirs."""
     out = []
     for g in join([Gap("", g.a, g.b, "") for g in gaps]):
         start, end = datetime.fromtimestamp(g.a), datetime.fromtimestamp(g.b)
         last = (end - timedelta(microseconds=1)).date()  # the day the gap's last moment falls on
-        until = "24:00" if end.date() != last else f"{end:%H:%M}"
-        since = f"{start:%H:%M}" if start.date() == last else f"{start:%a %H:%M}"
+        since, until = f"{start:%H:%M}", "24:00" if end.date() != last else f"{end:%H:%M}"
+        if dated or start.date() != last:
+            since = f"{start:%a} {since}"
+        if dated:
+            until = f"{last:%a} {until}"
         out.append(f"from {since} to {until}")
     return "; ".join(out)

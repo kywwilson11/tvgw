@@ -1,4 +1,7 @@
 drafts	, from the gateway's own record. Nothing was sent anywhere.
+queries	TV was on but never looked up its clock host (check the SDP hosts are reachable)
+queries	TV was on but never looked up its clock host, though it sent
 receipt	No name was captured for
 receipt	No name was new for
 receipt	no streaming bytes were replayed
+refused	none of the TV's lookups returned the address, and the gateway had refused nothing to it before
