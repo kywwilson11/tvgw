@@ -2617,8 +2617,9 @@ def main(s: Settings, profile: Profile, record_to_store: bool = False, as_json: 
         meta=lambda: store_meta(s.db_path, backup_dir=backup.directory(s.state_dir)),
         sleep=pause,
         # (probe) only the recorded 10-minute run sends the probe's packets, and only when it is on
-        # (its connection out only when one is due: probe.path_due)
-        probe=(lambda: tvprobe.run(s, profile, connect=None))
+        # (its connection out only when one is due: probe.path_due); a SIGTERM (the unit stopped, or its
+        # timeout) unwinds it as it does `tvgw probe`, so its pair and namespace go with it
+        probe=(lambda: tvprobe.unwinding(tvprobe.run, s, profile, connect=None))
         if record_to_store and s.tv_probe == "on"
         else None,
     )
