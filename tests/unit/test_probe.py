@@ -784,7 +784,9 @@ def test_the_lock_lives_in_tvgws_own_directory_which_a_reboot_empties_and_the_ru
     assert os.path.dirname(probe.LOCK) == os.path.dirname(probe.LAST) == "/run/tvgw"
     env = Host(answers={CLIENT: client_says(whole(lg))}).env(tmp_path)
     env.lock = str(tmp_path / "tvgw" / "tvgw-probe.lock")
-    was = os.umask(0)  # the mode is the run's own, as tvgw-apply's `install -d -m 755`, whatever the umask
+    was = os.umask(
+        0o077
+    )  # the mode is the run's own, as tvgw-apply's `install -d -m 755`, whatever the umask
     try:
         assert probe.run(S, lg, env).verdict == PASS
     finally:
@@ -893,6 +895,7 @@ UNFINISHED = "probe: the test client did not finish"
             ("unknown probe", UNFINISHED),
         ),  # the second look hangs
         ((SLOW, BROKEN), NONE_DUE, "black-holed", 40.0, ("unknown probe", ONCE)),  # no time left for one
+        ((SLOW, BROKEN), NONE_DUE, "black-holed", 30.0, ("unknown probe", ONCE)),  # less than its pause
     ],
     ids=[
         "working",
@@ -902,6 +905,7 @@ UNFINISHED = "probe: the test client did not finish"
         "client-silent-late",
         "second-look-hangs",
         "no-time-left",
+        "less-than-the-pause",
     ],
 )
 def test_every_path_of_across_publishes_its_verdict_after_within_the_budget(

@@ -1735,7 +1735,9 @@ def test_the_probe_passes_or_cannot_tell_and_moves_no_counter_it_can_reach():
     detail = scrub.scrub_for(S)(json.dumps(v.as_dict()))
     assert v.verdict != probe.FAIL, detail
     if v.verdict == probe.UNKNOWN:
-        assert "uplink" in v.reason or "from the gateway itself too" in v.reason, detail
+        # (decision 105) or a reset at a wall, where the router does not answer an expired packet
+        said = ("uplink", "from the gateway itself too", "which cannot be told apart")
+        assert any(words in v.reason for words in said), detail
     if after[0] == before[0]:  # the TV sent nothing meanwhile: every one of its counters stood still
         assert after[1] == before[1], (before[1], after[1])
     # the series beside the gateway samples, once the 10-minute check has run with the probe on

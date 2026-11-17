@@ -1449,7 +1449,8 @@ def locked(env: Env, wait: float | None = None):
     removes nothing (not_ready), and says so."""
     try:
         with contextlib.suppress(FileExistsError):
-            os.mkdir(os.path.dirname(env.lock), 0o755)
+            os.mkdir(os.path.dirname(env.lock))
+            os.chmod(os.path.dirname(env.lock), 0o755)  # whatever the umask
         fd = os.open(env.lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
     except OSError as e:
         yield f"the probe's lock cannot be opened: {e.strerror or e}" if env.euid() == 0 else None
