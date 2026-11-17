@@ -2,8 +2,10 @@
 six evenings of test_appeval's store (design decision 67). What each view says, and what none of them may
 ever say."""
 
+import ast
 import io
 import json
+import pathlib
 import re
 import time
 
@@ -673,6 +675,65 @@ def test_a_gap_is_told_by_its_software_fingerprint_alone(store, lg, monkeypatch)
     assert "suggests which software opened a connection; it does not say which app was in front" in out
     assert "  No fingerprint that is one app's: 1 connection." in out
     assert not receipt.FORBIDDEN.search(out) and receipt.render_gap_summary({**g, "conns": 0}) == []
+
+
+# ---- a gap labelled by its names (design decision 103) -------------------------------------------------------
+IN_THE_GAP = evening(2, 21.7)  # the third evening's readings at 21:20 and 22:20 disagree: a gap
+
+
+def test_a_gap_whose_names_are_one_apps_is_probably_that_app_and_the_line_says_the_tv_did_not_say(store, lg):  # noqa: F811
+    store.talk(IN_THE_GAP, "rr2b---sn-abc.googlevideo.com", down_=20_000_000)
+    rec = receipt.gather(store.conn, lg, GW, A, B, [], now=NOW)  # the hourly readings alone
+    g = receipt.gap_summary(rec)
+    # YouTube's video, and between.example.org: its site is in YouTube's picture from the fourth evening
+    assert g["by_picture"] == {
+        YT: {
+            "label": "YouTube (youtube.leanback.v4)",
+            "inferred": True,
+            "gaps": 1,
+            "conns": 2,
+            "bytes": 20_011_000,
+        }
+    }
+    out = text(receipt.render_gap_summary(g))
+    assert "  Probably YouTube (from the names it used; the TV did not say): 2 connections, 19.1 MB." in out
+    assert "  Opened like the software of" not in out and not receipt.FORBIDDEN.search(out)
+    assert receipt.gap_summary(rec, since=evening(3, 0.0))["by_picture"] == {}  # only what started since
+
+
+def test_an_inferred_label_never_reaches_the_picture_learner(store, tmp_path, monkeypatch, capsys):  # noqa: F811
+    """No feedback: a gap the pictures label never teaches a picture or a stack. The walk: every function
+    of the package that calls the learner, and every one that asks for or holds an inferred label; none is
+    both, and only the two reports ask (never didit, the judge, the analyst or the autonomy). Then the
+    receipt and the evaluation run on a store whose gap they label, and every timeline the learner is
+    handed keeps that gap a gap."""
+    learners, inferring = set(), set()
+    for path in pathlib.Path(appfront.__file__).parent.glob("*.py"):
+        for fn in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(fn, ast.FunctionDef):
+                used = {getattr(n, "id", None) or getattr(n, "attr", None) for n in ast.walk(fn)}
+                where = {f"{path.stem}.{fn.name}"}
+                learners |= where if used & {"learn", "learn_stacks"} else set()
+                inferring |= where if used & {"infer", "Inferred"} else set()
+    assert {"receipt.gather", "didit.evidence", "appeval.evaluate", "appeval.stacks"} <= learners
+    assert inferring == {"appfront.infer", "appeval.gap", "receipt.gap_summary"}
+    assert not learners & inferring
+    store.talk(IN_THE_GAP, "rr2b---sn-abc.googlevideo.com", down_=20_000_000)
+    handed = []
+    for name in ("learn", "learn_stacks"):
+        real = getattr(appfront, name)
+        monkeypatch.setattr(
+            appfront, name, lambda tl, *a, real=real, **k: handed.append(tl) or real(tl, *a, **k)
+        )
+    monkeypatch.setattr(time, "time", lambda: NOW)
+    conf = tmp_path / "tvgw.conf"
+    conf.write_text("", encoding="utf-8")
+    base = ["--conf", str(conf), "--db", store.path, "receipt", "--since", "8d", "--json"]
+    assert cli.main(base) == 0
+    assert json.loads(capsys.readouterr().out)["gaps"]["by_picture"][YT]["inferred"] is True
+    assert cli.main([*base, "--evaluate"]) == 0
+    assert json.loads(capsys.readouterr().out)["gap"]["by_picture"]["by_app"][YT]["conns"] == 2
+    assert len(handed) >= 4 and all(tl.at(IN_THE_GAP)[0] == appfront.GAP for tl in handed)
 
 
 def test_sizes_spans_and_counts_read_as_the_brief_reads():

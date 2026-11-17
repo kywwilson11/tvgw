@@ -187,6 +187,24 @@ def test_shapes_tell_telemetry_from_content(auto):
     conn.close()
 
 
+def test_a_shape_takes_the_app_in_front_from_the_live_record_while_it_was_up(auto):
+    """The shape named the hour's reading as the app for every connection that started in that hour,
+    even where the live record said another app was in front, or none yet. While the live reading's
+    session was up its record alone is read; at any other moment the hour's reading, as before."""
+    s, _ = auto
+    conn = db.connect(s.db_path)
+    up, on = (T0 + 2900, "conn", "up", ""), (T0 + 2900, "power", "Active", "")
+    front, lost = (T0 + 3500, "app", "netflix", ""), (T0 + 5000, "conn", "down", "lost")
+    conn.executemany("INSERT INTO tv_events(t, kind, value, detail) VALUES (?,?,?,?)", [up, on, front, lost])
+    conn.commit()
+    at = autoblock.app_in_front(conn, T0 - 3600, T0 + 86400)
+    assert [at(T0 + dt) for dt in (2899, 2900, 3500, 4999, 5000)] == [APP, "", "netflix", "netflix", APP]
+    # the beacon's connections every 10 minutes: those at 12:50, 13:00, 13:10 and 13:20 are the live record's
+    shape = autoblock.shapes(conn, ["tracker.example"], T0 - 1, T0 + 86400)["tracker.example"]
+    assert shape["apps"] == [APP, "netflix"]
+    conn.close()
+
+
 # what a rule for one beacon refuses, as far as the store knows: the beacon, and nothing under it
 LONE = {"names": 1, "expected": {}, "total_down": 4000, "median_down": 300}
 gate = functools.partial(autoblock.gate, reach=LONE)

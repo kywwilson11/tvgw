@@ -55,6 +55,10 @@ that app) and which is the system's (under SYSTEM_APPS apps or more, none above 
 the software that opened a connection, whichever app was in front: in a gap it says whose connection it
 probably was, and in a session it says when another app's software talked.
 
+The pictures are a third witness for a gap (`infer`, design decision 103): a gap whose traffic went to
+units only one app's picture holds was probably that app's. That label is for reports alone. It is never
+a session, so nothing learns a picture or a stack from it.
+
 Nothing here writes, connects or refuses anything.
 """
 
@@ -65,6 +69,7 @@ import itertools
 import json
 import math
 import sqlite3
+from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -83,6 +88,9 @@ PICTURE_FIRM_DAYS = 2  # seen on this many: firm; on fewer: thin, and every repo
 PICTURE_READY_DAYS = 3  # earlier viewing days an app needs before any name is called new under it
 # deep dive 14, F6, with its 200 hellos halved: `--evaluate` holds the rule to a leave-one-day-out test
 STACK_PURE, STACK_MIN, SYSTEM_APPS, SYSTEM_PURITY = 0.9, 100, 3, 0.5
+# a gap is labelled with the app whose picture holds this share of the gap's bytes on units in one picture
+# alone, and at least this many of them: a few megabytes of one app's names beside nothing else say little
+INFER_SHARE, INFER_MIN_BYTES = 0.9, 10 * 1024 * 1024
 PICTURE_DAYS = 28  # how far back a picture is learned from
 DAY_START_HOUR = 5  # a viewing day runs 05:00 to 05:00 local: an evening past midnight is one day
 CONT_TAIL = 6 * 3600.0  # a continuation's row can start this long after the window its hello fell in
@@ -893,3 +901,69 @@ def learn_stacks(tl: Timeline, seen: Iterable[tuple[float, str, str]]) -> Stacks
             key = (s.app, viewing_day(t))
             cell[key] = cell.get(key, 0) + 1
     return st
+
+
+# ---- the pictures as a witness for a gap -------------------------------------------------------------
+@dataclass(frozen=True)
+class Inferred:
+    """One gap and the app its names point to: `app` is None when they point to no one app clearly
+    enough. A label for a report and never a session, so no picture or stack is learned from it."""
+
+    t0: float
+    t1: float
+    app: str | None
+    conns: int
+    bytes: int
+
+
+def gaps(tl: Timeline) -> list[tuple[float, float]]:
+    """The gaps of a timeline, gap pieces that touch taken as one."""
+    out: list[tuple[float, float]] = []
+    for p in tl.pieces:
+        if p.cls != GAP:
+            continue
+        if out and out[-1][1] == p.t0:
+            out[-1] = (out[-1][0], p.t1)
+        else:
+            out.append((p.t0, p.t1))
+    return out
+
+
+def owners(ev: Evidence, without: int | None = None) -> dict[object, str]:
+    """Each unit one app's picture holds alone, with that app. A unit two pictures hold (the TV's own
+    software's, a delivery network several apps use) says nothing of which of them was in front."""
+    pictures = {app: ev.picture(app, without=without) for app in ev.seen}
+    held = Counter(u for units in pictures.values() for u in units)
+    return {u: app for app, units in pictures.items() for u in units if held[u] == 1}
+
+
+def infer(
+    tl: Timeline, conns: Iterable[Conn], profile: Profile, ev: Evidence, without: int | None = None
+) -> list[Inferred]:
+    """Each gap of `tl`, labelled with the app whose picture holds at least INFER_SHARE of the gap's bytes
+    on units one picture holds alone, and at least INFER_MIN_BYTES of them. A connection counts wholly in
+    the gap it started in, and one without a name, or with a name the platform or the TV maker owns, says
+    nothing. `without` leaves a viewing day out of the pictures, as the evaluation's test does."""
+    own = owners(ev, without)
+    spans = gaps(tl)
+    starts = [t0 for t0, _ in spans]
+    tally = [(Counter(), Counter()) for _ in spans]  # per gap: conns and bytes; bytes by owner
+    units: dict[str, object] = {}
+    for c in conns:
+        i = bisect.bisect_right(starts, c.t) - 1
+        if i < 0 or c.t >= spans[i][1] or tl.at(c.t)[0] != GAP:  # a lead window is its session's
+            continue
+        if c.name not in units:
+            kind = classify(profile, c.name) if c.name else None
+            units[c.name] = kind.unit if kind is not None and kind.cls in PICTURE_CLASSES else None
+        seen, by_app = tally[i]
+        seen.update(conns=1, bytes=c.bytes)
+        app = own.get(units[c.name])
+        if app is not None:
+            by_app[app] += c.bytes
+    out = []
+    for (t0, t1), (seen, by_app) in zip(spans, tally, strict=True):
+        top, held = min(by_app.items(), key=lambda kv: (-kv[1], kv[0]), default=(None, 0))
+        sure = held >= INFER_SHARE * sum(by_app.values()) and held >= INFER_MIN_BYTES
+        out.append(Inferred(t0, t1, top if sure else None, seen["conns"], seen["bytes"]))
+    return out

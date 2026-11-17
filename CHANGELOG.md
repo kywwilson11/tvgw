@@ -6,6 +6,12 @@
 
 ### Status
 
+### The receipt says which app a gap's traffic probably belonged to, and that the TV did not say (2026-11-16)
+
+- **What went wrong.** When nothing says which app was in front (the live reading lost the TV, or two hourly readings disagree), the receipt counted what started there as nobody's. Only the connections whose TLS fingerprint is one app's were named, and on the reference gateway that is a small share of those bytes. Separately, the traffic shape the analyst's two models read took the app from the hour's reading, also where the live reading said another app was in front.
+- **Now.** `sudo tvgw receipt --since 1d` adds, for a gap whose names belong to one app's picture alone, "Probably <app> (from the names it used; the TV did not say)" with its connections and bytes, and its JSON marks the label `inferred: true`. A gap whose names two apps share, or that holds under 10 MB of one app's names, stays a gap. The label is never used to learn what an app uses, and nothing else reads it ([design decision 103](docs/design-decisions.md#103-a-gap-is-labelled-with-the-app-whose-picture-alone-holds-its-names-for-reports-only-and-a-traffic-shape-reads-the-live-record-while-it-was-up)). `sudo tvgw receipt --evaluate` says how much of the gaps it labels, and hides each session in turn to score its labels. A traffic shape takes the app from the live reading while it was connected, and from the hour's reading otherwise, as before. Nothing is stored, refused or changed for the TV, and there is no new setting.
+- For developers: `appfront.infer()`, `appfront.owners()`, `appfront.gaps()`, `appfront.Inferred`, `appfront.INFER_SHARE`, `appfront.INFER_MIN_BYTES`; `appeval.gap()` and the evaluation's `gap`; `receipt.gap_summary()` gains `by_picture`; `autoblock.app_in_front()`.
+
 ### The message tap: what the TV sends inside a connection, seen when you ask and kept by nobody (2026-11-14)
 
 - **What was missing.** The test for screen recognition reads each connection's totals when it ends. A client that uploads a fingerprint every 14 seconds inside one connection on port 443, to a server that answers as much as it gets, passes it: of 400 such hours on the tests' stand-in, it found none.

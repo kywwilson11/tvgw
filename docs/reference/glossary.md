@@ -158,7 +158,7 @@ LG's plain-HTTP file service, whose hosts carry app packages and icons as well a
 
 ### gap (app in front)
 
-(app in front) A stretch in which the TV may have been on and nothing says which app was in front: the live session was lost, the hourly readings either side disagree, or the gateway's clock was set. A connection that started in a gap is nobody's; the receipt says what started there and which TLS fingerprint it carried. See [the app in front](../how-it-works/app-in-front.md#sessions-gaps-and-none).
+(app in front) A stretch in which the TV may have been on and nothing says which app was in front: the live session was lost, the hourly readings either side disagree, or the gateway's clock was set. A connection that started in a gap is nobody's: the receipt says what started there, which TLS fingerprint it carried, and the app whose picture alone holds a gap's names, as probable and never as a session. See [the app in front](../how-it-works/app-in-front.md#sessions-gaps-and-none).
 
 ## H
 
