@@ -839,6 +839,8 @@ def render(rep: Report, show_all: bool = False) -> list[str]:
     under it whatever weakens the ranking (Report.top_notes)."""
     now, start = rep.until, rep.history_from
     window = f"the last {span(rep.since, now)}"
+    if not rep.complete:  # (coverage) a log not read back to the window's start speaks only of what it holds
+        window = f"the part of {window} the query log still holds"  # the gate of every first line below
     likely = [n for n in rep.ranked if n.likely]
     others = [n for n in rep.ranked if not n.likely]
     top_notes = [f"  Note: {note}" for note in rep.top_notes]
@@ -865,13 +867,13 @@ def render(rep: Report, show_all: bool = False) -> list[str]:
         noun = "name" if all(isinstance(n, Name) for n in others) else "refusal"  # (ports)
         names = f"{noun} below" if len(others) == 1 else f"{len(others):,} {noun}s below"
         if any(n.first_sight for n in others):  # a new tracker, refused on purpose
-            out.append(
+            out.append(  # gated: `window` speaks only of what the log holds
                 f"Nothing likely to break an app was refused for the TV in {window}: the {names}"
                 f" {'is a tracker' if len(others) == 1 else 'are trackers'} refused on purpose, or"
                 f" {'was' if len(others) == 1 else 'were'} refused before too."
             )
         else:
-            out.append(
+            out.append(  # gated: `window` speaks only of what the log holds
                 f"Nothing new was refused for the TV in {window}: the {names}"
                 f" {'was' if len(others) == 1 else 'were'} refused before too, so"
                 f" {'it is' if len(others) == 1 else 'they are'} probably not why an app stopped."
@@ -879,19 +881,19 @@ def render(rep: Report, show_all: bool = False) -> list[str]:
         out += top_notes
         out.append(DOCTOR_NEXT)
     elif not rep.lookups:
-        out.append(
+        out.append(  # gated: `window` speaks only of what the log holds
             f"The TV looked up nothing in {window}, so nothing was refused: it may be off, or its traffic may"
             " not be reaching the gateway."
         )
         out.append(DOCTOR_NEXT)
     elif rep.hidden:  # what was refused is in the note, and none of it is an internet name
-        out.append(
+        out.append(  # gated: `window` speaks only of what the log holds
             f"No internet name was refused for the TV in {window}: only names that are not internet names,"
             " which the note below counts."
         )
         out.append(DOCTOR_NEXT)
     else:
-        out.append(f"Nothing was refused for the TV in {window}.")
+        out.append(f"Nothing was refused for the TV in {window}.")  # gated
         out.append(DOCTOR_NEXT)
     if others:
         shown = others if show_all else others[:SHOWN_OTHERS]

@@ -82,7 +82,7 @@ A name the TV must look up to set its clock, because webOS has no battery clock 
 
 ### Coverage
 
-The line near the top of the brief that says, per source, how many rows landed in the window and whether the source was read recently enough to judge. A source that was not is listed as NOT ASSESSED. It ends with the AdGuard Home version and, where `piactl` answers, PIA's state (`PIA Connected`), both as the last `tvgw verify --record` run saw them. See [Coverage](brief-sections.md#coverage).
+The line near the top of the brief that says, per source, how many rows landed in the window and whether the source was read recently enough to judge. A source that was not is listed as NOT ASSESSED. It ends with the AdGuard Home version and, where `piactl` answers, PIA's state (`PIA Connected`), both as the last `tvgw verify --record` run saw them. Lines below it say how much of the TV port's bytes the flow record accounts for and where a source was not looking. See [Coverage](brief-sections.md#coverage).
 
 ## D
 

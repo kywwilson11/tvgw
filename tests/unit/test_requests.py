@@ -20,6 +20,7 @@ NOW = H0 + 30 * DAY
 @pytest.fixture()
 def store(tmp_path):
     s = Store(tmp_path / "tvgw.db")
+    s.runs(NOW - 31 * DAY, NOW)  # the ingest ran all month: a company with no connection is an answer
     yield s
     s.conn.close()
 
@@ -58,7 +59,7 @@ def read(path: str) -> str:
 
 
 def found(store, lg) -> dict:
-    return drafts.observed(store.conn, lg, NOW - 30 * DAY, NOW)
+    return drafts.observed(store.conn, lg, NOW - 30 * DAY, NOW, now=NOW)
 
 
 def test_reached_attempted_and_answered_are_kept_apart(store, lg):

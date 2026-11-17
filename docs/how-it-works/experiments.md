@@ -173,11 +173,11 @@ The chain is not anchored anywhere. A public timestamp would show the file exist
 
 ## Request drafts
 
-`tvgw requests [--days N]` lists, over the last N days (30 by default), the companies the TV reached, those it only attempted, and those it looked up with no connection seen:
+`tvgw requests [--days N]` lists, over the last N days (30 by default), the companies the TV reached, those it only attempted, and those it looked up with no named connection:
 
 - reached: a connection whose TLS hello named one of the company's names and that carried data both ways, or a plain-HTTP request that got a success or redirect answer: a connection the firewall refused, a QUIC opening it rejected, or a request the URL filter refused never counts;
-- only attempted: the filter refused every lookup and nothing reached the company, so the TV sent it nothing through the gateway;
-- looked up, no connection seen: the filter answered, and the record cannot say whether the TV reached it.
+- only attempted: the filter refused every lookup and nothing reached the company. The list says the TV sent these nothing through the gateway only when the window holds no connection without a name to a public address and the flow record has no gap in it ([design decision 100](../design-decisions.md#100-a-sentence-that-claims-an-absence-is-printed-only-where-the-record-was-looking-and-each-sources-gaps-are-computed-per-window)); otherwise it says the record shows no connection named for them;
+- looked up, no named connection: the filter answered, or refused every lookup while the window holds a completed connection without a name to an address one of the company's names was given in the 7 days before, which it counts; the record cannot say whether the TV reached it.
 
 The company is the shipped snapshot's ([the data folder](../../src/tvgw/data/README.md)); a reached name it does not know is counted under its registrable domain and never guessed.
 

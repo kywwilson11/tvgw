@@ -6,6 +6,13 @@
 
 ### Status
 
+### A silence in the record is no longer told as "nothing happened" (2026-11-16)
+
+- **What went wrong.** The reports said "No lookup was refused while the app was in front" of a session with not one lookup on record, or whose query log the gateway had found cut short; `tvgw refused` began "Nothing was refused for the TV in the last 10 minutes" when it could not read the log back that far; and `tvgw requests` said "the TV sent these nothing through it" of a company whose lookups were all refused, though the TV had sent megabytes to an address that company's names were given earlier. The brief judged each log by whether it was read today, so a day the gateway missed five hours of looked whole; the flow log could stop for an hour of streaming, or the live reading go quiet while the TV was on, and nothing said so.
+- **Now.** For each window, the gateway works out the stretches its record cannot vouch for: from the hourly runs that read the query log and the flow log, from the live reading's heartbeats, and from the TV port's own byte counters, which the flow record has to account for. A sentence that says something did not happen is printed only where the record was looking; across a gap it says "not known from 19:20 to 20:40" ([design decision 100](docs/design-decisions.md#100-a-sentence-that-claims-an-absence-is-printed-only-where-the-record-was-looking-and-each-sources-gaps-are-computed-per-window)). The brief gains `flow record: 99% of the TV port's bytes; holes: none`, a line for each log with a gap, `Firewall held from 06:40:` when its counts start late, and a red line, `the live reading has been silent since 19:12 while the TV was on`, with the action to restart it. `tvgw requests` lists such a company under "looked up, no named connection". The receipt says "3 of them refused" when a refused name was also answered, and the replay names the must-allow names only the list protects instead of two checks that could not fail.
+- **What you must do.** Nothing. Nothing is refused or changed: every line is a report.
+- For developers: `tvgw.coverage` (`covered()`, `reconcile()`, `span()`, `Gap`), `plain.absent()`, `queries.coverage()`'s `gaps`, `reconcile` and `live_silent_since`, `queries.fw_counted_from()`; the `# gated` mark and `tests/unit/absence_baseline.txt`.
+
 ### The message tap: what the TV sends inside a connection, seen when you ask and kept by nobody (2026-11-14)
 
 - **What was missing.** The test for screen recognition reads each connection's totals when it ends. A client that uploads a fingerprint every 14 seconds inside one connection on port 443, to a server that answers as much as it gets, passes it: of 400 such hours on the tests' stand-in, it found none.

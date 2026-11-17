@@ -535,7 +535,7 @@ def test_render_shows_firewall_and_red_lines(conn, lg):
     buf = io.StringIO()
     cli.render_brief(o, buf)
     text = buf.getvalue()
-    assert "Firewall held: DNS forced to AdGuard 30, DoT/DoQ 4; 1 checks, 1 failed" in text
+    assert "Firewall held from 08:06: DNS forced to AdGuard 30, DoT/DoQ 4; 1 checks, 1 failed" in text
     assert "RED LINE: firewall checks failed 1 of 1 times; last: FAIL forwarding: ip_forward=0" in text
     assert "Clock hosts: 1 lookups (0 blocked)" in text
     assert "Unresolved flows" in text and "142.251.219.1" in text
@@ -559,7 +559,7 @@ def test_the_two_misroute_drops_reach_the_brief(conn, lg):
     conn.commit()
     buf = io.StringIO()
     cli.render_brief(queries.brief(conn, "2026-10-26", lg, now=NOW + 3600), buf)
-    assert "Firewall held: other forward drops 2, wrong uplink 3;" in buf.getvalue()
+    assert "Firewall held from 08:06: other forward drops 2, wrong uplink 3;" in buf.getvalue()
 
 
 def test_the_headers_capture_counters_are_kept_out_of_the_firewall_evidence(conn, lg, gateway):

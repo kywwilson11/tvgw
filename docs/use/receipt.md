@@ -39,7 +39,8 @@ A session is one stretch with one app in front. An evening runs from 5 in the mo
 - **New for Netflix** lists sites never seen with this app on an earlier evening. A site is the part of a name its owner registered, such as `nflxso.net`. It appears once the gateway has seen the app on 3 earlier evenings.
 - **Not judged yet** means the app has fewer evenings behind it than that. Nothing is called new before.
 - **Advertising and measurement** lists advertisers and measurement services reached while the app was in front, by full name. The TV maker's own advertising, usage reporting and device fingerprinting are listed here too. Its other services, such as smart-home links, are listed with the TV's own.
-- **Asked for N blocked names** counts what the TV looked up that the filter refused.
+- **Asked for N blocked names** counts what the TV looked up that the filter refused. It says `every one refused` only when none of those names was also answered in that time, and `3 of them refused` when some were.
+- **Whether a lookup was refused ... not known from 21:20 to 22:20** means the gateway's record of the TV's lookups has a gap in that stretch, so it cannot say none was refused. A session with connections and no lookup on record says so too.
 - **No category yet** marks a name the gateway has no category for. The receipt does not guess whose it is.
 - **Still settling** means the numbers of a session that just ended keep filling in for about three hours.
 - **Action** says what to do. `sudo tvgw check NAME` explains why a name got through and how to block it.

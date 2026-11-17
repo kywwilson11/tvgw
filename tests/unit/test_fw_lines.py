@@ -117,7 +117,7 @@ def test_the_guards_stored_counter_reaches_firewall_held(tmp_path, lg):
     o = queries.window_report(conn, t0 - 60, t0 + 7200, lg)
     buf = io.StringIO()
     cli.render_brief(o, buf)
-    assert "Firewall held: guard 7;" in buf.getvalue()
+    assert "Firewall held from 08:06: guard 7;" in buf.getvalue()  # the fixture's first snapshot
     conn.close()
 
 

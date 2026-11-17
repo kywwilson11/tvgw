@@ -18,6 +18,7 @@ NOW = B + 86400  # a day after the last evening: everything has settled
 
 @pytest.fixture
 def rec(store, lg):  # noqa: F811
+    store.runs(A - 3600, NOW)  # the log was read all along: an empty list of refusals is an answer
     store.lookup(evening(5, 22.0), "pubads.g.doubleclick.net", blocked=1)
     store.lookup(evening(5, 22.0) + 5, "pubads.g.doubleclick.net", blocked=1)
     store.lookup(evening(5, 22.1), "us.info.lgsmartad.com", blocked=1)
@@ -52,9 +53,16 @@ def test_a_session_sorts_what_started_under_it_by_what_each_name_is(rec):
     assert nf["refused"] == {
         "lookups": 3,
         "names": [
-            {"name": "pubads.g.doubleclick.net", "plain": "advertising or app measurement", "lookups": 2},
-            {"name": "us.info.lgsmartad.com", "plain": "LG advertising", "lookups": 1},
+            {
+                "name": "pubads.g.doubleclick.net",
+                "plain": "advertising or app measurement",
+                "lookups": 2,
+                "answered": 0,
+            },
+            {"name": "us.info.lgsmartad.com", "plain": "LG advertising", "lookups": 1, "answered": 0},
         ],
+        "asked": 4,  # three refused and one answered lookup, all while Netflix was in front
+        "gaps": [],
     }
     yt = session(found, YT)
     assert [r["name"] for r in yt["groups"]["tv"]] == ["lgtvsdp.com"]  # the clock: the TV's own
@@ -135,8 +143,9 @@ def test_a_session_with_nothing_new_says_so_without_a_clean_bill(rec):
     assert "  No name was new for YouTube." in out
     assert "  Advertising and measurement while YouTube was in front\n    pubads.g.doubleclick.net" in out
     assert "  The TV's own services (clock, sign-in, updates)\n    lgtvsdp.com, LG's own services" in out
-    assert "  No lookup was refused while YouTube was in front." in out
-    assert "Nothing new" not in out
+    # six connections and not one lookup of any kind on record for the session: no claim that none was refused
+    assert "  The record holds no lookups for this session, so it cannot say whether any was refused." in out
+    assert "No lookup was refused" not in out and "Nothing new" not in out
 
 
 def test_a_session_from_the_hourly_readings_claims_no_duration(rec):
@@ -367,7 +376,7 @@ def test_the_replay_says_what_a_rule_would_have_refused_and_one_honest_verdict(s
         "  streaming bytes outside the picture: 0.2% (19.5 KB: aiv-cdn.net, ytimg.com would have been\n      refused) (the bar: at most 1%)"
         in out
     )
-    assert "  names the TV must reach outside it: 0 (self-check: 0, as expected)" in out
+    assert "  names the TV must reach that only the list protects: none" in out and "self-check" not in out
     assert (
         "  app viewing days replayed: 6, 2 with exact times (the bar: 28, nine in ten with exact times)"
         in out
@@ -421,6 +430,8 @@ def test_the_verdict_names_every_failing_condition_and_small_shares_show_their_b
 
 
 def test_a_must_allow_name_only_the_list_protects_is_named(store, lg):  # noqa: F811
+    """The numbers used to say "names the TV must reach outside it: 0 (self-check: 0, as expected)", a count
+    nothing ever adds to (design decision 100): they now name the ones only the list keeps."""
     import dataclasses
 
     odd = dataclasses.replace(lg, must_allow={**lg.must_allow, "login.example.net": "sign-in"})
@@ -431,6 +442,8 @@ def test_a_must_allow_name_only_the_list_protects_is_named(store, lg):  # noqa: 
     assert yt["refused_conns"] == 1  # the stranger of the fourth evening, never the must-allow name
     flat = re.sub(r"\n\s+", " ", text(receipt.render_replay(receipt.replay(rec))))
     assert "protected by the list alone: login.example.net" in flat
+    assert "names the TV must reach that only the list protects: login.example.net" in flat
+    assert "self-check" not in flat
 
 
 # ---- why ---------------------------------------------------------------------------------------------------

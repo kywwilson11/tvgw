@@ -323,6 +323,16 @@ TV was on but no connections were recorded (is the flow log being read?)
 
 **What to do.** Run `systemctl status tvgw-flowlog`. If it is not running, an engineer reads its log.
 
+### The live reading went quiet
+
+```text
+the live reading has been silent since 2026-10-26 19:12 while the TV was on
+```
+
+**What it means.** The live reading tells the gateway which app is in front. It sent no heartbeat for more than half an hour while an hourly reading said the TV was on, nothing explains it, and it is still quiet. Until it is back, the receipts know the app in front only to the hour.
+
+**What to do.** Run `sudo systemctl restart tvgw-tvlive`. If it stops again, an engineer reads `journalctl -u tvgw-tvlive`.
+
 ### Warnings while reading the logs
 
 ```text

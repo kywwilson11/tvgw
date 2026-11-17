@@ -1,0 +1,4 @@
+drafts	, from the gateway's own record. Nothing was sent anywhere.
+receipt	No name was captured for
+receipt	No name was new for
+receipt	no streaming bytes were replayed

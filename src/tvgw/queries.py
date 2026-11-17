@@ -19,8 +19,10 @@ import re
 import sqlite3
 import statistics
 import time
+from dataclasses import asdict
 from datetime import datetime, timedelta
 
+from tvgw import coverage as cover
 from tvgw import flowlog, gfts, health, lgwebos, threats
 from tvgw.lgwebos import ACR_KEY, PATH_KEYS, SECOND_PATHS, is_second_path
 from tvgw.names import (
@@ -730,6 +732,20 @@ def not_checked(conn: sqlite3.Connection, until: float, paths: dict) -> list[str
     return [f"the TV's Wi-Fi. When you have switched it off on the TV, run: {CONFIRM_WIFI}"]
 
 
+def fw_counted_from(conn: sqlite3.Connection, since: float, until: float | None = None) -> float | None:
+    """(coverage) When fw_activity's counts begin, if later than the window's start: with no snapshot in the
+    FW_BASELINE seconds before the window, its first snapshot is the baseline and nothing before it is
+    counted (design decision 100). None when one is, or when the window holds no snapshot."""
+    if conn.execute(
+        "SELECT 1 FROM fw_counters WHERE t >= ? AND t < ? LIMIT 1", (since - FW_BASELINE, since)
+    ).fetchone():
+        return None
+    first = conn.execute(
+        "SELECT t FROM fw_counters WHERE t >= ? AND t < ? ORDER BY rowid LIMIT 1", (since, _until(until))
+    ).fetchone()
+    return first[0] if first else None
+
+
 def fw_activity(conn: sqlite3.Connection, since: float, until: float | None = None) -> list[tuple]:
     """(rule comment, packets) stopped or counted by each firewall rule in the window: the sum of positive
     steps between consecutive counter snapshots. A re-apply sets every counter back to zero; `verify
@@ -1300,10 +1316,19 @@ def coverage(conn: sqlite3.Connection, since: float, until: float, now: float | 
     )
     warn_list = sorted({w for (raw,) in runs for w in _json_list(raw)})
     adguard = conn.execute("SELECT value FROM meta WHERE key='adguard_version'").fetchone()
+    # (coverage) each source judged over the window, never by whether it is alive now (design decision
+    # 100): the stretches nothing was looking at, and how much of what the TV's port carried the flow record
+    # holds; a live reading quiet up to the end of what was judged is quiet still
+    gaps = cover.all_gaps(conn, since, until, now)
+    port, flows, share = cover.reconcile(conn, since, until)
+    quiet = gaps["tvlive"][-1:]
     return {
         "last_run": float(last_run[0]) if last_run else None,
         "warnings": warn_list,
         "sources": sources,
+        "gaps": {src: [asdict(g) for g in found] for src, found in gaps.items()},
+        "reconcile": {"port_bytes": port, "flow_bytes": flows, "share": share},
+        "live_silent_since": quiet[0].a if quiet and quiet[0].b >= min(until, now) else None,
         "not_assessed": [s for s, v in sources.items() if not v["assessed"]],
         "adguard_version": adguard[0] if adguard else None,  # recorded by `tvgw verify --record`
         "vpn": vpn_boundary(conn),  # (events)
@@ -1983,6 +2008,7 @@ def window_report(
     first = conn.execute("SELECT MIN(t) FROM verify").fetchone()[0]
     observed = min(b, now) - max(a, first) if first is not None else 0
     o["firewall"]["expected"] = int(max(observed, 0) // 600)
+    o["firewall"]["counted_from"] = fw_counted_from(conn, a, b)  # (coverage) the counts' start, when late
     o["unresolved"] = [
         dict(zip(("dst", "dport", "conns", "bytes_up", "bytes_down"), r, strict=True))
         for r in unresolved_flows(conn, a, b, gw_ip)
@@ -2786,6 +2812,11 @@ def red_lines(o: dict, hours: bool = True) -> list[str]:
         for src, what, producer in producers:
             if cov["sources"][src]["rows"] == 0:
                 out.append(f"TV was on but no {what} were recorded (is the {producer} being read?)")
+    # (coverage) the live reading went quiet while the hourly readings had the TV on, no disconnect was
+    # recorded, and it was quiet still: what tells which app is in front stopped without saying so (100)
+    silent = cov.get("live_silent_since")
+    if silent is not None:
+        out.append(f"the live reading has been silent since {stamp(silent)} while the TV was on")
     if cov.get("warnings"):
         out.append(f"ingest warnings: {len(cov['warnings'])}")
     return out

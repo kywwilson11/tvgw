@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 from tvgw import companies, threats, uplink
+from tvgw.coverage import Gap, span
 from tvgw.lgwebos import ACR_KEY
 from tvgw.namebound import named_shares
 from tvgw.names import registrable_domain
@@ -161,6 +162,14 @@ RED_LINE_PLAIN: tuple[tuple[str, str, str, str], ...] = (
     ),
     ("machine rule ", "detail", "", ""),
     ("TV was on but no ", "doctor", "Part of the gateway's record stopped while the TV was on.", DOCTOR),
+    # (coverage) the live reading stopped answering while the TV was on; restarting it is the household's
+    # to do, and it never touches the TV (design decision 100)
+    (
+        "the live reading has been silent since",
+        "act",
+        "The live reading, which tells the gateway which app is in front, went quiet while the TV was on.",
+        "Restart it on the gateway: sudo systemctl restart tvgw-tvlive",
+    ),
     ("ingest warnings:", "detail", "", ""),
 )
 MISSING_RECORD = ("doctor", "Part of the day's record was not read, so this brief may be incomplete.", DOCTOR)
@@ -212,6 +221,13 @@ def tier(line: str) -> tuple[str, str, str]:
         if line.startswith(prefix):
             return t, sentence, action
     return UNKNOWN_TIER, "The gateway raised an alarm this brief has no plain words for.", DOCTOR
+
+
+def absent(sentence: str, gaps: list[Gap]) -> str:
+    """A sentence that claims something did not happen, or only when it holds: with no gap in the record
+    it is the sentence; across a gap it is the gap, in words, since the record cannot say (design
+    decision 100). `gaps` are the gaps of the source the claim reads, over the stretch it speaks of."""
+    return sentence if not gaps else f"not known {span(gaps)}"
 
 
 def category_label(cat: str, prof: Profile | None = None) -> str:

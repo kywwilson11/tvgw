@@ -519,7 +519,11 @@ def test_the_count_reaches_the_brief_and_stays_out_of_the_firewall_evidence(conn
     cli.render_brief(o, buf)
     text = buf.getvalue()
     assert "Clock servers (NTP): 4 requests to 1 address: 203.0.113.5 (no lookup) 4" in text
-    assert "Firewall held: DoT/DoQ 4;" in text and "NTP from the TV" not in text and "ntp: " not in text
+    assert (
+        "Firewall held from 00:10: DoT/DoQ 4;" in text
+        and "NTP from the TV" not in text
+        and "ntp: " not in text
+    )
     p = analyst.pack(conn, DAY[1], DAY[2], DAY[0], lg, gateway)
     assert p["firewall"]["activity"] == [{"rule": "DoT/DoQ", "packets": 4}]
     assert "ntp: " not in str(p) and queries.NTP_RULE not in str(p)

@@ -28,10 +28,11 @@ import sqlite3
 import textwrap
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 
 from tvgw import appfront, names, plain
+from tvgw import coverage as cover
 from tvgw.appfront import APP, CAST, HOME, INPUT, SESSION, Conn, Event, Kind, Session, Timeline
 from tvgw.profile import Profile, covers
 
@@ -57,6 +58,9 @@ FOOTER = (
     "A connection is listed under the app that was in front when it started. That is a match in time,"
     " not proof of which software opened it: the TV's own software talks under every app."
 )
+# (coverage) a session with connections and not one lookup of any kind on record: the query log was not
+# read, or not written, so an empty list of refusals is no answer (design decision 100)
+NO_LOOKUPS = "The record holds no lookups for this session, so it cannot say whether any was refused."
 KIND_NOTE = {
     HOME: "The home screen is the TV's own software; it has no picture of its own.",
     INPUT: "An input shows another device's picture and needs no internet. What is listed here belongs to"
@@ -121,6 +125,7 @@ class Record:
     ev: appfront.Evidence
     stacks: appfront.Stacks
     live: bool  # the store, or the file, holds a live record at all
+    dns_gaps: list[cover.Gap]  # (coverage) the stretches of the window the query log cannot vouch for
 
 
 def gather(
@@ -150,6 +155,7 @@ def gather(
         appfront.learn(tl, seen, profile),
         appfront.learn_stacks(tl, seen),
         bool(events),
+        cover.covered(conn, "dns", a, b, now),
     )
 
 
@@ -203,20 +209,30 @@ def receipts(rec: Record, since: float | None = None, last: bool = False) -> lis
         if s is not None and id(s) in by_session:
             by_session[id(s)].append(c)
     refused: dict[int, dict[str, dict]] = {id(s): {} for s in chosen}
+    # (coverage) the lookups of any kind each session holds, and each name's answered ones: a refusal count
+    # is not all the asking when the same name was also answered (design decision 100)
+    asked = dict.fromkeys(refused, 0)
+    answered: dict[int, dict[str, int]] = {id(s): {} for s in chosen}
     for t, name, blocked in rec.looked:
         s = rec.tl.at(t)[1]
-        if blocked and s is not None and id(s) in refused:
-            kind = appfront.classify(rec.profile, name)
-            host = names.normalize(name)
-            row = refused[id(s)].setdefault(
-                host, {"name": host, "plain": label(kind, rec.profile), "lookups": 0}
-            )
-            row["lookups"] += 1
+        if s is None or id(s) not in refused:
+            continue
+        asked[id(s)] += 1
+        host = names.normalize(name)
+        if not blocked:
+            answered[id(s)][host] = answered[id(s)].get(host, 0) + 1
+            continue
+        kind = appfront.classify(rec.profile, name)
+        row = refused[id(s)].setdefault(host, {"name": host, "plain": label(kind, rec.profile), "lookups": 0})
+        row["lookups"] += 1
+    for sid, rows in refused.items():
+        for host, row in rows.items():
+            row["answered"] = answered[sid].get(host, 0)
     out = []
     before: Session | None = None
     for s in rec.tl.sessions:
         if id(s) in by_session:
-            r = _receipt(rec, s, by_session[id(s)], refused[id(s)])
+            r = _receipt(rec, s, by_session[id(s)], refused[id(s)], asked[id(s)])
             # a session that began at a connect right after a loss: the gateway lost touch, that is all
             if s.began == "connect" and before is not None and before.end_why == "lost":
                 r["lost_from"] = before.end
@@ -225,7 +241,7 @@ def receipts(rec: Record, since: float | None = None, last: bool = False) -> lis
     return out
 
 
-def _receipt(rec: Record, s: Session, conns: list[Conn], refused: dict[str, dict]) -> dict:
+def _receipt(rec: Record, s: Session, conns: list[Conn], refused: dict[str, dict], asked: int) -> dict:
     day = appfront.viewing_day(s.start)
     is_app = s.kind == APP
     behind = rec.ev.days_known(s.app, before=day) if is_app else 0
@@ -295,6 +311,10 @@ def _receipt(rec: Record, s: Session, conns: list[Conn], refused: dict[str, dict
         "refused": {
             "lookups": sum(r["lookups"] for r in refused.values()),
             "names": sorted(refused.values(), key=lambda r: (-r["lookups"], r["name"])),
+            # (coverage) what the record can say of the session's lookups: how many of any kind it holds,
+            # and the stretches of the session its query log cannot vouch for
+            "asked": asked,
+            "gaps": [asdict(g) for g in cover.cut(rec.dns_gaps, s.start, s.end)],
         },
     }
 
@@ -338,19 +358,31 @@ def _group(out: list[str], title: str, rows: list[dict], name: str, behind: int)
         )
 
 
+def _asked_for(rows: list[dict], where: str = "") -> str:
+    """How often the refused names were asked for and how many of those lookups were refused: "every one"
+    only when none of them was also answered in that time (design decision 100)."""
+    refused, answered = sum(r["lookups"] for r in rows), sum(r["answered"] for r in rows)
+    said = f"{refused} of them refused" if answered else "every one refused"
+    return f"Asked for {count(len(rows), 'blocked name')} {count(refused + answered, 'time')}{where}, {said}"
+
+
 def _refused_line(r: dict, name: str) -> list[str]:
     ref = r["refused"]
     if not ref["lookups"]:
-        return [f"  No lookup was refused while {name} was in front."]
+        # (coverage) "none was refused" only where the query log was read all through the session and holds
+        # lookups of it (design decision 100)
+        gaps = [cover.Gap(**g) for g in ref["gaps"]]
+        claim = f"No lookup was refused while {name} was in front."  # gated
+        if gaps:
+            return [f"  Whether a lookup was refused while {name} was in front: {plain.absent(claim, gaps)}."]
+        if r["conns"] and not ref["asked"]:  # connections, and not one lookup of any kind on record
+            return [f"  {NO_LOOKUPS}"]
+        return [f"  {claim}"]
     shown = ref["names"][:TOP_REFUSED]
     top = ", ".join(f"{who(n['name'])} {n['lookups']} ({n['plain']})" for n in shown)
     rest = len(ref["names"]) - len(shown)
     more = f", and {count(rest, 'more name')}" if rest else ""
-    return wrap(
-        f"Asked for {count(len(ref['names']), 'blocked name')} {count(ref['lookups'], 'time')} while {name}"
-        f" was in front, every one refused: {top}{more}",
-        "  ",
-    )
+    return wrap(f"{_asked_for(ref['names'], f' while {name} was in front')}: {top}{more}", "  ")
 
 
 def _hourly_span(r: dict) -> str:
@@ -599,6 +631,7 @@ def evening(rec: Record) -> dict:
             cell = b["refused"].setdefault(n["name"], dict(n))
             if cell is not n:
                 cell["lookups"] += n["lookups"]
+                cell["answered"] += n["answered"]
         previous = r
     return {"day": day, "blocks": list(blocks.values()), "receipts": mine}
 
@@ -716,9 +749,8 @@ def render_evening(rec: Record, ev: dict, starts: list | None = None) -> list[st
             )
         if b["refused"]:
             rows = sorted(b["refused"].values(), key=lambda r: (-r["lookups"], r["name"]))
-            lookups = sum(r["lookups"] for r in rows)
             out += wrap(
-                f"Asked for {count(len(rows), 'blocked name')} {count(lookups, 'time')}, every one refused: "
+                f"{_asked_for(rows)}: "
                 + ", ".join(f"{who(r['name'])} {r['lookups']} ({r['plain']})" for r in rows[:TOP_REFUSED])
                 + (f", and {count(len(rows) - TOP_REFUSED, 'more name')}" if len(rows) > TOP_REFUSED else ""),
                 "  ",
@@ -944,8 +976,9 @@ def replay(rec: Record) -> dict:
     picture as of that day and the platform's essentials, refuse what is new. Per app and in all: what it
     would have refused, what it would have allowed on one earlier day's evidence alone (`thin`), how much
     of the app's content either is, and the names the TV must reach. The rule carries that list, so none of
-    them can be refused (`must_allow_refused` is a self-check); `must_allow_outside_category` names any
-    that only the list protects, because the profile files it outside the TV maker's own category."""
+    them can be refused (`must_allow_refused` stays empty, and the words do not print it);
+    `must_allow_outside_category` names any that only the list protects, because the profile files it outside
+    the TV maker's own category."""
     apps: dict[str, dict] = {}
     days_all: set[tuple[str, int]] = set()
     days_live: set[tuple[str, int]] = set()
@@ -1153,8 +1186,7 @@ def render_replay(r: dict) -> list[str]:
             "  ",
         )
         out += wrap(
-            f"names the TV must reach, seen: {a['must_allow_seen']}; refused: {a['must_allow_refused']}"
-            " (self-check: the rule carries that list)"
+            f"names the TV must reach, seen: {a['must_allow_seen']}"
             + (
                 f"; protected by the list alone: {', '.join(a['must_allow_outside_category'])}"
                 if a["must_allow_outside_category"]
@@ -1190,10 +1222,10 @@ def render_replay(r: dict) -> list[str]:
         + f" (the bar: at most {bar['content_outside_share']:.0%})",
         "  ",
     )
-    out.append(
-        f"  names the TV must reach outside it: {n['must_allow_outside']}"
-        f" (self-check: {n['must_allow_outside']}, as expected)"
-    )
+    # (coverage) the rule carries the must-allow list, so a refused one is a check that cannot fail: say
+    # instead which of them only the list keeps (design decision 100)
+    alone = sorted({name for a in r["apps"] for name in a["must_allow_outside_category"]})
+    out += wrap(f"names the TV must reach that only the list protects: {', '.join(alone) or 'none'}", "  ")
     out.append(
         f"  bytes with no name to judge: {_pct(n['unnamed_share'])} (the bar: at most"
         f" {bar['unnamed_share']:.0%})"

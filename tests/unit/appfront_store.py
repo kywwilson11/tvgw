@@ -55,6 +55,16 @@ class Store:
         self.conn = db.connect(self.path)
         self.sport = 40000
 
+    def runs(self, a: float, b: float, every: float = HOUR) -> None:
+        """The ingest ran every `every` seconds from `a` to `b`: the evidence the record was being read."""
+        t = a
+        while t <= b:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO ingest_runs(t, seconds, warnings) VALUES (?, 1, '[]')", (t,)
+            )
+            t += every
+        self.conn.commit()
+
     def reading(self, t: float, power_: str, app_: str | None = None) -> None:
         self.conn.execute("INSERT OR REPLACE INTO tvstate(t, power, app) VALUES (?,?,?)", (t, power_, app_))
         self.conn.commit()

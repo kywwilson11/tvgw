@@ -380,7 +380,8 @@ def test_the_brief_shows_both_counts_side_by_side(tmp_path, lg):
         " passed by the kernel 3" in text
     )
     assert "in-path misses, logged samples" in text and "198.51.100.4" in text
-    assert "Firewall held:" in text and "in-path" not in text.split("Firewall held:")[1].splitlines()[0]
+    held = "Firewall held from 07:56:"  # counted from the window's first snapshot
+    assert held in text and "in-path" not in text.split(held)[1].splitlines()[0]
 
 
 def test_the_in_path_count_is_never_below_its_logged_samples(tmp_path, lg):

@@ -21,6 +21,7 @@ from tvgw import (
     attention,
     budget,
     config,
+    coverage,
     db,
     ingest,
     ledger,
@@ -666,6 +667,21 @@ def render_names_live(live: dict, out=None) -> None:
     )
 
 
+def coverage_lines(cov: dict) -> list[str]:
+    """(coverage) The brief's Coverage lines after the sources: how much of the bytes the TV's port carried
+    to the TV the flow record accounts for, and the holes it leaves, then each source's gaps, "not known
+    from 19:20 to 20:40" (design decision 100). Nothing for a window with no counter and no gap."""
+    out = []
+    gaps = {src: [coverage.Gap(**g) for g in found] for src, found in (cov.get("gaps") or {}).items()}
+    share = (cov.get("reconcile") or {}).get("share")
+    if share is not None:
+        holes = [g for g in gaps.get("flows", []) if g.why == coverage.WHY_PORT]
+        where = coverage.span(holes) if holes else "none"
+        out.append(f"flow record: {share:.0%} of the TV port's bytes; holes: {where}")
+    out += [f"{src}: not known {coverage.span(found)}" for src, found in gaps.items() if found]
+    return out
+
+
 def render_brief(o: dict, out=None) -> None:
     out = out or sys.stdout
     d, f = o["dns"], o["flows"]
@@ -687,6 +703,8 @@ def render_brief(o: dict, out=None) -> None:
         print(f"Coverage: {', '.join(parts)}; last ingest {ts(cov['last_run'], '%m-%d %H:%M')}", file=out)
         if cov["not_assessed"]:
             print(f"NOT ASSESSED (source not read recently): {', '.join(cov['not_assessed'])}", file=out)
+        for line in coverage_lines(cov):  # (coverage) what each source was not looking at, by the window
+            print(line, file=out)
         for w in cov["warnings"]:
             print(f"ingest warning: {clean(w)}", file=out)
     for w in o.get("warnings") or []:  # (ledger) a part of the report that could not be computed
@@ -710,7 +728,13 @@ def render_brief(o: dict, out=None) -> None:
         labels = list(dict.fromkeys(label for _, label in queries.FW_LINES if label in hits))
         shown = ", ".join(f"{label} {hits[label]}" for label in labels)
         checks = f"{fw['runs']} checks, {fw['failed']} failed" if fw["runs"] else "no checks recorded"
-        print(f"Firewall held: {shown or 'no counter snapshots yet'}; {checks}", file=out)
+        # (coverage) counts that begin after the window does say from when (design decision 100)
+        held = (
+            f"Firewall held from {ts(fw['counted_from'], '%H:%M')}"
+            if fw.get("counted_from")
+            else "Firewall held"
+        )
+        print(f"{held}: {shown or 'no counter snapshots yet'}; {checks}", file=out)
     line = doh_line(o.get("doh_hold"))  # (listguard) a DoH list refresh held back
     if line:
         print(clean(line), file=out)

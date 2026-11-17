@@ -4,11 +4,16 @@ themselves (design decision 75).
 
 What counts as reached is what the record shows: a connection whose TLS hello named one of the company's
 names, or a plain-HTTP request to one. A company whose every lookup the filter refused, with no such
-connection, was only attempted: the TV sent it nothing through this gateway, so no request is drafted
-for it. A company whose names were looked up and answered with no named connection is listed apart,
-since the record cannot say whether the TV reached it (a connection with no captured hello, or none).
-The company behind a name is the shipped snapshot's (`companies.company()`); a name it does not know is
-counted under its registrable domain, never guessed.
+connection, was only attempted, and no request is drafted for it. A company whose names were looked up
+and answered with no named connection is listed apart, since the record cannot say whether the TV reached
+it (a connection with no captured hello, or none). The company behind a name is the shipped snapshot's
+(`companies.company()`); a name it does not know is counted under its registrable domain, never guessed.
+
+"Sent nothing" is said only where the record can bear it (design decision 100). The TV keeps an address
+past its lookups, and a connection whose hello the capture missed has no name: so a refused company moves
+to the second list when the window holds a completed connection with no name to an address one of its
+names was answered with in the `KNOWN_DAYS` before, and "sent these nothing" is printed only when the
+window holds no unnamed completed connection to a public address at all and the flow log has no gap in it.
 
 A draft identifies the household to the company it is sent to: to answer, the company must find the
 data, and so must be told who is asking. Each draft says so before anything else, names what would
@@ -23,10 +28,11 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+import time
 from datetime import datetime
 
-from tvgw import companies, queries
-from tvgw.names import is_public_name, registrable_domain
+from tvgw import companies, coverage, queries
+from tvgw.names import is_public_address, is_public_name, registrable_domain
 from tvgw.profile import Profile
 
 DIR = "requests"  # under STATE_DIR; forget.STATE_ENTRIES deletes it
@@ -34,6 +40,11 @@ DEFAULT_DAYS = 30
 SHOWN_NAMES = 12  # names a draft lists per company before "and N more"
 REACHED, ANSWERED, ATTEMPTED = "reached", "answered", "attempted"
 NOTICE = "README.txt"
+# (coverage) how the attempted companies are told: sent nothing only where the record can bear it
+SENT_NOTHING = "the gateway saw no connection, so the TV sent these nothing through it."  # gated
+NO_NAMED = "the record shows no connection named for them; it cannot say they were sent nothing."
+NOTICE_SENT_NOTHING = "connection to them, so the TV sent them nothing through it:"  # gated
+NOTICE_NO_NAMED = "connection named for them. The record cannot say they were sent nothing:"
 
 
 def _company_key(name: str) -> tuple[str, bool]:
@@ -49,13 +60,17 @@ def completed(bytes_up, pkts_up, bytes_down, pkts_down) -> bool:
     return bool(up) and bool(down)
 
 
-def observed(conn: sqlite3.Connection, profile: Profile, a: float, b: float) -> dict:
+def observed(
+    conn: sqlite3.Connection, profile: Profile, a: float, b: float, now: float | None = None
+) -> dict:
     """Per company, over [a, b): the domains the TV reached, by local day, and its lookups answered and
     refused. Reached means a connection that a hello named (`queries.FLOW_NAME`) and that carried data
     both ways (`completed()`), or a plain-HTTP request that got a success or redirect answer (status 200
-    to 399): the URL filter's own refusals never count. Three lists: `reached`, `answered` (looked up and
-    answered, nothing reached) and `attempted` (every lookup refused, nothing reached); and `unknown`, the
-    reached registrable domains no company in the snapshot covers."""
+    to 399): the URL filter's own refusals never count. Three lists: `reached`, `answered` (looked up,
+    nothing named reached: answered, or refused with `kept` unnamed connections to an address its names
+    were given) and `attempted` (every lookup refused, nothing reached); `unknown`, the reached
+    registrable domains no company in the snapshot covers; and `sent_nothing_known`, whether the record,
+    judged at `now`, can say the attempted ones were sent nothing."""
     acc: dict[str, dict] = {}
 
     def entry(name: str) -> dict | None:
@@ -113,11 +128,52 @@ def observed(conn: sqlite3.Connection, profile: Profile, a: float, b: float) -> 
             out[ANSWERED].append(e)
         elif e["refused"]:
             out[ATTEMPTED].append(e)
+    # (coverage) a refusal does not take back an address the TV was given before: a refused company that the
+    # window's unnamed connections reach by such an address is looked up, not only attempted
+    unnamed = _unnamed(conn, a, b)
+    kept = _kept(conn, unnamed, a - queries.KNOWN_DAYS * 86400, b) if out[ATTEMPTED] else {}
+    for e in out[ATTEMPTED]:
+        e["kept"] = kept.get(e["company"], 0)
+    out[ANSWERED] += [e for e in out[ATTEMPTED] if e["kept"]]
+    out[ATTEMPTED] = [e for e in out[ATTEMPTED] if not e["kept"]]
     out[REACHED].sort(key=lambda e: (-e["connections"], e["company"]))
     out["unknown"].sort(key=lambda e: (-e["connections"], e["company"]))
     out[ANSWERED].sort(key=lambda e: (-e["answered"], e["company"]))
     out[ATTEMPTED].sort(key=lambda e: (-e["refused"], e["company"]))
-    return {"since": a, "until": b, **out}
+    # "sent nothing" needs a record with no unnamed connection to a public address and no gap in the flow log
+    gaps = coverage.covered(conn, "flows", a, b, time.time() if now is None else now)
+    return {"since": a, "until": b, **out, "sent_nothing_known": not unnamed and not gaps}
+
+
+def _unnamed(conn: sqlite3.Connection, a: float, b: float) -> dict[str, int]:
+    """The window's completed connections that no hello named, to a public address, counted by address. A
+    connection with no start time is placed by its end."""
+    out: dict[str, int] = {}
+    for dst, bu, pu, bd, pd in conn.execute(
+        f"""SELECT f.dst, f.bytes_up, f.pkts_up, f.bytes_down, f.pkts_down FROM flows f
+            WHERE COALESCE(f.t_start, f.t_end) >= ? AND COALESCE(f.t_start, f.t_end) < ?
+              AND {queries.FLOW_NAME} IS NULL""",
+        (a, b),
+    ):
+        if is_public_address(dst) and completed(bu, pu, bd, pd):
+            out[dst] = out.get(dst, 0) + 1
+    return out
+
+
+def _kept(conn: sqlite3.Connection, unnamed: dict[str, int], a: float, b: float) -> dict[str, int]:
+    """Per company, the unnamed connections to an address an answer for one of its names gave in [a, b)
+    (`answer_ip`, from address to names); a connection to an address two companies were given counts for
+    both."""
+    out: dict[str, int] = {}
+    for dst, n in unnamed.items():
+        names = conn.execute(
+            "SELECT DISTINCT d.qname FROM answer_ip i JOIN dns d ON d.id = i.dns_id"
+            " WHERE i.ip = ? AND i.t >= ? AND i.t < ?",
+            (dst, a, b),
+        )
+        for who in {_company_key(qname)[0] for (qname,) in names}:
+            out[who] = out.get(who, 0) + n
+    return out
 
 
 def _n(n: int, word: str) -> str:
@@ -142,18 +198,25 @@ def render(r: dict) -> list[str]:
             lines.append(f"  {e['company']}: {_n(e['connections'], 'connection')}, {', '.join(e['domains'])}")
     if r[ATTEMPTED]:
         lines.append(
-            f"Only attempted ({len(r[ATTEMPTED])}): the filter refused every lookup and the gateway saw no"
-            " connection, so the TV sent these nothing through it."
+            f"Only attempted ({len(r[ATTEMPTED])}): the filter refused every lookup and "
+            + (SENT_NOTHING if r["sent_nothing_known"] else NO_NAMED)
         )
         for e in r[ATTEMPTED]:
             lines.append(f"  {e['company']}: {_n(e['refused'], 'lookup')} refused")
     if r[ANSWERED]:
         lines.append(
-            f"Looked up, no connection seen ({len(r[ANSWERED])}): the filter answered, and the record shows"
-            " no named connection, so it cannot say whether the TV reached these."
+            f"Looked up, no named connection ({len(r[ANSWERED])}): the record shows no connection a hello"
+            " named for these, so it cannot say whether the TV reached them."
         )
         for e in r[ANSWERED]:
-            lines.append(f"  {e['company']}: {_n(e['answered'], 'lookup')} answered")
+            said = (
+                f"{_n(e['answered'], 'lookup')} answered"
+                if e["answered"]
+                else f"{_n(e['refused'], 'lookup')} refused"
+            )
+            if e.get("kept"):
+                said += f"; the record holds {_n(e['kept'], 'connection')} to an address its names were given"
+            lines.append(f"  {e['company']}: {said}")
     if r["unknown"]:
         lines.append(
             f"The TV also reached {_n(len(r['unknown']), 'site')} whose company the gateway's list does not"
@@ -235,7 +298,7 @@ def notice(r: dict, paths: list[str]) -> str:
         out += [
             "",
             "No draft for these companies: the gateway refused every lookup of their names and saw no",
-            "connection to them, so the TV sent them nothing through it:",
+            NOTICE_SENT_NOTHING if r["sent_nothing_known"] else NOTICE_NO_NAMED,
             *[f"  {e['company']}" for e in r[ATTEMPTED]],
         ]
     return "\n".join(out) + "\n"

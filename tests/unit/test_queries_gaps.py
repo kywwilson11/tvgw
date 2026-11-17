@@ -541,6 +541,7 @@ def test_brief_has_every_section_and_quiet_ones_are_empty(conn, lg):
         "last_failures": [],
         "activity": [],
         "expected": 0,
+        "counted_from": None,
     }
     assert o["capture_counters"] == []  # (capture) full mode loads no capture table
     assert o["updates"]["runs"] == [] and o["updates"]["latest"] is None  # (updates) nothing recorded
