@@ -17,6 +17,11 @@ this module reads what the lists say, from the files AdGuard has already downloa
   change, from the copy of the list this module kept at the scan before;
 - `Engine` is the model of AdGuard's precedence both rest on, for the rules tvgw and the lists use.
 
+(admit) The model's time grows with a list's lines and the names judged, never faster (design decision
+104): a `*` pattern is matched by finding its pieces in order (`Glob`), and a list's `/regex/` is read only
+when Python's backtracking matcher has a bound on one name (`regex_tries`); the others are counted unread,
+as AdGuard's own reader would hold them and this model cannot afford them.
+
 All of it is a report: nothing here changes what AdGuard does or what the TV may reach.
 """
 
@@ -30,6 +35,8 @@ import ipaddress
 import json
 import os
 import re
+import re._constants as sre
+import re._parser as sre_parse
 import sqlite3
 import tempfile
 import time
@@ -70,6 +77,19 @@ FINDINGS_CAP = 200  # findings kept from one scan, the most serious first
 NAMES_CAP = 50  # names per direction in one preview
 COPY_DIR = "lists"  # under STATE_DIR: the copy of each list the next preview compares with
 META_KEY, PREVIEW_KEY = "list_guard", "list_preview"
+# (admit) a list's `/regex/` the model reads: at most REGEX_MAX characters, and at most REGEX_TRIES ways for
+# Python's backtracking matcher to try it on one name (`regex_tries`). A name of NAME_MAX characters has
+# NAME_MAX + 1 places to start at and gives a loop as many lengths, so that is one loop anywhere or two
+# after a `^`, under a millisecond on the longest name. A loop inside a loop has no bound: one line of it
+# held the list preview past 20 seconds (L5-14)
+REGEX_MAX = 200
+NAME_MAX = 253  # the longest DNS name, in characters
+REGEX_TRIES = (NAME_MAX + 1) ** 2
+# (admit) what Go's regexp, which AdGuard reads a list's regex with, has none of: AdGuard drops such a rule,
+# and Python's matcher has no bound on them
+_NO_BOUND = frozenset(
+    {sre.ASSERT, sre.ASSERT_NOT, sre.GROUPREF, sre.GROUPREF_EXISTS, sre.ATOMIC_GROUP, sre.POSSESSIVE_REPEAT}
+)
 _HOST_RULE = re.compile(r"\|\|([a-z0-9_-]+(?:\.[a-z0-9_-]+)*)\^")
 _NAME = re.compile(r"[a-z0-9_-]+(?:\.[a-z0-9_-]+)+")
 
@@ -84,8 +104,8 @@ class Rule:
     kind: str  # HOST | PATTERN | REGEX | HOSTS
     target: str  # HOST and HOSTS: the name; PATTERN: the pattern; REGEX: the expression
     mods: tuple[tuple[str, str], ...] = ()
-    rx: re.Pattern[str] | None = field(default=None, compare=False)
-    literal: str = ""  # PATTERN: a piece of text every name it matches contains, to skip the regex
+    rx: re.Pattern[str] | None = field(default=None, compare=False)  # REGEX
+    glob: Glob | None = field(default=None, compare=False)  # (admit) PATTERN
     answer: str = ""  # HOSTS: the address a line that answers instead of blocking gives
 
     def mod(self, name: str) -> str | None:
@@ -119,28 +139,114 @@ class Rule:
             return name == self.target or name.endswith("." + self.target)
         if self.kind == HOSTS:
             return name == self.target
-        if self.literal and self.literal not in name:
-            return False
+        if self.glob is not None:
+            return self.glob.matches(name)
         return bool(self.rx and self.rx.search(name))
 
 
-def _translate(pattern: str) -> tuple[re.Pattern[str], str]:
-    """An adblock pattern as a regex over a name, and its longest literal piece. `||` is the start of the
-    name or of a label, `|` the start or the end, `*` anything, and `^` a separator, which inside a name
-    can only be its end."""
-    p = pattern.lower()
-    head = tail = ""
-    if p.startswith("||"):
-        head, p = r"(?:^|\.)", p[2:]
-    elif p.startswith("|"):
-        head, p = "^", p[1:]
-    if p.endswith("|"):
-        tail, p = "$", p[:-1]
-    out = []
-    for ch in p:
-        out.append(".*" if ch == "*" else "$" if ch == "^" else re.escape(ch))
-    pieces = re.split(r"[*^]", p)
-    return re.compile(head + "".join(out) + tail), max(pieces, key=len) if pieces else ""
+@dataclass(frozen=True)
+class Glob:
+    """(admit) An adblock pattern as a matcher over a name: `||` is the start of the name or of a label,
+    `|` the start or the end, `*` anything, and `^` a separator, which inside a name can only be its end.
+
+    It finds the pieces between the `*`s in order, each at the leftmost place after the one before: an
+    earlier end leaves more of the name to the pieces after it, so no other place is ever worth a second
+    try, and a name costs one pass per piece. Matched as a `.*` regex, a line of twenty `*` held Python's
+    matcher for longer than anyone waits."""
+
+    head: str  # "||", "|" or ""
+    pieces: tuple[str, ...]  # the text between the `*`s, at least one (it may be empty)
+    tail: bool  # the last piece must end the name
+    never: bool = False  # text after a `^`: the name would have to go on past its end
+
+    @classmethod
+    def of(cls, pattern: str) -> Glob:
+        p = pattern.lower()
+        head = "||" if p.startswith("||") else "|" if p.startswith("|") else ""
+        p = p[len(head) :]
+        tail = p.endswith("|")
+        pieces = p.removesuffix("|").split("*")
+        cut = next((i for i, piece in enumerate(pieces) if "^" in piece), None)
+        if cut is None:
+            return cls(head, tuple(pieces), tail)
+        before, _, after = pieces[cut].partition("^")
+        never = any(piece.strip("^") for piece in (after, *pieces[cut + 1 :]))
+        return cls(head, (*pieces[:cut], before), True, never)
+
+    def matches(self, name: str) -> bool:
+        if self.never:
+            return False
+        *body, last = self.pieces
+        if not body:  # one piece is both the first and the last
+            if self.tail:
+                at = len(name) - len(last)
+                return at >= 0 and name.endswith(last) and self._starts(name, at)
+            return self._first(name, last) >= 0
+        at = self._first(name, body[0])
+        if at < 0:
+            return False
+        end = at + len(body[0])
+        for piece in body[1:]:
+            at = name.find(piece, end)
+            if at < 0:
+                return False
+            end = at + len(piece)
+        if self.tail:
+            return len(name) - len(last) >= end and name.endswith(last)
+        return name.find(last, end) >= 0
+
+    def _starts(self, name: str, at: int) -> bool:
+        """May the first piece start at `at`: anywhere, at the start, or (`||`) at the start of a label."""
+        return not self.head or at == 0 or (self.head == "||" and name[at - 1] == ".")
+
+    def _first(self, name: str, piece: str) -> int:
+        """The leftmost place the first piece may start at, or -1."""
+        at = name.find(piece)
+        while at >= 0 and not self._starts(name, at):
+            at = name.find(piece, at + 1)
+        return at
+
+
+def regex_tries(body: str) -> int | None:
+    """(admit) How many ways, at most, Python's backtracking matcher can try the regex on one name: the
+    places it can start at (one when it is anchored at the start) times the choices of its quantifiers and
+    alternations, a loop's being the lengths it can take. None when there is no bound: a loop around a
+    choice, which doubles the ways with each turn, or a construct Go's regexp lacks (`_NO_BOUND`). Raises
+    re.error when the body does not compile."""
+    tree = sre_parse.parse(body)
+    tries = _tries(tree)
+    if tries is None:
+        return None
+    anchored = bool(tree.data) and tree.data[0] == (sre.AT, sre.AT_BEGINNING)
+    return tries if anchored else (NAME_MAX + 1) * tries
+
+
+def _tries(sub: sre_parse.SubPattern | list) -> int | None:
+    n = 1
+    for op, av in sub:
+        if op in _NO_BOUND:
+            return None
+        if op in (sre.MAX_REPEAT, sre.MIN_REPEAT):
+            low, high, body = av
+            inner = _tries(body)
+            if inner is None or (high > 1 and inner > 1):
+                return None
+            # a loop chooses its length; at most once chooses whether, then what its body chooses
+            n *= min(high, NAME_MAX) - min(low, NAME_MAX) + 1 if high > 1 else inner + (low < high)
+        elif op is sre.SUBPATTERN:
+            inner = _tries(av[-1])
+            if inner is None:
+                return None
+            n *= inner
+        elif op is sre.BRANCH:
+            ways = 0
+            for branch in av[1]:
+                inner = _tries(branch)
+                if inner is None:
+                    return None
+                ways += inner
+            n *= ways
+    return n
 
 
 def _options_at(body: str) -> int | None:
@@ -173,7 +279,10 @@ def _is_address(text: str) -> bool:
 def parse(line: str) -> list[Rule] | None:
     """The rules one line holds: none for a blank line or a comment, several for a hosts-file line that
     names several hosts, None for a rule line the model cannot read (an unknown modifier, a regex that
-    does not compile, an empty pattern). AdGuard drops a rule with an unknown modifier too."""
+    does not compile, an empty pattern). AdGuard drops a rule with an unknown modifier too. (admit) So is
+    a regex over REGEX_MAX characters or REGEX_TRIES tries (`regex_tries`), or one with a POSIX class:
+    AdGuard may hold it, and the model says it did not read it rather than spend minutes on it or read
+    it as Go does not."""
     s = line.strip()
     if not s or s[0] in "!#[":
         return []
@@ -197,11 +306,18 @@ def parse(line: str) -> list[Rule] | None:
             if not (len(pattern) > 2 and pattern.endswith("/")):
                 return None
         mods = _mods(options)
+        expression = pattern[1:-1]
+        # (admit) `[:` opens a POSIX class to Go and a set to Python, which match different names
+        if mods is None or len(expression) > REGEX_MAX or "[:" in expression:
+            return None
         try:
-            rx = re.compile(pattern[1:-1], re.IGNORECASE)
+            rx = re.compile(expression, re.IGNORECASE)
+            tries = regex_tries(expression)
         except re.error:
             return None
-        return None if mods is None else [Rule(s, exception, REGEX, pattern[1:-1], mods, rx)]
+        if tries is None or tries > REGEX_TRIES:
+            return None
+        return [Rule(s, exception, REGEX, expression, mods, rx)]
     pattern, _, options = body.partition("$")
     mods = _mods(options)
     if not pattern or mods is None:
@@ -209,8 +325,7 @@ def parse(line: str) -> list[Rule] | None:
     m = _HOST_RULE.fullmatch(pattern.lower())
     if m:
         return [Rule(s, exception, HOST, m.group(1), mods)]
-    rx, literal = _translate(pattern)
-    return [Rule(s, exception, PATTERN, pattern.lower(), mods, rx, literal)]
+    return [Rule(s, exception, PATTERN, pattern.lower(), mods, glob=Glob.of(pattern))]
 
 
 def suffixes(name: str) -> list[str]:
@@ -614,8 +729,18 @@ def subscribed(s: Settings) -> list[ListFile] | None:
         return []
     except yaml.YAMLError:
         return None
+    return enabled(cfg, filters_dir(s))
+
+
+def filters_dir(s: Settings) -> str:
+    """Where AdGuard keeps the lists it downloaded: `data/filters`, beside the query log."""
+    return os.path.join(os.path.dirname(s.adguard_querylog), "filters")
+
+
+def enabled(cfg: object, folder: str) -> list[ListFile]:
+    """The enabled lists of an AdGuardHome.yaml as loaded, each with its file in `folder`. (admit) The
+    admission check reads the lists of the YAML as it is and as planned."""
     filters = cfg.get("filters") if isinstance(cfg, dict) else None
-    folder = os.path.join(os.path.dirname(s.adguard_querylog), "filters")
     out = []
     for f in filters if isinstance(filters, list) else []:
         if not isinstance(f, dict) or not f.get("enabled"):

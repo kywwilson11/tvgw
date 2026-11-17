@@ -358,11 +358,14 @@ class _Run:
     sleep: Callable[[float], None]
 
 
-def _default_apply(s: Settings, prof: Profile) -> Callable[[], object]:
-    def apply() -> object:
-        from tvgw import analyst  # the apply the machine's rules go through: lint, guard, readiness
+def _default_apply(s: Settings, prof: Profile, host: str) -> Callable[[], object]:
+    """The apply the machine's rules go through (lint, guard, readiness), declaring (admit) the one name
+    the owner's command acts on, with every name under it."""
 
-        return analyst.adguardcfg_apply(s, prof)
+    def apply() -> object:
+        from tvgw import analyst, policy
+
+        return analyst.adguardcfg_apply(s, prof, declared=policy.Declared(policy.OWNER, (host,)))
 
     return apply
 
@@ -444,6 +447,7 @@ def _start(
     s: Settings,
     prof: Profile,
     verb: str,
+    host: str,
     apply_fn: Callable[[], object] | None,
     now: float | None,
     wait: float,
@@ -453,7 +457,7 @@ def _start(
         s,
         prof,
         verb,
-        apply_fn or _default_apply(s, prof),
+        apply_fn or _default_apply(s, prof, host),
         time.time() if now is None else now,
         wait,
         sleep or time.sleep,
@@ -475,11 +479,11 @@ def allow(
     blocks. Replaces the owner's own block of the same name. A whole registered domain of tracking takes
     --force. A machine rule the allow covers leaves the machine's file in the same step, so the record
     shows it reverted by the owner at the next hourly check rather than judged while it does nothing."""
-    run = _start(s, prof, ALLOW, apply_fn, now, wait, sleep)
     try:
         host = host_of(name)
     except ValueError as e:
         return Outcome(REFUSED, [f"tvgw allow: {e}"])
+    run = _start(s, prof, ALLOW, host, apply_fn, now, wait, sleep)
     rule = Rule(ALLOW, host)
     if rule.text in prof.adguard_rules():
         return Outcome(OK, [f"tvgw allow: the TV's profile already keeps {host} reachable; nothing changed"])
@@ -559,11 +563,11 @@ def block(
 ) -> Outcome:
     """`tvgw block NAME`: block the name and every name under it. Refused for anything the TV needs
     (`problems`). Replaces the owner's own allow of the same name."""
-    run = _start(s, prof, BLOCK, apply_fn, now, wait, sleep)
     try:
         host = host_of(name)
     except ValueError as e:
         return Outcome(REFUSED, [f"tvgw block: {e}"])
+    run = _start(s, prof, BLOCK, host, apply_fn, now, wait, sleep)
     rule = Rule(BLOCK, host)
 
     def body() -> Outcome:
@@ -603,11 +607,11 @@ def remove(
     """`tvgw unallow NAME` (kind ALLOW) or `tvgw unblock NAME` (kind BLOCK): take the owner's own rule
     for the name out, with its comment line. A name the owner never ruled on is left as it is."""
     verb = "unallow" if kind == ALLOW else "unblock"
-    run = _start(s, prof, verb, apply_fn, now, wait, sleep)
     try:
         host = host_of(name)
     except ValueError as e:
         return Outcome(REFUSED, [f"tvgw {verb}: {e}"])
+    run = _start(s, prof, verb, host, apply_fn, now, wait, sleep)
     rule = Rule(kind, host)
 
     def body() -> Outcome:

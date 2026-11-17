@@ -107,6 +107,9 @@ _MODIFIED = re.compile(r"^[!#]\s*Last modified:\s*(.{1,40}?)\s*$", re.IGNORECASE
 _HOSTS_ADDR = re.compile(r"(?:0\.0\.0\.0|127\.0\.0\.1|::1?|0)$")
 _DNSMASQ = re.compile(r"(?:local|address|server)=/(.+)/")
 _COSMETIC = ("##", "#@#", "#?#", "#$#")
+# (admit) characters of a list's line that are read: a name is at most 253 and a hosts or dnsmasq line names
+# a few, so a longer line is skipped and counted. One of 200,000 spaces held the split for minutes (L5-14)
+MAX_LINE = 1024
 # a name of at least two labels, each as names._LABEL allows it, the last letters or punycode
 _HOST = re.compile(r"(?:[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?\.)+(?:[a-z]{1,63}|xn--[a-z0-9-]{1,59})")
 # how an entry is kept in a copy, one a line: a bare name covers itself and every name under it; these
@@ -191,14 +194,15 @@ def entries(line: str) -> list[str]:
     name under it, `=name` itself alone (a hosts-file line), `.name` the names under it alone (`*.name`),
     and `!name` takes itself and the names under it back out (an exception). [] for a comment, a cosmetic
     or regular-expression rule, an address, a single label, a public suffix, or anything else that names
-    no domain."""
+    no domain. (admit) [] too for a line over MAX_LINE characters, which no entry needs."""
     s = line.strip()
-    if not s or s[0] in "!#[":
+    if not s or s[0] in "!#[" or len(s) > MAX_LINE:
         return []
     if "#" in s:  # a cosmetic rule, or a comment after the entry
         if any(c in s for c in _COSMETIC):
             return []
-        s = re.split(r"\s+#", s, maxsplit=1)[0].strip()
+        # (admit) one pass: a `\s+#` regex retried its run of blanks at every blank, quadratic in the run
+        s = s.replace("\t", " ").split(" #", 1)[0].strip()
     mark = ""
     if s.startswith("@@"):  # an exception: adblock form only
         mark, s = EXCEPT, s[2:]

@@ -14,7 +14,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from tvgw import adguardcfg, analyst, autoblock, cli, db, minimize, names
+from tvgw import adguardcfg, analyst, autoblock, cli, db, minimize, names, policy
 from tvgw.autoblock import FOR_OWNER, MAX_MEDIAN_DOWN, MAX_TOTAL_DOWN
 from tvgw.config import Settings
 from tvgw.names import PUBLIC_SUFFIXES
@@ -864,7 +864,7 @@ def test_cli_undo_and_autoblock_commands(auto, lg, capsys, monkeypatch):
         "ANALYST_APPLY=auto\n"
     )
     applied = []
-    monkeypatch.setattr(analyst, "adguardcfg_apply", lambda s, prof: applied.append(1))
+    monkeypatch.setattr(analyst, "adguardcfg_apply", lambda s, prof, **_: applied.append(1))
     conn = db.connect(s.db_path)
     autoblock.add_rule(s.auto_rules, "||tracker.example^", "test")
     autoblock.record(conn, "||tracker.example^", "tracker.example", DAY, "o", "f", "telemetry", T0)
@@ -932,7 +932,7 @@ def test_cli_check_and_undo_exit_1_when_adguard_will_not_take_the_revert(auto, l
         f"STATE_DIR={s.state_dir}\nDB_PATH={s.db_path}\nREPORTS_DIR={s.reports_dir}\nAUTO_RULES={s.auto_rules}\n"
     )
 
-    def down(s, prof):
+    def down(s, prof, **_):
         raise RuntimeError("AdGuard did not start")
 
     monkeypatch.setattr(analyst, "adguardcfg_apply", down)
@@ -1679,7 +1679,7 @@ def test_one_check_at_a_time_and_no_watch_never_samples_the_tv(auto, lg, capsys,
         encoding="utf-8",
     )
     monkeypatch.setattr(analyst, "live_sample", lambda s: pytest.fail("the TV was watched"))
-    monkeypatch.setattr(analyst, "adguardcfg_apply", lambda s, prof: pytest.fail("applied"))
+    monkeypatch.setattr(analyst, "adguardcfg_apply", lambda *a, **k: pytest.fail("applied"))
     conn = db.connect(s.db_path)
     added = T0 + 3 * 3600
     autoblock.add_rule(s.auto_rules, "||tracker.example^", "test")
@@ -2628,7 +2628,7 @@ def test_tvgw_undo_says_how_its_own_push_ended(auto, lg, capsys, monkeypatch, du
         after(s)
         return gone
 
-    monkeypatch.setattr(analyst, "adguardcfg_apply", lambda *a: during(s))
+    monkeypatch.setattr(analyst, "adguardcfg_apply", lambda *a, **_: during(s))
     monkeypatch.setattr(analyst, "undo", undo_and_after)
     conn = db.connect(s.db_path)
     kept(s, conn)
@@ -2821,7 +2821,8 @@ def test_a_run_killed_between_the_apply_and_its_record_leaves_a_rule_the_next_ch
 def test_with_nothing_standing_in_every_push_is_the_apply_tvgw_adguard_apply_makes(auto, lg, monkeypatch):
     """The run, the hourly check and the undo each call `analyst.adguardcfg_apply` themselves when no
     test hands them a stand-in, which every other test here does. The calls are bound to the real
-    function's parameters, so a call it would not accept fails here and not on a gateway."""
+    function's parameters, so a call it would not accept fails here and not on a gateway. (admit) Each
+    declares the name its rule acts on: the add, the check's revert of a rule no record keeps, the undo."""
     import inspect
 
     s, key = auto
@@ -2837,7 +2838,31 @@ def test_with_nothing_standing_in_every_push_is_the_apply_tvgw_adguard_apply_mak
     analyst.check(conn, s, lg, now=T0 + 3600, hooks=QUIET)
     assert analyst.undo(conn, s, lg, now=T0 + 7200) == [TRACKER_RULE]
     conn.close()
-    assert calls == [{"s": s, "prof": lg}] * 3
+    assert calls == [
+        {"s": s, "prof": lg, "declared": policy.Declared(kind, (name,))}
+        for kind, name in (
+            (policy.MACHINE, "tracker.example"),
+            (policy.REVERT, "orphan.example"),
+            (policy.UNDO, "tracker.example"),
+        )
+    ]
+
+
+def test_with_nothing_standing_in_the_canarys_revert_declares_its_rule_too(auto, lg, monkeypatch):
+    """(admit) The add, then the revert of the same rule when the TV's downloads stop right after it."""
+    s, key = auto
+    calls = []
+    monkeypatch.setattr(analyst, "adguardcfg_apply", lambda s, prof, declared: calls.append(declared))
+    state = {"n": 0}
+
+    def collapsing():
+        state["n"] += 1
+        return autoblock.Sample(T0 + 90000 + state["n"] * 60, 60_000_000 * min(state["n"], 2), "Active", APP)
+
+    hooks = {"call": agree, "sampler": collapsing, "sleep": lambda x: None}
+    client = FakeClient(message(proposals(block("tracker.example"))))
+    assert analyst.run(s, lg, DAY, make_client=lambda k: client, key_path=key, hooks=hooks) == 0
+    assert calls == [policy.Declared(kind, ("tracker.example",)) for kind in (policy.MACHINE, policy.REVERT)]
 
 
 # ---- identifier-shaped runs are withheld from both models (design decision 93) -----------------------

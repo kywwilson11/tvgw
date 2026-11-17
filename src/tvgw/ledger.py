@@ -9,7 +9,8 @@ This module records them and says, for each clock hour, whether the hour can be 
   dispatcher, `install.sh` (through `tvgw changes --note-deploy`) and the owner's site-rule commands
   (`tvgw allow` and the rest) append one line each to
   `<STATE_DIR>/changes.spool`, a file and not the store, because they are shell or run while the
-  store may be locked; the hourly ingest loads it exactly once. The sampler below adds the events it
+  store may be locked; (admit) so does the admission check, for a change it found something in
+  (design decision 104); the hourly ingest loads it exactly once. The sampler below adds the events it
   derives from consecutive samples, and the ingest copies the machine rules' adds and verdicts from
   `auto_rules`. No row carries an address.
 - **The sampler** (`gw_samples`): one row every 10 minutes from `tvgw verify --record`. Nine of the
@@ -29,6 +30,7 @@ tested without a gateway.
 
 from __future__ import annotations
 
+import base64
 import bisect
 import contextlib
 import dataclasses
@@ -145,6 +147,9 @@ KINDS: dict[str, tuple[str, int, str]] = {
     "update_rolled_back": ("A", 1, "update rolled back"),
     "update_reboot": ("A", 1, "restart for an update"),
     "update_verified": ("B", 1, "checks after an update's restart"),
+    # (admit) what the admission check found in a change it let through, ADMIT=report (design decision 104):
+    # class B, since it changed nothing; the subject is what the change declared, the detail its lines
+    "admit": ("B", 1, "admission check report"),
 }
 GROUPS = {  # the brief's rows, by where the change acts
     "Gateway": (
@@ -152,7 +157,7 @@ GROUPS = {  # the brief's rows, by where the change acts
         "adguard_restart", "reboot", "list_refresh", "list_removed", "dhcp_change", "dispatcher_event",
         "owner_rule_change", "owner_pause", "apply_confirm", "apply_would_revert", "apply_restored",
         "resolver_change", "apply_held", "update_installed",
-        "update_rolled_back", "update_reboot", "update_verified",
+        "update_rolled_back", "update_reboot", "update_verified", "admit",
     ),
     "Uplink": ("wan_flap", "wan_link_up", "wan_link_down", "wan_addr_change", "wan_gw_change", "vpn_flap",
                "vpn_gone", "vpn_back", "vpn_up", "vpn_down", "pia_down"),
@@ -190,6 +195,9 @@ UPDATE_COMPONENTS = ("system", "adguard", "tvgw", "reboot")
 # (pause) how a pause of the shared lists ended, as its end line says: its timer, the owner's --end, or the
 # hourly check finding it past its end
 PAUSE_ENDS = ("timer", "early", "fallback")
+# (admit) an admission's outcome: lines it would refuse the change for, or a change it could not judge
+ADMIT_REFUSE, ADMIT_UNJUDGED = "refuse", "unjudged"
+ADMIT_KEEP = 10  # lines of one admission the ledger keeps; the count says how many there were
 WAN_SALT = "wan.salt"  # (plain) the uplink tag's key, beside decision 47's name keys, never in a backup
 WAN_SALT_BYTES = 32
 
@@ -317,6 +325,8 @@ def _spool_row(fields: list[str], s: Settings, last_deploy: dict | None) -> Chan
         return Change(t, "update", UPDATE_ACTIONS[rest[0]], rest[1], {"version": rest[2]}, t_precision=1.0)
     if source == "owner" and rest[:1] == ["pause"]:  # (pause) one line at the start, one at the end
         return _pause_row(t, rest[1:])
+    if source == "admit":  # (admit) one line an admission that found something
+        return _admit_row(t, rest)
     if source == "deploy" and len(rest) >= 3:
         version, code, metric = rest[0], rest[1], rest[2]
         changed = last_deploy is None or last_deploy.get("code") != code
@@ -353,6 +363,31 @@ def _pause_row(t: float, rest: list[str]) -> Change | None:
         return None
     detail = {"action": "end", "minutes": minutes, "ended": rest[2]}
     return Change(t, "owner", "owner_pause", "end", detail, t_precision=1.0)
+
+
+def admit_fields(kind: str, outcome: str, lines: list[str]) -> list[str]:
+    """(admit) One admission as spool fields: `admit`, what the change declared, the outcome, how many lines
+    it had, then its first ADMIT_KEEP lines as JSON in base64url, cut to the spool's field width: a rule's
+    text holds `|`, `^` and `$`, which a field may not."""
+    blob = (
+        base64.urlsafe_b64encode(json.dumps(lines[:ADMIT_KEEP]).encode("utf-8")).decode("ascii").rstrip("=")
+    )
+    return ["admit", kind, outcome, str(len(lines)), *(blob[i : i + 64] for i in range(0, len(blob), 64))]
+
+
+def _admit_row(t: float, rest: list[str]) -> Change | None:
+    """(admit) `admit_fields`' line as an `admit` change; None for anything else, counted as unread."""
+    if len(rest) < 4 or rest[1] not in (ADMIT_REFUSE, ADMIT_UNJUDGED) or not rest[2].isdigit():
+        return None
+    blob = "".join(rest[3:])
+    try:
+        lines = json.loads(base64.urlsafe_b64decode(blob + "=" * (-len(blob) % 4)))
+    except ValueError:  # not base64, not UTF-8 or not JSON: a damaged line
+        return None
+    if not isinstance(lines, list) or not all(isinstance(x, str) for x in lines):
+        return None
+    detail = {"outcome": rest[1], "count": int(rest[2]), "lines": lines}
+    return Change(t, "admit", "admit", rest[0], detail, t_precision=1.0)
 
 
 def _last_deploy(conn: sqlite3.Connection) -> dict | None:

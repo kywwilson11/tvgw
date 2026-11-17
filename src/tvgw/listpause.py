@@ -353,10 +353,16 @@ def _apply(apply_fn: Callable[[tuple[str, ...]], object], paused: tuple[str, ...
 
 
 def _default_apply(s: Settings, prof: Profile) -> Callable[[tuple[str, ...]], object]:
-    def apply(paused: tuple[str, ...]) -> object:
-        from tvgw import analyst  # the apply every rule change goes through: lint, guard, readiness
+    """The apply every rule change goes through (lint, guard, readiness), declaring (admit) the lists a
+    pause switches, off at its start and on at its end: the profile's tracker lists, all of them."""
+    from tvgw import policy
 
-        return analyst.adguardcfg_apply(s, prof, paused=paused)
+    declared = policy.Declared(policy.PAUSE, lists=tuple(url for _, url in prof.tracking_filters()))
+
+    def apply(paused: tuple[str, ...]) -> object:
+        from tvgw import analyst
+
+        return analyst.adguardcfg_apply(s, prof, paused=paused, declared=declared)
 
     return apply
 

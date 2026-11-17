@@ -458,15 +458,22 @@ def _apply_with(
 ) -> Callable[[Settings, bool], object]:
     """AdGuard applied the way `tvgw allow` applies it (lint, take-over refusal, readiness wait); with
     `guarded` False the restart guard is skipped, for the way back. Past a deferral it goes only when
-    the new upstreams answer a direct test right then, asked through `ask`, `set`'s own seam."""
+    the new upstreams answer a direct test right then, asked through `ask`, `set`'s own seam. (admit) It
+    declares no name and no list: a resolver change moves no verdict, so only a protected name can be hurt."""
 
     def apply(st: Settings, guarded: bool) -> object:
-        from tvgw import analyst
+        from tvgw import analyst, policy
 
         def direct(d) -> bool:
             return not precheck(d.upstreams, d.probe_name, ask, stop_at_first=True)
 
-        return analyst.adguardcfg_apply(st, prof, guard=None if guarded else (lambda: None), direct=direct)
+        return analyst.adguardcfg_apply(
+            st,
+            prof,
+            guard=None if guarded else (lambda: None),
+            direct=direct,
+            declared=policy.Declared(policy.RESOLVER),
+        )
 
     return apply
 

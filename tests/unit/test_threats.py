@@ -129,6 +129,8 @@ def must_host(lg) -> str:
         ("", []),
         ("bad.example", ["bad.example"]),
         ("bad.example   # a trailing comment", ["bad.example"]),
+        ("bad.example\t# after a tab", ["bad.example"]),
+        ("bad.example#not a comment", []),  # a `#` with no blank before it is part of the word
         ("*.bad.example", [".bad.example"]),  # the names under it, not itself
         ("||*.bad.example^", [".bad.example"]),
         ("0.0.0.0 bad.example", ["=bad.example"]),  # a hosts-file line: that name alone
@@ -151,6 +153,19 @@ def must_host(lg) -> str:
 )
 def test_each_format_gives_the_entries_it_holds(line, kept):
     assert threats.entries(line) == kept
+
+
+def test_a_line_longer_than_any_entry_needs_is_skipped_and_counted_at_once():
+    """Before decision 104 a line of 200,000 blanks before a `#` held the split past 20 seconds (L5-14). A
+    line over MAX_LINE characters is skipped, and the update counts it; one of MAX_LINE is read."""
+    from conftest import within
+
+    hostile = "a" + " " * 200_000 + "b #x"
+    assert within(1.0, lambda: threats.entries(hostile)) == []
+    pad = " " * (1024 - len("bad.example #x"))  # MAX_LINE characters in all
+    assert threats.entries(f"bad.example{pad} #x") == ["bad.example"]
+    assert threats.entries(f"bad.example{pad}  #x") == []
+    assert threats.parse([hostile, "bad.example"], io.StringIO()).skipped == 1
 
 
 def test_the_fast_entry_check_agrees_with_is_public_name():

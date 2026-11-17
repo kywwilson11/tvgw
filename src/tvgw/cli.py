@@ -173,6 +173,23 @@ def doh_line(hold: dict | None) -> str:
     return line
 
 
+def admission_line(adm: dict | None) -> str:
+    """(admit) The admission check's line (design decision 104), or "" when it wrote nothing in the window:
+    how many changes it would have refused and how many it could not judge, and the first line it wrote.
+    It refused nothing, and the line says so."""
+    if not adm:
+        return ""
+    said = [
+        f"{_count(n, 'change')} {words}"
+        for n, words in (
+            (adm["refused"], "would have been refused"),
+            (adm["unjudged"], "could not be judged"),
+        )
+        if n
+    ]
+    return f"Admission check (report only, nothing was refused): {', '.join(said)}; the first: {adm['first']}"
+
+
 def hour_label(t: float, fmt: str = "%m-%d %H:%M") -> str:
     """(budget) A clock hour as the brief prints it. The hour the clocks go back comes twice, so each of
     the two carries its zone (`01:00 CDT`, `01:00 CST`)."""
@@ -743,6 +760,9 @@ def render_brief(o: dict, out=None) -> None:
         )
         print(f"{held}: {shown or 'no counter snapshots yet'}; {checks}", file=out)
     line = doh_line(o.get("doh_hold"))  # (listguard) a DoH list refresh held back
+    if line:
+        print(clean(line), file=out)
+    line = admission_line(o.get("admission"))  # (admit) what the admission check would have refused
     if line:
         print(clean(line), file=out)
     clock = o.get("clock")
@@ -3947,7 +3967,7 @@ def _takeover_lines(others, s) -> list[str]:
 
 
 def cmd_adguard(a, s, prof) -> int:
-    from tvgw import adguardcfg, aghinstall, listpause
+    from tvgw import adguardcfg, aghinstall, listpause, policy
 
     if a.fetch and a.action != "upgrade":  # (adguard)
         return _usage(f"adguard {a.action} takes no --fetch", "adguard")
@@ -4018,6 +4038,8 @@ def cmd_adguard(a, s, prof) -> int:
             d,
             # ready means the TV's clock host resolves through the new config, not that the port answers
             ready=lambda: adguardcfg.dns_ready(name=next(iter(prof.must_allow), "example.com")),
+            # (admit) a deploy, an install or a plain re-apply declares nothing
+            admit=policy.reporter(s, prof, policy.Declared(policy.DEPLOY)),
         )
     except adguardcfg.Deferred as e:  # (lists) upstreams down: reported, not retried, nothing changed
         print(f"tvgw adguard: {e}", file=sys.stderr)

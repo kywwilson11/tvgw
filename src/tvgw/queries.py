@@ -2084,6 +2084,7 @@ def window_report(
     _ledger_keys(o, conn, a, b, profile, now, ledger_on, clean_hours)  # (ledger)
     _budget_key(o, conn, a, b, profile, upload_ceiling)  # (budget)
     _guard_keys(o, conn, a, b)  # (listguard) design decision 68
+    _admit_key(o, conn, a, b)  # (admit) design decision 104
     _names_key(o, conn, a, b, profile, gw_ip, times=app_in_front)  # (namebound) times only when interactive
     _threats_key(o, conn, a, b, now)  # (threats)
     _uplink_key(o, conn, a, b, ledger_on, uplink_if, now)  # (uplink quality)
@@ -2236,6 +2237,32 @@ def _guard_keys(o: dict, conn: sqlite3.Connection, a: float, b: float) -> None:
     hold = doh_hold(conn, a, b)
     if hold is not None:
         o["doh_hold"] = hold
+
+
+def _admit_key(o: dict, conn: sqlite3.Connection, a: float, b: float) -> None:
+    """(admit) The brief's admission line (design decision 104): from the window's `admit` rows of the change
+    ledger, how many changes the check would have refused and how many it could not judge, and the first
+    line it wrote. Set only when there is a row, so a gateway with ADMIT=off writes what it wrote before; a
+    failure is a report warning."""
+    from tvgw import ledger  # here, not at module level: ledger imports this module
+
+    found: dict[str, list[list[str]]] = {ledger.ADMIT_REFUSE: [], ledger.ADMIT_UNJUDGED: []}
+    try:
+        for (raw,) in conn.execute(
+            "SELECT detail FROM changes WHERE kind = 'admit' AND t >= ? AND t < ? ORDER BY t", (a, b)
+        ):
+            detail = json.loads(raw)  # the ledger wrote it from a line it checked (ledger._admit_row)
+            found[detail["outcome"]].append(detail["lines"])
+    except Exception as e:
+        o.setdefault("warnings", []).append(f"admission check: {type(e).__name__}: {e}")
+        return
+    said = found[ledger.ADMIT_REFUSE] or found[ledger.ADMIT_UNJUDGED]
+    if said:
+        o["admission"] = {
+            "refused": len(found[ledger.ADMIT_REFUSE]),
+            "unjudged": len(found[ledger.ADMIT_UNJUDGED]),
+            "first": said[0][0],  # a row holds one line at least (ledger.admit_fields)
+        }
 
 
 def doh_hold(conn: sqlite3.Connection, since: float, until: float) -> dict | None:

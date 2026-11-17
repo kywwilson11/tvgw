@@ -135,7 +135,7 @@ def test_an_owed_push_that_fails_for_another_reason_exits_1_with_the_warning(aut
     autoblock.log_decision(conn, "apply", autoblock.DEFERRED, T0, "||x.example^", "x.example")
     conn.close()
 
-    def broken(s, prof):
+    def broken(s, prof, **_):
         raise RuntimeError("AdGuard rolled back")
 
     monkeypatch.setattr(analyst, "adguardcfg_apply", broken)
@@ -183,7 +183,7 @@ def test_a_deferred_undo_keeps_the_owners_revert_and_exits_3(auto, lg, capsys, m
         f"STATE_DIR={s.state_dir}\nDB_PATH={s.db_path}\nREPORTS_DIR={s.reports_dir}\nAUTO_RULES={s.auto_rules}\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(analyst, "adguardcfg_apply", lambda s, prof: deferred())
+    monkeypatch.setattr(analyst, "adguardcfg_apply", lambda s, prof, **_: deferred())
     conn = db.connect(s.db_path)
     autoblock.add_rule(s.auto_rules, "||kept.example^", "test")
     autoblock.record(conn, "||kept.example^", "kept.example", DAY, "o", "f", "x", T0)
@@ -201,7 +201,7 @@ def test_a_deferred_undo_keeps_the_owners_revert_and_exits_3(auto, lg, capsys, m
     assert cli.main(["--conf", str(conf), "autoblock", "check"]) == 0
     assert "WARNING" not in capsys.readouterr().out
     # with the upstreams back, an undo with nothing to remove does not claim a deferral
-    monkeypatch.setattr(analyst, "adguardcfg_apply", lambda s, prof: None)
+    monkeypatch.setattr(analyst, "adguardcfg_apply", lambda s, prof, **_: None)
     assert cli.main(["--conf", str(conf), "undo"]) == 0
     assert "no machine rule to remove" in capsys.readouterr().out
 

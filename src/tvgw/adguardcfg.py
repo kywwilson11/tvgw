@@ -776,6 +776,18 @@ def _restore(path: str, backup: str, control: Callable[..., None], unit: str) ->
     control("start", unit)
 
 
+def _admit(admit: Callable[[dict, dict], object], current: dict, planned: dict) -> None:
+    """(admit) The admission check, report only (design decision 104): it gets copies, so nothing it does
+    can reach the file the apply writes, and whatever it raises is one line on stderr, never a stop. The
+    reporter says a fault of the check itself in the change ledger; this catches the rest, such as a ledger
+    it could not write."""
+    try:
+        admit(copy.deepcopy(current), copy.deepcopy(planned))
+    except Exception as e:
+        why = f"{type(e).__name__}: {e}"
+        print(f"tvgw adguard: the admission check could not judge this change ({why})", file=sys.stderr)
+
+
 def apply(
     path: str,
     d: Desired,
@@ -787,6 +799,7 @@ def apply(
     now: float | None = None,
     guard: Callable[[], None] | None = None,
     direct: Callable[[Desired], bool] | None = None,
+    admit: Callable[[dict, dict], object] | None = None,
 ) -> list[str]:
     """Write the planned config and restart AdGuard, without ever leaving the resolver worse off.
 
@@ -802,6 +815,10 @@ def apply(
     change to make it runs `guard` (by default `restart_guard()` on `d.probe_name`, listening past the
     live YAML's own upstream timeout and checking `d.local_name`), which raises
     `Deferred` while the upstreams are down: the restart would cost the TV its cache for nothing.
+
+    (admit) Then, with a change to make and before anything is staged, it hands `admit` (the admission
+    check's reporter, `policy.reporter`, with ADMIT=report) copies of the YAML as it is and as planned. What
+    it finds, and anything it raises, changes nothing: the apply goes on as it would without it.
     """
     directory = os.path.dirname(os.path.abspath(path))
     with _locked(directory, "another tvgw adguard apply is running"):
@@ -836,6 +853,8 @@ def apply(
                 " settings name answer from here: applying them",
                 file=sys.stderr,
             )
+        if admit is not None:
+            _admit(admit, current, planned)
         tmp = _stage(path, dump_yaml(planned).encode(), path)
         try:
             ok, detail = check(tmp)

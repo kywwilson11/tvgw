@@ -216,6 +216,10 @@ class Settings:
     # measures each day's app starts once settled, refusing nothing (design decision 98); off: nothing is
     # drawn. A later stage's word (one, several) is refused until that stage has landed
     trial: str = "off"
+    # (admit) report: every apply of AdGuardHome.yaml first asks what AdGuard would answer before and after
+    # the change, and writes what it would refuse the change for to the change ledger and the brief, then
+    # applies as before (design decision 104); off: nothing is asked. No value refuses anything
+    admit: str = "off"
 
 
 # conf key -> Settings field (only the keys an operator is meant to set)
@@ -304,6 +308,7 @@ CONF_KEYS = {
     "WEB_BIND": "web_bind",
     "REVERT_SUPPORTED": "revert_supported",  # (revert) read by tvgw-apply; verify reads the hold it leaves
     "TRIAL": "trial",  # (trials) read by the hourly ingest and tvgw trial
+    "ADMIT": "admit",  # (admit) read by every apply of AdGuardHome.yaml
 }
 # switches tvgw-apply reads with an exact `case`; a near miss (`Yes`, `on`) must fail here, not there
 # the analyst's reasoning depth, checked here (tvgw-apply never reads it, so it is not in CHOICES)
@@ -351,6 +356,7 @@ MODES = {
     "WEB": ("off", "on"),  # (web) read by tvgw web serve, tvgw verify and install.sh
     "WEB_BIND": ("uplink", "loopback"),  # (web)
     "TRIAL": ("off", "record"),  # (trials) read by the hourly ingest and tvgw trial; nothing refuses
+    "ADMIT": ("off", "report"),  # (admit) read by every apply of AdGuardHome.yaml; nothing refuses
 }
 # (trials) the trial's later stages, each refused by name until it has landed: they would refuse
 TRIAL_LATER = ("one", "several")

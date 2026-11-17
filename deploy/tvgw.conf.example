@@ -205,6 +205,12 @@ ADGUARD_LISTEN=gateway
 # them, and tvgw rules --local lists them (docs/use/blocking.md#your-own-rules).
 # The file does not exist until the first of those commands. Never the same file as AUTO_RULES.
 # LOCAL_RULES=/etc/tvgw/local.rules
+# The admission check (docs/how-it-works/adguard.md#the-admission-check). report: every apply of AdGuard
+# Home's settings first asks what the filter would answer before and after the change, for the names the TV
+# needs and the names it used in the last 14 days, and writes what it would refuse the change for to the
+# change ledger and the brief. It refuses nothing: the apply goes on as before. off, also what a file
+# without this line means: nothing is asked. The next apply reads it.
+ADMIT=off
 
 # ---- data retention ----
 DB_DAYS=365        # rows in /var/lib/tvgw/tvgw.db

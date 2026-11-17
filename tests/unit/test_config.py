@@ -180,6 +180,7 @@ READ = {
     "WEB_PORT": "8443",  # (web)
     "WEB_BIND": "uplink",  # (web)
     "TRIAL": "off",  # (trials) no coin is drawn
+    "ADMIT": "off",  # (admit) no apply is judged
     # (updates) design decision 77: no request and no install from a file without them
     "UPDATE_CHECK": "off",
     "UPDATE_REPO": "kywwilson11/tvgw",

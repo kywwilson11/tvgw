@@ -963,12 +963,14 @@ def test_set_holds_the_install_lock_then_the_autonomys_and_waits_a_while_for_it(
 def test_the_way_back_applies_without_the_restart_guard(lg, monkeypatch):
     """analyst.adguardcfg_apply hands its guard to adguardcfg.apply: none is the restart guard, a no-op
     is what `set` passes on its way back. Its direct test, which lets an apply past a deferral, asks
-    through `set`'s own seam."""
+    through `set`'s own seam. (admit) With ADMIT=off no admission check is handed over."""
     seen = []
     monkeypatch.setattr(
         adguardcfg,
         "apply",
-        lambda path, d, ready, guard=None, direct=None: seen.append((guard, direct, d)) or [],
+        lambda path, d, ready, guard=None, direct=None, admit=None: (
+            seen.append((guard, direct, d, admit)) or []
+        ),
     )
     from tvgw import aghinstall
 
@@ -978,8 +980,8 @@ def test_the_way_back_applies_without_the_restart_guard(lg, monkeypatch):
     ask = lambda url, name: asked.append(url) or (True, "")  # noqa: E731
     resolver._apply_with(lg, ask)(s, True)
     resolver._apply_with(lg, ask)(s, False)
-    (g0, direct, d), (g1, _, _) = seen
-    assert g0 is None and callable(g1) and g1() is None
+    (g0, direct, d, admit), (g1, _, _, _) = seen
+    assert g0 is None and callable(g1) and g1() is None and admit is None
     assert direct(d) is True and asked == list(d.upstreams)
 
 

@@ -34,7 +34,7 @@ import time
 import unicodedata
 from collections.abc import Callable
 
-from tvgw import autoblock, db, ledger, localrules, minimize, queries, threats
+from tvgw import autoblock, db, ledger, localrules, minimize, policy, queries, threats
 from tvgw.config import Settings
 from tvgw.profile import (
     PAIRABLE_PROFILES,
@@ -1203,7 +1203,7 @@ class _Autonomy:
     secrets: tuple[str, ...]
     now: Callable[[], float]
     call_fn: Callable
-    apply_fn: Callable[[], object]
+    apply_fn: Callable[[], object] | None  # a test's stand-in; None is the apply itself (`push`)
     sampler: Callable[[], autoblock.Sample]
     sleep: Callable[[float], None]
     mask: minimize.IdMask  # (decision 93) the run's own, so the second model reads the proposer's tokens
@@ -1233,10 +1233,15 @@ class _Autonomy:
             secrets=secrets_for(s, conn),
             now=hooks.get("now", time.time),
             call_fn=hooks.get("call", call),
-            apply_fn=hooks.get("apply", lambda: adguardcfg_apply(s, prof)),
+            apply_fn=hooks.get("apply"),
             sampler=hooks.get("sampler", lambda: live_sample(s)),
             sleep=hooks.get("sleep", time.sleep),
         )
+
+    def push(self, kind: str, rule: str) -> Callable[[], object]:
+        """The apply of a change to one machine rule: the test's stand-in, or `adguardcfg_apply` declaring
+        (admit) the name the rule acts on, as `kind` (policy.MACHINE for its add, REVERT for its revert)."""
+        return self.apply_fn or _declaring(self.s, self.prof, policy.of_rules(kind, [rule]))
 
     def entry(self, prop: dict, outcome: str, reason: str, **extra) -> dict:
         return {"name": prop["name"], "rule": prop["rule"], "outcome": outcome, "reason": reason, **extra}
@@ -1361,7 +1366,7 @@ class _Autonomy:
         from tvgw import adguardcfg
 
         try:
-            self.apply_fn()
+            self.push(policy.MACHINE, rule)()
         except adguardcfg.Deferred as e:
             # (fin-release) the upstreams are down and AdGuard was not restarted: the file goes back as it
             # was and no rule is recorded, so the block is tried again, not judged as a failure
@@ -1405,7 +1410,7 @@ class _Autonomy:
         if outcome == "reverted":
             autoblock.remove_rule(self.s.auto_rules, rule)
             planned_after = autoblock.newest_decision(self.conn)
-            kind, err = _push(self.apply_fn, self.sleep)
+            kind, err = _push(self.push(policy.REVERT, rule), self.sleep)
             if not kind:  # the canary's `reverted` row owed this push from the moment it was written
                 autoblock.record_push(
                     self.conn, planned_after, self.now(), REVERT_TOOK,
@@ -1512,6 +1517,7 @@ def adguardcfg_apply(
     guard: Callable[[], None] | None = None,
     direct: Callable | None = None,
     paused: tuple[str, ...] | None = None,
+    declared: policy.Declared | None = None,
 ) -> list[str]:
     """Push the profile's and the machine's rules to AdGuard the way `tvgw adguard apply` does: the
     profile must lint (a profile that does not is never applied, by the machine least of all), and
@@ -1522,7 +1528,8 @@ def adguardcfg_apply(
     back after the new ones failed. `direct` replaces adguardcfg.planned_answer, the direct test that
     lets an apply past a deferral (`set` passes its own seam). (pause) `paused` goes to
     `adguardcfg.desired()`: `tvgw pause` names the lists it switches off, or none at its end, rather
-    than read them back from the store it has just written."""
+    than read them back from the store it has just written. (admit) `declared` is what the caller means
+    to change, for the admission check with ADMIT=report (`policy.reporter`); none declares nothing."""
     from tvgw import adguardcfg, aghinstall
 
     problems = prof.lint()
@@ -1544,6 +1551,7 @@ def adguardcfg_apply(
         ready=lambda: adguardcfg.dns_ready(name=host),
         guard=guard,
         direct=direct,
+        admit=policy.reporter(s, prof, declared),
     )
 
 
@@ -1569,6 +1577,11 @@ def _deferred_text(e: BaseException) -> str:
     """An `adguardcfg.Deferred`'s message, always starting `deferred: upstream down`."""
     msg = _text(str(e), 200)
     return msg if msg.startswith(autoblock.DEFERRED) else f"{autoblock.DEFERRED} ({msg})"
+
+
+def _declaring(s: Settings, prof: Profile, declared: policy.Declared) -> Callable[[], list[str]]:
+    """(admit) The apply every change of the machine's rules goes through, saying what it changes."""
+    return lambda: adguardcfg_apply(s, prof, declared=declared)
 
 
 def _push(apply_fn, sleep: Callable[[float], None]) -> tuple[str, str]:
@@ -1623,7 +1636,6 @@ def check(
     the analyst could be between writing a rule and recording it. Returns the decisions made."""
     hooks = hooks or {}
     now = time.time() if now is None else now
-    apply_fn = apply_fn or (lambda: adguardcfg_apply(s, prof))
     judge_fn = hooks.get("judge", autoblock.judge)
     decisions, reapply = [], False
     owed = autoblock.push_owed(conn)  # an earlier revert or undo that AdGuard has not taken yet
@@ -1674,8 +1686,10 @@ def check(
             _unobserved(conn, row, now)
         decisions.append({"rule": row["rule"], "name": row["name"], "verdict": kind, "reason": why})
     planned_after = autoblock.newest_decision(conn)
-    kind, err = _push(apply_fn, hooks.get("sleep", time.sleep)) if (reapply or owed) else ("", "")
     reverted = [d for d in decisions if d["verdict"] == "reverted"]
+    # (admit) the push declares the rules this check took out; a push owed from before adds no name
+    push = apply_fn or _declaring(s, prof, policy.of_rules(policy.REVERT, [d["rule"] for d in reverted]))
+    kind, err = _push(push, hooks.get("sleep", time.sleep)) if (reapply or owed) else ("", "")
     if kind == "deferred":  # (fin-release) not an error: the verdicts stand and the next check pushes
         for d in reverted:
             d["deferred"] = err
@@ -1782,9 +1796,9 @@ def undo(
     from tvgw import adguardcfg
 
     now = time.time() if now is None else now
-    apply_fn = apply_fn or (lambda: adguardcfg_apply(s, prof))
     live = autoblock.active(conn)
     chosen = live if everything else live[-1:]
+    apply_fn = apply_fn or _declaring(s, prof, policy.of_rules(policy.UNDO, [r["rule"] for r in chosen]))
     for row in chosen:
         autoblock.remove_rule(s.auto_rules, row["rule"])
         _owner_reverted(conn, row, "owner undo", now)

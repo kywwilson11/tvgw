@@ -7,8 +7,10 @@ test, in the forms the published lists use."""
 
 import dataclasses
 import gzip
+import itertools
 import json
 import os
+import re
 from importlib import resources
 from pathlib import Path
 
@@ -79,6 +81,112 @@ def test_comments_and_local_names_hold_no_rule(line):
 def test_a_line_the_model_cannot_read_is_none_never_a_guess(line):
     """AdGuard drops a rule with a modifier it does not know; the model does too, and the scan counts it."""
     assert parse(line) is None
+
+
+# ---- (admit) the models' time follows their input, never faster (design decision 104) ----------------------
+@pytest.mark.parametrize(
+    "line",
+    [
+        "/^(\\w+-*)+\\.tracker\\.example$/",  # a loop inside a loop: lane L5's line
+        "/" + ".*" * 10 + "x$/",  # ten loops in a row
+        "/" + "a?" * 20 + "a" * 20 + "x/",  # twenty choices in a row
+        "a*" * 20 + "b^",  # a pattern of twenty `*`, matched as a `.*` regex before
+    ],
+)
+def test_a_hostile_list_line_is_judged_against_the_tvs_names_within_a_second(lg, line):
+    """Before decision 104 each of these held the list preview past 20 seconds against 2,000 of the TV's
+    names (L5-14), while AdGuard, which reads a regex with Go's linear engine, went on serving."""
+    from conftest import within
+
+    names = [(f"r{i}---sn-{'a' * 40}.cdn.example", 1) for i in range(2000)]
+    groups = {"profile": plan(lg), "local": [], "machine": []}
+    done = within(1.0, lambda: listguard.preview(["||x.test^"], ["||x.test^", line], [], groups, names, TV))
+    assert done["newly_blocked"] == []
+
+
+@pytest.mark.parametrize(
+    ("body", "tries"),
+    [
+        ("^ads\\.example\\.org$", 1),
+        ("ads\\.example\\.org", 254),  # unanchored: it may start at any of a name's 254 places
+        ("^ads[0-9]*\\.example$", 254),  # a loop takes 0 to 253 characters
+        ("^ads[0-9]+\\.example$", 253),
+        ("^ads[0-9]{2,5}\\.example$", 4),
+        ("^(.+\\.)?tracker\\.example$", 254),  # its loop's lengths, or not at all
+        ("(^|\\.)tracker\\.example$", 508),  # an alternation's branches add up
+        ("^(ad|ads|adv)\\.example$", 3),
+        ("^a*b*$", 254 * 254),  # two loops after a `^`: the most the model reads
+        ("(\\w+-*)+\\.tracker\\.example$", None),  # a loop around a loop
+        ("(ab|cd)+", None),  # a loop around a choice
+        ("(?=ads)ads\\.example", None),  # Go's regexp has no lookahead,
+        ("(a)\\1", None),  # no back-reference,
+        ("a*+", None),  # no possessive loop
+        ("(?>ads)", None),  # and no atomic group,
+        ("^(ab(?=c))$", None),  # also inside a group
+        ("^(ab|cd(?=e))$", None),  # or a branch
+    ],
+)
+def test_the_tries_of_a_regex_are_counted_from_its_shape(body, tries):
+    assert listguard.regex_tries(body) == tries
+
+
+@pytest.mark.parametrize(
+    ("line", "read"),
+    [
+        ("/^a*b*$/", True),  # REGEX_TRIES, exactly
+        ("/^a*b*c?$/", False),  # one choice more
+        ("/" + "a" * 200 + "/", True),  # REGEX_MAX characters
+        ("/" + "a" * 201 + "/", False),
+        ("/^[[:alnum:]-]+\\.example$/", False),  # a POSIX class to Go, a set to Python
+        ("/^(\\w+-*)+\\.tracker\\.example$/$important", False),
+    ],
+)
+def test_a_regex_is_read_only_within_the_models_bounds_and_the_rest_is_counted(line, read):
+    assert (parse(line) is not None) == read
+    assert listguard.read_rules([line]) == (rules(line), 0 if read else 1)
+
+
+def as_regex(pattern: str) -> re.Pattern[str]:
+    """The `.*` regex a pattern was matched with before decision 104: the oracle the matcher is held to."""
+    p, head, tail = pattern.lower(), "", ""
+    if p.startswith("||"):
+        head, p = r"(?:^|\.)", p[2:]
+    elif p.startswith("|"):
+        head, p = "^", p[1:]
+    if p.endswith("|"):
+        tail, p = "$", p[:-1]
+    return re.compile(
+        head + "".join(".*" if c == "*" else "$" if c == "^" else re.escape(c) for c in p) + tail
+    )
+
+
+@pytest.mark.parametrize(
+    ("pattern", "name", "matched"),
+    [
+        ("||ads*.example^", "ads1.example", True),
+        ("||ads*.example^", "x.ads1.example", True),  # `||` at the start of a label
+        ("||ads*.example^", "bads1.example", False),  # never inside one
+        ("||ads*.example^", "a-ads1.example", False),  # a hyphen starts no label
+        ("|ads*", "ads.example", True),
+        ("|ads*", "x.ads.example", False),
+        ("*.example|", "ads.example", True),
+        ("ads*example^", "ads.example.org", False),  # `^` inside a name is its end
+        ("ads*^x", "ads", False),  # text after the end: no name
+    ],
+)
+def test_a_pattern_reads_its_anchors_and_separator_as_adguard_does(pattern, name, matched):
+    assert listguard.Glob.of(pattern).matches(name) is matched
+
+
+def test_a_pattern_matches_exactly_the_names_its_regex_matched():
+    """Every pattern of up to five of `ab.*^|` against every name of up to four of `ab.`: the one-pass
+    matcher and the regex agree on each, the separator, the anchors and a `^` before more text included."""
+    names = ["".join(t) for k in range(5) for t in itertools.product("ab.", repeat=k)]
+    for k in range(1, 6):
+        for t in itertools.product("ab.*^|", repeat=k):
+            pattern = "".join(t)
+            rx, glob = as_regex(pattern), listguard.Glob.of(pattern)
+            assert [n for n in names if glob.matches(n)] == [n for n in names if rx.search(n)], pattern
 
 
 def test_a_hosts_line_with_an_address_of_its_own_answers_rather_than_blocks():

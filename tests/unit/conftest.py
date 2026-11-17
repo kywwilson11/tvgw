@@ -5,6 +5,7 @@ import importlib.util
 import os
 import pickle
 import shlex
+import signal
 import sqlite3
 import stat
 import struct
@@ -285,6 +286,22 @@ def statements(conn, fn) -> list[str]:
 
 def plan(conn, sql: str) -> str:
     return " ".join(r[3] for r in conn.execute("EXPLAIN QUERY PLAN " + sql))
+
+
+def within(seconds: float, fn):
+    """(admit) `fn()`, or TimeoutError once `seconds` of wall time have passed: the alarm stops even Python's
+    regex matcher, which looks for signals as it backtracks, so a test of a hang fails instead of hanging."""
+
+    def late(*_):
+        raise TimeoutError(f"still running after {seconds} s")
+
+    before = signal.signal(signal.SIGALRM, late)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        return fn()
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, before)
 
 
 def find_root(start: Path) -> Path:
