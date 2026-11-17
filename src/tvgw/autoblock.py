@@ -161,8 +161,9 @@ def app_in_front(conn: sqlite3.Connection, a: float, b: float) -> Callable[[floa
     """The app in front at a moment of [a, b), "" when nothing says. While the live reading's session to
     the TV was up, its record alone says (`appfront.timeline`), to the second; at any other moment the
     hourly reading of that clock hour does, as before, so a gateway without the live reading sees no
-    change."""
-    live = appfront.timeline(appfront.stored_events(conn, a, b), [], a, b)
+    change. The record is read from a day before `a`: a session that came up before the window (the
+    analyst's day begins at midnight) is the record's from the window's start."""
+    live = appfront.timeline(appfront.stored_events(conn, a - 86400, b), [], a - 86400, b)
     readings = conn.execute(
         f"SELECT t, COALESCE(app, '') FROM tvstate WHERE t >= ? AND t < ? AND power IN ({_AWAKE_MARKS})",
         (a, b, *queries.AWAKE),

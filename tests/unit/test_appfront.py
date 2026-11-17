@@ -659,26 +659,32 @@ def talked(*items: tuple[str | None, float], at: float = T + HOUR + 60) -> list[
 
 
 @pytest.mark.parametrize(
-    "talk, label",
+    "talk, label, own",
     [
-        ([("rr1.googlevideo.com", 10)], YT),  # INFER_MIN_BYTES, exactly
-        ([("rr1.googlevideo.com", 10 - 1 / MB)], None),  # a byte short: too little to say
-        ([("rr1.googlevideo.com", 18), ("oca.nflxvideo.net", 2)], YT),  # INFER_SHARE, exactly
-        ([("rr1.googlevideo.com", 18), ("oca.nflxvideo.net", 2 + 1 / MB)], None),  # a byte under it
-        ([("rr1.googlevideo.com", 20), ("oca.nflxvideo.net", 20)], None),  # two apps' names, equally
-        ([("rr1.googlevideo.com", 20), ("cdn.fastly.net", 500)], YT),  # a unit both pictures hold
-        # the TV's own names, a name no picture holds and a connection no hello named say nothing
-        ([("rr1.googlevideo.com", 20), ("us.lgtvsdp.com", 500), ("new.example.org", 500), (None, 500)], YT),
-        ([("cdn.fastly.net", 500), ("us.ad.lgsmartad.com", 500)], None),
+        ([("rr1.googlevideo.com", 10)], YT, (1, 10)),  # INFER_MIN_BYTES, exactly
+        ([("rr1.googlevideo.com", 10 - 1 / MB)], None, (0, 0)),  # a byte short: too little to say
+        ([("rr1.googlevideo.com", 18), ("oca.nflxvideo.net", 2)], YT, (1, 18)),  # INFER_SHARE, exactly
+        ([("rr1.googlevideo.com", 18), ("oca.nflxvideo.net", 2 + 1 / MB)], None, (0, 0)),  # a byte under it
+        ([("rr1.googlevideo.com", 20), ("oca.nflxvideo.net", 20)], None, (0, 0)),  # two apps' names, equally
+        ([("rr1.googlevideo.com", 20), ("cdn.fastly.net", 500)], YT, (1, 20)),  # a unit both pictures hold
+        # the TV's own names, a name no picture holds and a connection no hello named say nothing, and
+        # they are not the label's own
+        (
+            [("rr1.googlevideo.com", 20), ("us.lgtvsdp.com", 500), ("new.example.org", 500), (None, 500)],
+            YT,
+            (1, 20),
+        ),
+        ([("cdn.fastly.net", 500), ("us.ad.lgsmartad.com", 500)], None, (0, 0)),
     ],
 )
 def test_a_gap_is_labelled_with_the_app_whose_picture_alone_holds_nine_tenths_of_its_named_bytes(
-    lg, talk, label
+    lg, talk, label, own
 ):
     before, after = appfront.infer(LOST, talked(*talk), lg, known(YT, NF))
     assert (before.t0, before.t1, before.app, before.conns) == (A, T, None, 0)
     assert (after.t0, after.t1, after.app, after.conns) == (T + HOUR, B, label, len(talk))
     assert after.bytes == sum(int(mb * MB) for _, mb in talk)
+    assert (after.own_conns, after.own_bytes) == (own[0], int(own[1] * MB))
     assert (appfront.INFER_SHARE, appfront.INFER_MIN_BYTES) == (0.9, 10 * MB)
 
 
@@ -699,11 +705,7 @@ def test_a_gap_is_its_touching_pieces_less_a_lead_window_and_a_day_left_out_take
     tl = appfront.Timeline(A, B, [Piece(A, T, GAP), Piece(T, T + HOUR, GAP), Piece(T + HOUR, B, SESSION, nf)])
     conns = talked(("rr1.googlevideo.com", 20), at=T) + talked(("oca.nflxvideo.net", 400), at=T + HOUR - 1)
     (g,) = appfront.infer(tl, conns, lg, known(YT, NF))
-    assert (g.t0, g.t1, g.app, g.conns) == (
-        A,
-        T + HOUR,
-        YT,
-        1,
-    )  # the second before the change is the session's
+    # the second before the change is the session's
+    assert (g.t0, g.t1, g.app, g.conns) == (A, T + HOUR, YT, 1)
     assert appfront.infer(tl, conns, lg, known(YT, NF), without=DAY0 - 1)[0].app is None
     assert appfront.infer(tl, conns, lg, known(YT, NF), without=DAY0)[0].app == YT

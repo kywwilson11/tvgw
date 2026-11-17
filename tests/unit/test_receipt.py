@@ -682,23 +682,35 @@ IN_THE_GAP = evening(2, 21.7)  # the third evening's readings at 21:20 and 22:20
 
 
 def test_a_gap_whose_names_are_one_apps_is_probably_that_app_and_the_line_says_the_tv_did_not_say(store, lg):  # noqa: F811
+    """The line gave the app the whole gap: an update the TV's own software fetched in it was counted as
+    the app's. It gives the label only what the names that point to it carried."""
     store.talk(IN_THE_GAP, "rr2b---sn-abc.googlevideo.com", down_=20_000_000)
+    store.talk(IN_THE_GAP + 60, "snu.lge.com", down_=800_000_000)  # the TV's own
+    store.talk(evening(3, 21.7), "oca.nflxvideo.net", down_=30_000_000)  # the next evening's gap
     rec = receipt.gather(store.conn, lg, GW, A, B, [], now=NOW)  # the hourly readings alone
     g = receipt.gap_summary(rec)
     # YouTube's video, and between.example.org: its site is in YouTube's picture from the fourth evening
-    assert g["by_picture"] == {
-        YT: {
-            "label": "YouTube (youtube.leanback.v4)",
-            "inferred": True,
-            "gaps": 1,
-            "conns": 2,
-            "bytes": 20_011_000,
-        }
+    yt = {
+        "label": "YouTube (youtube.leanback.v4)",
+        "inferred": True,
+        "gaps": 1,
+        "conns": 2,
+        "bytes": 20_011_000,
     }
-    out = text(receipt.render_gap_summary(g))
-    assert "  Probably YouTube (from the names it used; the TV did not say): 2 connections, 19.1 MB." in out
-    assert "  Opened like the software of" not in out and not receipt.FORBIDDEN.search(out)
-    assert receipt.gap_summary(rec, since=evening(3, 0.0))["by_picture"] == {}  # only what started since
+    assert g["by_picture"] == {
+        NF: {"label": "Netflix (netflix)", "inferred": True, "gaps": 1, "conns": 1, "bytes": 30_001_000},
+        YT: yt,
+    }
+    assert list(g["by_picture"]) == [NF, YT]  # by bytes
+    out = receipt.render_gap_summary(g)
+    assert out[2:6] == [
+        "  Probably Netflix (from the names it used; the TV did not say): 1 connection and 28.6 MB on names",
+        "      seen with Netflix alone.",
+        "  Probably YouTube (from the names it used; the TV did not say): 2 connections and 19.1 MB on names",
+        "      seen with YouTube alone.",
+    ]
+    assert "  Opened like the software of" not in text(out) and not receipt.FORBIDDEN.search(text(out))
+    assert receipt.gap_summary(rec, since=evening(4, 0.0))["by_picture"] == {}  # only what started since
 
 
 def test_an_inferred_label_never_reaches_the_picture_learner(store, tmp_path, monkeypatch, capsys):  # noqa: F811

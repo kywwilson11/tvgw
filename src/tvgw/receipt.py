@@ -734,13 +734,15 @@ def render_evening(rec: Record, ev: dict, starts: list | None = None) -> list[st
 def gap_summary(rec: Record, since: float | None = None) -> dict:
     """The time of the window in which nothing says which app was in front, the connections that started
     in it, how many of them carry a TLS fingerprint that is one app's, and (`by_picture`) the gaps whose
-    names point to one app's picture (`appfront.infer`), each app's marked `inferred`: the TV did not say."""
+    names point to one app's picture (`appfront.infer`), with the connections and bytes on the names
+    that point to it, each app's marked `inferred`: the TV did not say."""
     a = rec.a if since is None else since
     seconds = sum(
         min(p.t1, rec.b) - max(p.t0, a) for p in rec.tl.pieces if p.cls == appfront.GAP and p.t1 > a
     )
     out = {"seconds": max(0.0, seconds), "conns": 0, "bytes": 0, "by_app": {}, "unnamed": 0, "by_picture": {}}
-    # what the names say is whose traffic it was, not how long the app was in front: no duration
+    # the label's own connections and bytes: the names say nothing of the rest of the gap, nor how long
+    # the app was in front
     for g in appfront.infer(rec.tl, [c for c in rec.conns if c.t >= a], rec.profile, rec.ev):
         if g.app is None:
             continue
@@ -748,8 +750,8 @@ def gap_summary(rec: Record, since: float | None = None) -> dict:
             g.app, {"label": appfront.app_label(g.app), "inferred": True, "gaps": 0, "conns": 0, "bytes": 0}
         )
         cell["gaps"] += 1
-        cell["conns"] += g.conns
-        cell["bytes"] += g.bytes
+        cell["conns"] += g.own_conns
+        cell["bytes"] += g.own_bytes
     out["by_picture"] = dict(sorted(out["by_picture"].items(), key=lambda kv: (-kv[1]["bytes"], kv[0])))
     for c in rec.conns:
         if c.t < a or rec.tl.at(c.t)[0] != appfront.GAP:
@@ -780,7 +782,8 @@ def render_gap_summary(g: dict) -> list[str]:
     for c in g["by_picture"].values():
         out += wrap(
             f"Probably {short(c['label'])} (from the names it used; the TV did not say):"
-            f" {count(c['conns'], 'connection')}, {size(c['bytes'])}.",
+            f" {count(c['conns'], 'connection')} and {size(c['bytes'])} on names seen with"
+            f" {short(c['label'])} alone.",
             "  ",
         )
     if g["by_app"]:

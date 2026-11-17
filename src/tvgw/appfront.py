@@ -907,13 +907,17 @@ def learn_stacks(tl: Timeline, seen: Iterable[tuple[float, str, str]]) -> Stacks
 @dataclass(frozen=True)
 class Inferred:
     """One gap and the app its names point to: `app` is None when they point to no one app clearly
-    enough. A label for a report and never a session, so no picture or stack is learned from it."""
+    enough. A label for a report and never a session, so no picture or stack is learned from it. `conns`
+    and `bytes` are the whole gap's; `own_conns` and `own_bytes` are the label's own, on units its
+    picture alone holds, which is all the names say (0 without a label)."""
 
     t0: float
     t1: float
     app: str | None
     conns: int
     bytes: int
+    own_conns: int = 0
+    own_bytes: int = 0
 
 
 def gaps(tl: Timeline) -> list[tuple[float, float]]:
@@ -947,7 +951,7 @@ def infer(
     own = owners(ev, without)
     spans = gaps(tl)
     starts = [t0 for t0, _ in spans]
-    tally = [(Counter(), Counter()) for _ in spans]  # per gap: conns and bytes; bytes by owner
+    tally = [(Counter(), Counter(), Counter()) for _ in spans]  # per gap: conns and bytes; by owner, each
     units: dict[str, object] = {}
     for c in conns:
         i = bisect.bisect_right(starts, c.t) - 1
@@ -956,14 +960,17 @@ def infer(
         if c.name not in units:
             kind = classify(profile, c.name) if c.name else None
             units[c.name] = kind.unit if kind is not None and kind.cls in PICTURE_CLASSES else None
-        seen, by_app = tally[i]
+        seen, by_app, n_app = tally[i]
         seen.update(conns=1, bytes=c.bytes)
         app = own.get(units[c.name])
         if app is not None:
             by_app[app] += c.bytes
+            n_app[app] += 1
     out = []
-    for (t0, t1), (seen, by_app) in zip(spans, tally, strict=True):
+    for (t0, t1), (seen, by_app, n_app) in zip(spans, tally, strict=True):
         top, held = min(by_app.items(), key=lambda kv: (-kv[1], kv[0]), default=(None, 0))
-        sure = held >= INFER_SHARE * sum(by_app.values()) and held >= INFER_MIN_BYTES
-        out.append(Inferred(t0, t1, top if sure else None, seen["conns"], seen["bytes"]))
+        if held >= INFER_SHARE * sum(by_app.values()) and held >= INFER_MIN_BYTES:
+            out.append(Inferred(t0, t1, top, seen["conns"], seen["bytes"], n_app[top], held))
+        else:
+            out.append(Inferred(t0, t1, None, seen["conns"], seen["bytes"]))
     return out

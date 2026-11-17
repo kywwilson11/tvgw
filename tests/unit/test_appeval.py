@@ -478,12 +478,13 @@ MB = 1024 * 1024
 
 def test_the_pictures_label_a_gap_and_each_session_hidden_with_its_day_left_out_is_scored(tmp_path, lg):
     """Four evenings the live record holds, each from the home screen, which is never hidden: YouTube for
-    an hour on its video and images, then Netflix on its own video. The third evening ends with an hour of a third app on a site no other day has; on the
-    second, that app was in front for half an hour with one connection only, opened the second before it
-    came to the front, so that session has nothing to hide. On the fourth, YouTube's video plays on under
-    Netflix: its delivery domain is in both pictures and says nothing from then on, except on the day
-    left out. Between evenings nothing says which app was in front: one gap holds a stray name, the last
-    YouTube's images and some of Netflix's video."""
+    an hour on its video and images, then Netflix on its own video. The third evening ends with an hour
+    of a third app on a site no other day has; on the second, that app was in front for half an hour
+    with one connection only, opened the second before it came to the front, so that session has nothing
+    to hide. On the fourth, YouTube's video plays on under Netflix: its delivery domain is in both
+    pictures and says nothing from then on, except on the day left out. Between evenings nothing says
+    which app was in front: one gap holds a stray name, one Netflix's video, the last YouTube's images
+    and some of Netflix's video."""
     s = Store(tmp_path / "s.db")
     evs = []
     third = {1: [(evening(1, 22.5), PV)], 2: [(evening(2, 22.0), PV)]}
@@ -500,6 +501,7 @@ def test_the_pictures_label_a_gap_and_each_session_hidden_with_its_day_left_out_
     s.talk(evening(2, 22.1), "d1.aiv-cdn.net", down_=15 * MB)  # no other day has the site: none
     s.talk(evening(3, 21.5), "rr3b.googlevideo.com", down_=300 * MB)  # 90.9% YouTube's: wrong
     s.talk(evening(1, 8.0), "new.example.org", down_=MB)
+    s.talk(evening(2, 8.0), "oca.nflxvideo.net", down_=12 * MB)
     s.talk(evening(4), "i.ytimg.com", down_=40 * MB)  # 40 of 44 MB: 90.9% YouTube's images
     s.talk(evening(4) + 60, "oca.nflxvideo.net", down_=4 * MB)
     r = appeval.evaluate(s.conn, lg, evs, H0, evening(5), GW)
@@ -508,16 +510,20 @@ def test_the_pictures_label_a_gap_and_each_session_hidden_with_its_day_left_out_
     assert gap["rule"] == {"share": 0.9, "min_bytes": 10 * MB}
     # each connection carries 1,000 bytes up besides what it brought down
     assert gap["by_picture"] == {
-        "gaps": 2,
-        "labelled": 1,
-        "conns": 3,
-        "bytes": 45 * MB + 3000,
-        "conns_labelled": 2,
-        "bytes_labelled": 44 * MB + 2000,
-        "conns_share": 0.6667,
-        "bytes_share": round((44 * MB + 2000) / (45 * MB + 3000), 4),
-        "by_app": {YT: {"gaps": 1, "conns": 2, "bytes": 44 * MB + 2000}},
+        "gaps": 3,
+        "labelled": 2,
+        "conns": 4,
+        "bytes": 57 * MB + 4000,
+        "conns_labelled": 3,
+        "bytes_labelled": 56 * MB + 3000,
+        "conns_share": 0.75,
+        "bytes_share": round((56 * MB + 3000) / (57 * MB + 4000), 4),
+        "by_app": {
+            YT: {"gaps": 1, "conns": 2, "bytes": 44 * MB + 2000},
+            NF: {"gaps": 1, "conns": 1, "bytes": 12 * MB + 1000},
+        },
     }
+    assert list(gap["by_picture"]["by_app"]) == [YT, NF]  # by bytes, though Netflix's gap came first
     # YouTube right four times (its images alone, or its video too on the day left out), Netflix right
     # three times and wrong on the fourth evening, the app of one evening never labelled
     right, wrong, none = 4 * (32 * MB + 2000) + 3 * (30 * MB + 1000), 330 * MB + 2000, 15 * MB + 1000
@@ -534,7 +540,7 @@ def test_the_pictures_label_a_gap_and_each_session_hidden_with_its_day_left_out_
         "gap (labelled by the pictures: one app with 90% of the bytes on units one picture holds alone,"
         in text
     )
-    assert "  2 gaps with traffic, 1 labelled: 2 of 3 connections (66.7%), 97.8% of bytes" in text
+    assert "  3 gaps with traffic, 2 labelled: 3 of 4 connections (75.0%), 98.2% of bytes" in text
     assert f"    {YT}: 1 gaps, 2 connections, {44 * MB + 2000} bytes" in text
     assert (
         "9 sessions; right 7, wrong 1, none 1 (87.5% of those labelled right); 97.3% of their bytes" in text

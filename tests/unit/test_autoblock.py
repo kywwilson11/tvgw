@@ -193,13 +193,19 @@ def test_a_shape_takes_the_app_in_front_from_the_live_record_while_it_was_up(aut
     session was up its record alone is read; at any other moment the hour's reading, as before."""
     s, _ = auto
     conn = db.connect(s.db_path)
+    home = "com.webos.app.home"
     up, on = (T0 + 2900, "conn", "up", ""), (T0 + 2900, "power", "Active", "")
-    front, lost = (T0 + 3500, "app", "netflix", ""), (T0 + 5000, "conn", "down", "lost")
-    conn.executemany("INSERT INTO tv_events(t, kind, value, detail) VALUES (?,?,?,?)", [up, on, front, lost])
+    first, front = (T0 + 3100, "app", home, ""), (T0 + 3500, "app", "netflix", "")
+    rows = [up, on, first, front, (T0 + 5000, "conn", "down", "lost")]
+    conn.executemany("INSERT INTO tv_events(t, kind, value, detail) VALUES (?,?,?,?)", rows)
     conn.commit()
     at = autoblock.app_in_front(conn, T0 - 3600, T0 + 86400)
-    assert [at(T0 + dt) for dt in (2899, 2900, 3500, 4999, 5000)] == [APP, "", "netflix", "netflix", APP]
-    # the beacon's connections every 10 minutes: those at 12:50, 13:00, 13:10 and 13:20 are the live record's
+    # 2900 to 3100: up, and no app said yet; 3499: the lead window's second, the new app's
+    times = (2899, 2900, 3100, 3499, 4999, 5000)
+    assert [at(T0 + dt) for dt in times] == [APP, "", home, "netflix", "netflix", APP]
+    # a window that begins inside the session (the analyst's day begins at midnight) reads it all the same
+    assert autoblock.app_in_front(conn, T0 + 4000, T0 + 86400)(T0 + 4500) == "netflix"
+    # the beacon's connections every 10 minutes: at 12:50 no app is said yet; 13:00 to 13:20 are Netflix's
     shape = autoblock.shapes(conn, ["tracker.example"], T0 - 1, T0 + 86400)["tracker.example"]
     assert shape["apps"] == [APP, "netflix"]
     conn.close()
