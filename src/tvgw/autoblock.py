@@ -44,7 +44,7 @@ import statistics
 import time
 from collections.abc import Callable, Iterator
 
-from tvgw import durable, localrules, minimize, queries
+from tvgw import appfront, durable, localrules, minimize, queries
 from tvgw.names import PUBLIC_SUFFIXES, is_public_name, normalize
 from tvgw.profile import Profile, rule_target
 
@@ -157,14 +157,36 @@ class Shape:
     days_seen: int
 
 
+def app_in_front(conn: sqlite3.Connection, a: float, b: float) -> Callable[[float], str]:
+    """The app in front at a moment of [a, b), "" when nothing says. While the live reading's session to
+    the TV was up, its record alone says (`appfront.timeline`), to the second; at any other moment the
+    hourly reading of that clock hour does, as before, so a gateway without the live reading sees no
+    change. The record is read from a day before `a`: a session that came up before the window (the
+    analyst's day begins at midnight) is the record's from the window's start."""
+    live = appfront.timeline(appfront.stored_events(conn, a - 86400, b), [], a - 86400, b)
+    readings = conn.execute(
+        f"SELECT t, COALESCE(app, '') FROM tvstate WHERE t >= ? AND t < ? AND power IN ({_AWAKE_MARKS})",
+        (a, b, *queries.AWAKE),
+    ).fetchall()
+    by_hour = {int(t // 3600): app for t, app in readings if app}
+
+    def at(t: float) -> str:
+        if any(p0 <= t < p1 for p0, p1 in live.periods):
+            s = live.at(t)[1]
+            return s.app if s is not None else ""
+        return by_hour.get(int(t // 3600), "")
+
+    return at
+
+
 def shapes(conn: sqlite3.Connection, names: list[str], since: float, until: float) -> dict[str, dict]:
     """How the TV used each name in the window: per connection bytes, how long a connection lasted, in
-    how many hours, the apps on at the time (from the hourly TV readings), and on how many distinct days
-    the name was ever looked up. Never when: a shape goes to both models, and the first and last time a
-    name was used is a piece of the household's day (design decision 91). A flow is named as its hello
-    wrote the name, and a hello may end it with the root's dot: that dot is read past, or a name would
-    hide what it carried by writing one. A name asked about with the dot gets the same shape, under
-    the name as asked."""
+    how many hours, the apps in front when its connections started (`app_in_front`), and on how many
+    distinct days the name was ever looked up. Never when: a shape goes to both models, and the first
+    and last time a name was used is a piece of the household's day (design decision 91). A flow is
+    named as its hello wrote the name, and a hello may end it with the root's dot: that dot is read
+    past, or a name would hide what it carried by writing one. A name asked about with the dot gets the
+    same shape, under the name as asked."""
     names = [n for n in dict.fromkeys(names) if n]
     if not names:
         return {}
@@ -177,11 +199,7 @@ def shapes(conn: sqlite3.Connection, names: list[str], since: float, until: floa
             WHERE rtrim(name, '.') IN ({marks})""",
         (since, until, *bare),
     ).fetchall()
-    readings = conn.execute(
-        f"SELECT t, COALESCE(app, '') FROM tvstate WHERE t >= ? AND t < ? AND power IN ({_AWAKE_MARKS})",
-        (since - 3600, until, *queries.AWAKE),
-    ).fetchall()
-    by_hour = {int(t // 3600): app for t, app in readings if app}
+    in_front = app_in_front(conn, since - 3600, until)
     days = dict(
         conn.execute(
             f"SELECT qname, COUNT(DISTINCT date(t, 'unixepoch', 'localtime')) FROM dns"
@@ -208,7 +226,7 @@ def shapes(conn: sqlite3.Connection, names: list[str], since: float, until: floa
                 median_up=int(statistics.median(ups)),
                 median_seconds=round(statistics.median(max(0.0, b - a) for a, b, _, _ in flows), 1),
                 hours=len({int(a // 3600) for a in starts}),
-                apps=sorted({by_hour[int(a // 3600)] for a in starts if int(a // 3600) in by_hour}),
+                apps=sorted({app for app in map(in_front, starts) if app}),
                 days_seen=days_seen,
             )
         else:

@@ -2,6 +2,7 @@
 holds, and the pictures learned from them (design decision 67): every edge the TV can produce, and the
 properties that hold whatever it produces."""
 
+import dataclasses
 import itertools
 import json
 import random
@@ -30,7 +31,7 @@ from appfront_store import (
 )
 
 from tvgw import appfront, lgwebos, queries
-from tvgw.appfront import GAP, HOURLY, LIVE, NONE, SESSION, Event, timeline
+from tvgw.appfront import GAP, HOURLY, LIVE, NONE, SESSION, Conn, Event, Piece, timeline
 
 T = evening(0)  # 20:00 on the first day
 A, B = T - 2 * HOUR, T + 6 * HOUR
@@ -633,3 +634,78 @@ def test_a_stack_names_an_app_only_with_enough_hellos_nearly_all_under_it(monkey
     assert st.names("") is None and st.names("never-seen") is None
     # the day left out takes its hellos away: what is left may no longer be enough
     assert st.names("yt-stack", without=appfront.viewing_day(T)) is None
+
+
+# ---- the pictures as a witness for a gap (design decision 103) -------------------------------------------
+MB = 1024 * 1024
+DAY0 = appfront.viewing_day(T)
+UNITS = {
+    YT: [("googlevideo.com", "Streaming"), ("cdn.fastly.net", "Infra")],
+    NF: [("nflxvideo.net", "Streaming"), ("cdn.fastly.net", "Infra")],
+}
+LOST = timeline(watched(T, T + HOUR, (T, YT)), [], A, B)  # a gap before the session, and one after it
+
+
+def known(*apps: str) -> appfront.Evidence:
+    """The pictures an earlier evening left: each app with its units of UNITS, seen the day before."""
+    return appfront.Evidence(
+        days={a: {DAY0 - 1} for a in apps}, seen={a: {u: {DAY0 - 1} for u in UNITS[a]} for a in apps}
+    )
+
+
+def talked(*items: tuple[str | None, float], at: float = T + HOUR + 60) -> list[Conn]:
+    """Connections one second apart from `at`, each a name (None: no hello named it) and MB down."""
+    return [Conn(at + i, name or "", 0, int(mb * MB), name is not None) for i, (name, mb) in enumerate(items)]
+
+
+@pytest.mark.parametrize(
+    "talk, label, own",
+    [
+        ([("rr1.googlevideo.com", 10)], YT, (1, 10)),  # INFER_MIN_BYTES, exactly
+        ([("rr1.googlevideo.com", 10 - 1 / MB)], None, (0, 0)),  # a byte short: too little to say
+        ([("rr1.googlevideo.com", 18), ("oca.nflxvideo.net", 2)], YT, (1, 18)),  # INFER_SHARE, exactly
+        ([("rr1.googlevideo.com", 18), ("oca.nflxvideo.net", 2 + 1 / MB)], None, (0, 0)),  # a byte under it
+        ([("rr1.googlevideo.com", 20), ("oca.nflxvideo.net", 20)], None, (0, 0)),  # two apps' names, equally
+        ([("rr1.googlevideo.com", 20), ("cdn.fastly.net", 500)], YT, (1, 20)),  # a unit both pictures hold
+        # the TV's own names, a name no picture holds and a connection no hello named say nothing, and
+        # they are not the label's own
+        (
+            [("rr1.googlevideo.com", 20), ("us.lgtvsdp.com", 500), ("new.example.org", 500), (None, 500)],
+            YT,
+            (1, 20),
+        ),
+        ([("cdn.fastly.net", 500), ("us.ad.lgsmartad.com", 500)], None, (0, 0)),
+    ],
+)
+def test_a_gap_is_labelled_with_the_app_whose_picture_alone_holds_nine_tenths_of_its_named_bytes(
+    lg, talk, label, own
+):
+    before, after = appfront.infer(LOST, talked(*talk), lg, known(YT, NF))
+    assert (before.t0, before.t1, before.app, before.conns) == (A, T, None, 0)
+    assert (after.t0, after.t1, after.app, after.conns) == (T + HOUR, B, label, len(talk))
+    assert after.bytes == sum(int(mb * MB) for _, mb in talk)
+    assert (after.own_conns, after.own_bytes) == (own[0], int(own[1] * MB))
+    assert (appfront.INFER_SHARE, appfront.INFER_MIN_BYTES) == (0.9, 10 * MB)
+
+
+def test_in_a_one_app_household_its_gaps_are_labelled_and_the_tvs_own_software_labels_nothing(lg):
+    """Every unit of the one picture is that app's alone, so only what the profile says is the TV's own
+    keeps the TV's software from labelling a gap: a name it must reach says nothing, even one whose site
+    is in the picture (a profile of one's own may list such a name)."""
+    profile = dataclasses.replace(lg, must_allow={**lg.must_allow, "cdn.fastly.net": "a profile's own"})
+    evs = watched(T, T + HOUR, (T, YT)) + watched(T + 3 * HOUR, T + 4 * HOUR, (T + 3 * HOUR, YT))
+    tv = talked(("us.lgtvsdp.com", 50), ("us.ad.lgsmartad.com", 50), ("cdn.fastly.net", 50))
+    video = talked(("rr1.googlevideo.com", 30), at=T + 5 * HOUR) + talked(("rr1.googlevideo.com", 30), at=B)
+    found = appfront.infer(timeline(evs, [], A, B), tv + video, profile, known(YT))
+    assert [(g.app, g.conns) for g in found] == [(None, 0), (None, 3), (YT, 1)]  # B is past the window
+
+
+def test_a_gap_is_its_touching_pieces_less_a_lead_window_and_a_day_left_out_takes_its_units_away(lg):
+    nf = appfront.Session(NF, T + HOUR, B, LIVE, start_exact=True, began="app")
+    tl = appfront.Timeline(A, B, [Piece(A, T, GAP), Piece(T, T + HOUR, GAP), Piece(T + HOUR, B, SESSION, nf)])
+    conns = talked(("rr1.googlevideo.com", 20), at=T) + talked(("oca.nflxvideo.net", 400), at=T + HOUR - 1)
+    (g,) = appfront.infer(tl, conns, lg, known(YT, NF))
+    # the second before the change is the session's
+    assert (g.t0, g.t1, g.app, g.conns) == (A, T + HOUR, YT, 1)
+    assert appfront.infer(tl, conns, lg, known(YT, NF), without=DAY0 - 1)[0].app is None
+    assert appfront.infer(tl, conns, lg, known(YT, NF), without=DAY0)[0].app == YT

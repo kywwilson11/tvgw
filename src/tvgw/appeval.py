@@ -26,7 +26,10 @@ a live record (the store's, or a file of JSON lines from the live reading or fro
 - `outsiders`: per app, the names outside its picture on days the picture was ready, with the reason;
 - `stacks`: per TLS stack (the hello's JA4), the share of its hellos under its most common app; how often
   a stack learned on the other days names the right app on the day left out; how much of the traffic that
-  started in a gap a stack would attribute; and where one app's stack talked while another was in front.
+  started in a gap a stack would attribute; and where one app's stack talked while another was in front;
+- `gap`: the pictures as a witness for a gap (appfront.infer). `by_picture`, how much of what started in
+  a gap they label, by app; `left_out`, each app session hidden in turn as if it were a gap, its viewing
+  day left out of the pictures, and the label scored right, wrong or none.
 
 It prints app ids, registrable domains, categories and counts: nothing dated, no address, no full host
 name. It reads and never writes.
@@ -41,7 +44,7 @@ import statistics
 from collections import Counter
 
 from tvgw import appfront, names, queries
-from tvgw.appfront import APP, GAP, HOURLY, LIVE, NONE, SESSION, Conn, Event, Timeline
+from tvgw.appfront import APP, GAP, HOURLY, LIVE, NONE, SESSION, Conn, Event, Piece, Session, Timeline
 from tvgw.profile import Profile
 
 LAGS = (2.0, 5.0, 30.0)  # seconds the TV's reports are delayed by
@@ -99,6 +102,7 @@ def evaluate(
         "lead": lead(events, rows, a, b, seen, profile, known_until),
         "outsiders": outsiders(tl, conns, profile, ev, appfront.learn_stacks(tl, seen)),
         "stacks": stacks(tl, seen, conns, profile),
+        "gap": gap(tl, conns, profile, ev),
     }
 
 
@@ -752,6 +756,63 @@ def stacks(tl: Timeline, seen: list[tuple[float, str, str]], conns: list[Conn], 
     }
 
 
+# ---- the pictures as a witness for a gap -------------------------------------------------------------
+VERDICTS = ("right", "wrong", "none")
+
+
+def gap(tl: Timeline, conns: list[Conn], profile: Profile, ev: appfront.Evidence) -> dict:
+    """The pictures as a witness for the time nothing says which app was in front (appfront.infer).
+    `by_picture`: of the connections and bytes that started in a gap, how many the pictures label, and
+    for which apps. `left_out`: each app session hidden in turn, as if it were a gap, its viewing day left
+    out of the pictures; the label is right (the app that was in front), wrong (another) or none. Only a
+    session that holds a connection is hidden, since one without has nothing to label."""
+    found = [g for g in appfront.infer(tl, conns, profile, ev) if g.conns]
+    labelled = [g for g in found if g.app is not None]
+    by_app: dict[str, Counter] = {}
+    for g in labelled:
+        by_app.setdefault(g.app, Counter()).update(gaps=1, conns=g.conns, bytes=g.bytes)
+    hidden: dict[int, tuple[Session, list[Conn]]] = {}
+    for c in conns:
+        cls, s, lead = tl.at(c.t)
+        if cls == SESSION and s is not None and s.kind == APP and not lead:
+            hidden.setdefault(id(s), (s, []))[1].append(c)
+    score = {v: Counter(sessions=0, bytes=0) for v in VERDICTS}
+    for s, mine in hidden.values():
+        alone = Timeline(s.start, s.end, [Piece(s.start, s.end, GAP)])
+        (g,) = appfront.infer(alone, mine, profile, ev, without=appfront.viewing_day(s.start))
+        score["none" if g.app is None else "right" if g.app == s.app else "wrong"].update(
+            sessions=1, bytes=g.bytes
+        )
+    n, total = sum(g.conns for g in found), sum(g.bytes for g in found)
+    n_in, bytes_in = sum(g.conns for g in labelled), sum(g.bytes for g in labelled)
+    right, wrong = score["right"], score["wrong"]
+    return {
+        "rule": {"share": appfront.INFER_SHARE, "min_bytes": appfront.INFER_MIN_BYTES},
+        "by_picture": {
+            "gaps": len(found),
+            "labelled": len(labelled),
+            "conns": n,
+            "bytes": total,
+            "conns_labelled": n_in,
+            "bytes_labelled": bytes_in,
+            "conns_share": _share(n_in, n),
+            "bytes_share": _share(bytes_in, total),
+            "by_app": {
+                app: dict(cell)
+                for app, cell in sorted(by_app.items(), key=lambda kv: (-kv[1]["bytes"], kv[0]))
+            },
+        },
+        "left_out": {
+            "sessions": len(hidden),
+            **{v: dict(cell) for v, cell in score.items()},
+            "right_of_labelled": _share(right["sessions"], right["sessions"] + wrong["sessions"]),
+            "bytes_labelled": _share(
+                right["bytes"] + wrong["bytes"], sum(cell["bytes"] for cell in score.values())
+            ),
+        },
+    }
+
+
 # ---- as text -----------------------------------------------------------------------------------------
 def _pct(x: float | None) -> str:
     return "-" if x is None else f"{x:.1%}"
@@ -1036,4 +1097,23 @@ def render(r: dict) -> list[str]:
         )
     else:
         out.append("  the store's tls table holds no JA4 for hellos sent under an app in this window")
+    gp = r["gap"]
+    rule, bp, lo = gp["rule"], gp["by_picture"], gp["left_out"]
+    out += [
+        "",
+        f"gap (labelled by the pictures: one app with {rule['share']:.0%} of the bytes on units one picture"
+        f" holds alone, and {rule['min_bytes'] / 2**20:g} MB of them)",
+        f"  {bp['gaps']} gaps with traffic, {bp['labelled']} labelled: {bp['conns_labelled']} of"
+        f" {bp['conns']} connections ({_pct(bp['conns_share'])}), {_pct(bp['bytes_share'])} of bytes",
+    ]
+    out += [
+        f"    {app}: {c['gaps']} gaps, {c['conns']} connections, {c['bytes']} bytes"
+        for app, c in bp["by_app"].items()
+    ]
+    out.append(
+        f"  each app session hidden, its viewing day left out: {lo['sessions']} sessions; right"
+        f" {lo['right']['sessions']}, wrong {lo['wrong']['sessions']}, none {lo['none']['sessions']}"
+        f" ({_pct(lo['right_of_labelled'])} of those labelled right); {_pct(lo['bytes_labelled'])} of their"
+        " bytes labelled"
+    )
     return out
