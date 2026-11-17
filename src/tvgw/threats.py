@@ -202,7 +202,7 @@ def entries(line: str) -> list[str]:
         if any(c in s for c in _COSMETIC):
             return []
         # (admit) one pass: a `\s+#` regex retried its run of blanks at every blank, quadratic in the run
-        s = s.replace("\t", " ").split(" #", 1)[0].strip()
+        s = " ".join(s.split()).split(" #", 1)[0]
     mark = ""
     if s.startswith("@@"):  # an exception: adblock form only
         mark, s = EXCEPT, s[2:]

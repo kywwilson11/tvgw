@@ -130,6 +130,8 @@ def must_host(lg) -> str:
         ("bad.example", ["bad.example"]),
         ("bad.example   # a trailing comment", ["bad.example"]),
         ("bad.example\t# after a tab", ["bad.example"]),
+        ("bad.example\v# after a vertical tab", ["bad.example"]),
+        ("bad.example\u00a0# after a no-break space", ["bad.example"]),
         ("bad.example#not a comment", []),  # a `#` with no blank before it is part of the word
         ("*.bad.example", [".bad.example"]),  # the names under it, not itself
         ("||*.bad.example^", [".bad.example"]),

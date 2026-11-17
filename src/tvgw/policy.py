@@ -26,7 +26,10 @@ decision, after two weeks of reports with no line that should not be there.
 from __future__ import annotations
 
 import contextlib
+import ipaddress
+import math
 import os
+import re
 import sys
 import time
 from collections.abc import Callable, Iterable
@@ -44,6 +47,12 @@ DEPLOY, MACHINE, REVERT, UNDO, OWNER, PAUSE, RESOLVER = (
 )  # fmt: skip
 CUSTOM = "custom rules"  # the source of AdGuard's `user_rules` in the two engines
 STORE_WAIT = 5.0  # seconds the check waits for a busy store before it says it could not judge
+# seconds one check may take, the store's read included: the apply waits for it with AdGuard's lock held, and
+# a list of many patterns makes each name dearer (1,000 of them in each list held a pause past 10 s). Past
+# it the check says it could not judge, and the apply goes on
+BUDGET = 2.0
+RECENT_DAYS = 14  # days of the TV's names a change is judged on
+_ADDRESSY = re.compile(r"[0-9A-Fa-f.:]{2,}")  # a run that may be an address, which ipaddress then decides
 SHOWN = 10  # lines printed for one change; the ledger keeps ledger.ADMIT_KEEP
 # what each kind of protected name is, after its name in a line
 WHY = {
@@ -64,9 +73,11 @@ class Declared:
     names: tuple[str, ...] = ()
     lists: tuple[str, ...] = ()
 
-    def covers(self, name: str, source: str) -> bool:
-        """Does the declaration take in a change to `name` made by a rule from `source`?"""
-        return source in self.lists or any(covers(d, name) for d in self.names)
+    def covers(self, name: str, sources: Iterable[str]) -> bool:
+        """Does the declaration take in a change to `name` that the rules of `sources` decide, before or
+        after it? A declared list counts whichever side its rule is on: a paused list's exception that lifted
+        a block is the list's doing too."""
+        return bool(set(sources) & set(self.lists)) or any(covers(d, name) for d in self.names)
 
 
 def of_rules(kind: str, rules: Iterable[str]) -> Declared:
@@ -74,6 +85,10 @@ def of_rules(kind: str, rules: Iterable[str]) -> Declared:
     machine's lint keeps out, declares nothing, so what it changes is judged as undeclared."""
     names = (target for k, target in map(rule_target, rules) if k == "block")
     return Declared(kind, tuple(dict.fromkeys(names)))
+
+
+class OverBudget(RuntimeError):
+    """(admit) The check ran past BUDGET seconds and stopped: it judged part of the change only."""
 
 
 @dataclass(frozen=True)
@@ -114,37 +129,45 @@ def _what(now: Verdict, hit: Hit, name: str) -> str:
     return f"the change lifts `{hit.rule.text}` from {name}"
 
 
+def _sources(was: Verdict, now: Verdict) -> set[str]:
+    """Where the rules that decide a name before and after a change come from."""
+    return {h.source for h in (was.hit, now.hit) if h is not None}
+
+
 def admit(
-    before: Engine, after: Engine, declared: Declared, guarded: dict[str, str], recent: Iterable[str]
+    before: Engine,
+    after: Engine,
+    declared: Declared,
+    guarded: dict[str, str],
+    recent: Iterable[str],
+    deadline: float = math.inf,
 ) -> Admission:
     """The lines that would refuse a change from `before` to `after`: each protected name (`guarded`, name
     to reason) that the change blocks or rewrites, or for a URL-filter host takes out of its rewrite, but by
     a list it declares; and, when `declared` names something, each name of `recent` whose answer changes by
-    a rule the declaration does not cover. A name whose answer stays the same is never a line, so a change
-    that changes nothing has none."""
+    rules the declaration does not cover. A name whose answer stays the same is never a line, so a change
+    that changes nothing has none. Raises OverBudget once the monotonic clock passes `deadline`."""
     lines: list[str] = []
-    for name, why in guarded.items():
+    # the protected names always; the TV's other names when the change declared what it changes
+    judged = list(dict.fromkeys([*guarded, *(recent if declared.names or declared.lists else ())]))
+    for done, name in enumerate(judged):
+        if time.monotonic() > deadline:
+            raise OverBudget(f"over its {BUDGET:g} s budget, {done} of {len(judged)} names judged")
         was, now = before.decide(name), after.decide(name)
         if _effect(was) == _effect(now):
             continue
+        hit, why = _cause(was, now), guarded.get(name)
+        if why is None:
+            if not declared.covers(name, _sources(was, now)):
+                lines.append(f"would refuse: {_what(now, hit, name)}, which the change did not declare")
+            continue
         # a URL-filter host is hurt when it leaves its rewrite, any other when it is blocked or rewritten
         hurt = was.state == REWRITTEN if why == protected.URL_FILTER else now.state in (BLOCKED, REWRITTEN)
-        hit = _cause(was, now)
-        # a list the change switches back on is the profile's own: what the list itself blocks is the list
-        # guard's to judge (decision 68), and the end of a pause is no change to refuse
-        if hurt and hit.source not in declared.lists:
+        # a list the change switches is the profile's own: what the list does is the list guard's to judge
+        # (decision 68), and the end of a pause is no change to refuse
+        if hurt and not _sources(was, now) & set(declared.lists):
             shown = name.removeprefix(protected.ZONE_PROBE) if why == protected.ZONE else name
             lines.append(f"would refuse: {_what(now, hit, shown)}, {WHY[why]}")
-    if declared.names or declared.lists:
-        for name in dict.fromkeys(recent):
-            if name in guarded:
-                continue
-            was, now = before.decide(name), after.decide(name)
-            if _effect(was) == _effect(now):
-                continue
-            hit = _cause(was, now)
-            if not declared.covers(name, hit.source):
-                lines.append(f"would refuse: {_what(now, hit, name)}, which the change did not declare")
     return Admission(tuple(dict.fromkeys(lines)))
 
 
@@ -184,15 +207,23 @@ def engines(
 
 
 def recent_names(s: Settings, now: float | None = None) -> list[str]:
-    """The names the TV looked up in the last 14 days, the most looked up first, from the store opened
-    read-only; none on a gateway whose store does not exist yet."""
+    """The names the TV looked up and was last seen with in the last RECENT_DAYS days, the most looked up
+    first, from the store's `hosts` table opened read-only: a few thousand rows, where its 14 days of
+    lookups can be hundreds of thousands. None on a gateway whose store does not exist yet. A name kept as
+    a keyed tag (`NAME_HMAC=on`) never matches a rule and is left out."""
+    from tvgw import minimize
+
     if not os.path.exists(s.db_path):
         return []
+    since = (time.time() if now is None else now) - RECENT_DAYS * 86400
     conn = db.connect(s.db_path, readonly=True, timeout=STORE_WAIT)
     try:
-        return [n for n, _ in listguard.tv_names(conn, time.time() if now is None else now)]
+        rows = conn.execute(
+            "SELECT name FROM hosts WHERE last_seen >= ? AND dns_n > 0 ORDER BY dns_n DESC, name", (since,)
+        ).fetchall()
     finally:
         conn.close()
+    return [n for (n,) in rows if not minimize.is_tagged(n)]
 
 
 def judge(
@@ -204,13 +235,15 @@ def judge(
     recent: list[str] | None = None,
 ) -> Admission:
     """The check of one change from AdGuardHome.yaml `current` to `planned`, for the TV of `s`: `recent` is
-    the TV's names of the last 14 days, read from the store when None."""
+    the TV's names of the last 14 days, read from the store when None. It takes BUDGET seconds at most,
+    the store's read included, and raises OverBudget past them."""
+    deadline = time.monotonic() + BUDGET
     recent = recent_names(s) if recent is None else recent
     guarded = protected.names(prof, recent)
     before, after = engines(
         current, planned, listguard.filters_dir(s), Client(s.tv_ip, s.tv_name), [*guarded, *recent]
     )
-    found = admit(before, after, declared, guarded, recent)
+    found = admit(before, after, declared, guarded, recent, deadline)
     had = set(_user_rules(current))
     unread = [t for t in _user_rules(planned) if t not in had and listguard.parse(t) is None]
     return Admission(found.lines, tuple(unread))
@@ -237,13 +270,28 @@ def reporter(s: Settings, prof: Profile, declared: Declared | None) -> Callable[
     return report
 
 
+def without_addresses(line: str) -> str:
+    """A line as the change ledger keeps it: an address a rule carries (`$dnsrewrite=`, `$client=`, a
+    hosts-file line's) written `<address>`, since no ledger row holds one (decision 48)."""
+
+    def masked(m: re.Match[str]) -> str:
+        try:
+            ipaddress.ip_address(m.group())
+        except ValueError:
+            return m.group()
+        return "<address>"
+
+    return _ADDRESSY.sub(masked, line)
+
+
 def note(s: Settings, kind: str, outcome: str, lines: list[str]) -> None:
     """Say what the check found: the first SHOWN lines on stderr, and one line of the change spool, which
-    the hourly ingest loads into the change ledger. A spool that cannot be written loses the record, not
-    the apply."""
+    the hourly ingest loads into the change ledger, with no address (`without_addresses`). A spool that
+    cannot be written loses the record, not the apply."""
     for line in lines[:SHOWN]:
         print(f"tvgw adguard: admission check (report only): {line}", file=sys.stderr)
     if len(lines) > SHOWN:
         print(f"tvgw adguard: admission check (report only): and {len(lines) - SHOWN} more", file=sys.stderr)
+    kept = [without_addresses(line) for line in lines]
     with contextlib.suppress(OSError):
-        ledger.append_spool(ledger.spool_path(s), ledger.admit_fields(kind, outcome, lines))
+        ledger.append_spool(ledger.spool_path(s), ledger.admit_fields(kind, outcome, kept))

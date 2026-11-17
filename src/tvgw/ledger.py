@@ -376,7 +376,8 @@ def admit_fields(kind: str, outcome: str, lines: list[str]) -> list[str]:
 
 
 def _admit_row(t: float, rest: list[str]) -> Change | None:
-    """(admit) `admit_fields`' line as an `admit` change; None for anything else, counted as unread."""
+    """(admit) `admit_fields`' line as an `admit` change; None for anything else, a line with no lines among
+    it, counted as unread."""
     if len(rest) < 4 or rest[1] not in (ADMIT_REFUSE, ADMIT_UNJUDGED) or not rest[2].isdigit():
         return None
     blob = "".join(rest[3:])
@@ -384,7 +385,7 @@ def _admit_row(t: float, rest: list[str]) -> Change | None:
         lines = json.loads(base64.urlsafe_b64decode(blob + "=" * (-len(blob) % 4)))
     except ValueError:  # not base64, not UTF-8 or not JSON: a damaged line
         return None
-    if not isinstance(lines, list) or not all(isinstance(x, str) for x in lines):
+    if not isinstance(lines, list) or not lines or not all(isinstance(x, str) for x in lines):
         return None
     detail = {"outcome": rest[1], "count": int(rest[2]), "lines": lines}
     return Change(t, "admit", "admit", rest[0], detail, t_precision=1.0)

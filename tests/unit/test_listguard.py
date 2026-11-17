@@ -124,6 +124,9 @@ def test_a_hostile_list_line_is_judged_against_the_tvs_names_within_a_second(lg,
         ("(?>ads)", None),  # and no atomic group,
         ("^(ab(?=c))$", None),  # also inside a group
         ("^(ab|cd(?=e))$", None),  # or a branch
+        ("(\\w+?-*?)+?x", None),  # lazy loops are loops too
+        ("(?!ab)c", None),  # a negative lookahead
+        ("(a)?(?(1)b|c)", None),  # a conditional
     ],
 )
 def test_the_tries_of_a_regex_are_counted_from_its_shape(body, tries):

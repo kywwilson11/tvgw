@@ -153,6 +153,10 @@ def test_a_name_the_tv_needs_is_named_and_one_the_change_declared_is_not(lg):
     assert lifted.lines == (
         "would refuse: the change lifts `||cdn.example^` from cdn.example, which the change did not declare",
     )
+    excepted = check(
+        lg, own(lg, "||cdn.example^"), own(lg, "||cdn.example^", "@@||cdn.example^"), said, recent
+    )
+    assert excepted.lines == lifted.lines  # the rule lifted is named, not the exception that lifts it
     hurt = check(lg, own(lg), own(lg, "||tracker.example^", f"||{needed(lg)}^"), said, [*recent, needed(lg)])
     assert len(hurt.lines) == 1 and "category it needs" in hurt.lines[0]  # said once, as what it is
 
@@ -162,8 +166,9 @@ def test_a_declaration_takes_in_the_names_its_rules_block_and_nothing_else():
         policy.MACHINE, ["||a.test^", "||a.test^$important", "||*.b.test^", "/c/", "@@||d.test^"]
     )
     assert said == Declared(policy.MACHINE, ("a.test", "*.b.test"))
-    assert said.covers("x.b.test", policy.CUSTOM) and not said.covers("b.test", policy.CUSTOM)
-    assert Declared(policy.PAUSE, lists=(TRACKING,)).covers("anything.test", TRACKING)
+    assert said.covers("x.b.test", [policy.CUSTOM]) and not said.covers("b.test", [policy.CUSTOM])
+    assert Declared(policy.PAUSE, lists=(TRACKING,)).covers("anything.test", [policy.CUSTOM, TRACKING])
+    assert not Declared(policy.PAUSE, lists=(TRACKING,)).covers("anything.test", [policy.CUSTOM, OTHER])
 
 
 def test_a_change_that_declares_nothing_is_judged_on_the_protected_names_alone(lg):
@@ -290,6 +295,22 @@ def test_a_pauses_end_is_not_judged_for_what_its_own_list_blocks_and_a_deploy_th
     before, after = policy.engines(off, on, str(tmp_path), CLIENT, guarded)
     (lifted,) = policy.admit(before, after, pause, guarded, ()).lines
     assert lifted.endswith("from ngfts.lge.com, which must stay rewritten to the URL filter")
+
+
+def test_a_paused_lists_exception_that_lifted_a_block_is_the_lists_doing(tmp_path, lg):
+    """A paused list whose `@@` lifted the profile's block makes the block hold again: both answers come of
+    rules the pause or the list decide, so neither the start nor the end is a line."""
+    (tmp_path / "1.txt").write_text("@@||cdn.example^\n")
+    on, off = (
+        yaml_with(own(lg, "||cdn.example^"), (1, TRACKING, True)),
+        yaml_with(own(lg, "||cdn.example^"), (1, TRACKING, False)),
+    )
+    pause = Declared(policy.PAUSE, lists=(TRACKING,))
+    for current, planned in ((on, off), (off, on)):
+        before, after = policy.engines(current, planned, str(tmp_path), CLIENT, ["cdn.example"])
+        assert after.decide("cdn.example") != before.decide("cdn.example")
+        assert policy.admit(before, after, pause, {}, ["cdn.example"]).ok
+        assert not policy.admit(before, after, Declared(policy.OWNER, ("x.test",)), {}, ["cdn.example"]).ok
 
 
 def test_a_check_judges_the_tvs_names_it_is_given(site, lg):
@@ -432,6 +453,63 @@ def test_a_rule_the_change_adds_that_the_model_does_not_read_is_said_not_judged(
     assert row.detail["lines"] == ["could not judge `/(a+)+x/`: the model does not read it"]
 
 
+def test_a_check_past_its_budget_stops_says_so_and_the_apply_goes_on(site, lg, tmp_path, monkeypatch, capsys):
+    """Before the review a list of 1,000 patterns held a pause's apply 10 s and one of 1,000 `.*` regexes 132 s
+    with the check on: the apply waits for it with AdGuard's lock held. Past BUDGET it stops."""
+    d = adguardcfg.desired(dataclasses.replace(lg, custom_rules=(*lg.custom_rules, "||net^")), site)
+    reference = tmp_path / "off.yaml"
+    reference.write_text(Path(site.adguard_yaml).read_text(encoding="utf-8"), encoding="utf-8")
+    staged(str(reference), d)
+    monkeypatch.setattr(policy, "BUDGET", 0.0)
+    staged(site.adguard_yaml, d, policy.reporter(site, lg, Declared(policy.DEPLOY)))
+    assert Path(site.adguard_yaml).read_bytes() == reference.read_bytes()
+    (row,) = spooled(site)
+    (line,) = row.detail["lines"]
+    assert row.detail["outcome"] == ledger.ADMIT_UNJUDGED
+    assert line.startswith("could not judge: OverBudget: over its 0 s budget, 0 of ") and line.endswith(
+        " names judged"
+    )
+    assert policy.admit(engine(own(lg)), engine(own(lg)), NOTHING, protected.names(lg), ()).ok  # no deadline
+
+
+def test_an_apply_the_restart_guard_defers_leaves_no_admission(site, lg):
+    """The check runs once the guard let the apply go on: a deferral changed nothing, and the ledger does
+    not get a row for a change that never happened."""
+
+    def down():
+        raise adguardcfg.Deferred("deferred: upstream down (test)")
+
+    d = adguardcfg.desired(dataclasses.replace(lg, custom_rules=(*lg.custom_rules, "||net^")), site)
+    with pytest.raises(adguardcfg.Deferred):
+        adguardcfg.apply(
+            site.adguard_yaml, d, control=lambda *a: None, ready=lambda: True, check=lambda p: (True, ""),
+            guard=down, direct=lambda d: False, admit=policy.reporter(site, lg, None),
+        )  # fmt: skip
+    assert not Path(ledger.spool_path(site)).exists()
+
+
+@pytest.mark.parametrize(
+    ("line", "kept"),
+    [
+        (
+            "`||x.test^$dnsrewrite=10.10.10.1` rewrites x.test",
+            "`||x.test^$dnsrewrite=<address>` rewrites x.test",
+        ),
+        ("`203.0.113.5 ads.example` rewrites ads.example", "`<address> ads.example` rewrites ads.example"),
+        (
+            "`||x.test^$client=10.10.10.17|::1` blocks x.test",
+            "`||x.test^$client=<address>|<address>` blocks x.test",
+        ),
+        ("`||dead.beef.example^` blocks a1.b2.example", "`||dead.beef.example^` blocks a1.b2.example"),
+    ],
+)
+def test_the_ledger_keeps_a_line_with_no_address_and_stderr_shows_it_whole(site, capsys, line, kept):
+    policy.note(site, policy.OWNER, ledger.ADMIT_REFUSE, [line])
+    assert line in capsys.readouterr().err
+    (row,) = spooled(site)
+    assert row.detail["lines"] == [kept] and policy.without_addresses(line) == kept
+
+
 def test_admit_takes_off_and_report_and_no_word_that_would_refuse(tmp_path):
     from tvgw import config
 
@@ -460,17 +538,30 @@ def test_a_re_apply_that_changes_nothing_builds_no_engine(site, lg, monkeypatch)
     assert staged(site.adguard_yaml, d, policy.reporter(site, lg, None)) == []
 
 
-def test_the_tvs_names_come_from_the_store_read_only_and_a_missing_store_is_none(site, lg):
+def test_the_tvs_names_come_from_the_store_read_only_and_a_missing_store_is_none(site, lg, monkeypatch):
+    """The names the TV looked up and was seen with in the 14 days, the most looked up first, from `hosts`:
+    not one it never looked up, not one seen 15 days ago, not a keyed tag."""
     assert policy.recent_names(site) == [] and not Path(site.db_path).exists()
     conn = db.connect(site.db_path)
     now = 1793020000.0 + 30 * 86400  # not the tests' frozen clock: the check reads the window it is given
     conn.executemany(
-        "INSERT INTO dns(t, qname, qtype, blocked) VALUES (?, ?, 'A', 0)",
-        [(now - 3600, "cdn.example"), (now - 60, "cdn.example"), (now - 15 * 86400, "old.example")],
+        "INSERT INTO hosts(name, last_seen, dns_n) VALUES (?, ?, ?)",
+        [
+            ("cdn.example", now - 60, 2),
+            ("api.example", now - 13 * 86400, 5),
+            ("old.example", now - 15 * 86400, 9),
+            ("hello-only.example", now - 60, 0),
+            ("t-1-0123456789.title.example", now - 60, 1),
+        ],
     )
     conn.commit()
     conn.close()
-    assert policy.recent_names(site, now) == ["cdn.example"]
+    opened = []
+    real = db.connect
+    monkeypatch.setattr(
+        db, "connect", lambda path, **kw: opened.append(kw.get("readonly")) or real(path, **kw)
+    )
+    assert policy.recent_names(site, now) == ["api.example", "cdn.example"] and opened == [True]
 
 
 # ---- every caller declares -----------------------------------------------------------------------------------
@@ -546,8 +637,9 @@ def test_an_admission_crosses_the_spool_whole_and_a_damaged_one_is_unread(tmp_pa
         [*fields[:3], "x", *fields[4:]],  # a count that is no number
         [*fields[:2], "maybe", *fields[3:]],  # an outcome no admission has
         [*fields[:4], "!!!!"],  # not base64 once cleaned
-        [*fields[:4], "e30"],  # JSON, but not a list
+        [*fields[:4], "ImFiIg"],  # JSON, a string, whose letters are no lines
         [*fields[:4], "WzFd"],  # a list, but not of lines
+        [*fields[:4], "W10"],  # a list of no line, which the brief could not quote
         fields[:4],
     ):
         assert ledger._spool_row(["1793020000", *damaged], s, None) is None, damaged
