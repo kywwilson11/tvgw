@@ -352,7 +352,8 @@ def test_on_linux_a_try_no_refusal_is_expected_for_is_decided_without_the_whole_
     started = clock.monotonic()
     seen = probe.ports_try(probe.WALL_ADDR, [("udp", probe.ODD_PORT)], "192.0.2.1", wait=1.5)
     assert clock.monotonic() - started < 1.0
-    assert seen[f"udp/{probe.ODD_PORT}"] in ("silent", "unreachable", "unattributed", "error")
+    # let out, whoever this machine's next hop is: a container's answers the expired datagram (`expired`)
+    assert seen[f"udp/{probe.ODD_PORT}"] in ("silent", "unreachable", "expired", "unattributed", "error")
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the extended error report is Linux's")
