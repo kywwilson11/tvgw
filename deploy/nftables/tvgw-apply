@@ -1271,8 +1271,8 @@ inpath_quiet
 # ends where a fresh load ends, object for object: one transaction empties each of its chains and
 # declares them again with their rules, and no hook goes. That holds only when the table holds exactly
 # what the load defines: the same chains, with their hooks, priorities and policies, and the same sets,
-# with their properties and the addresses the apply puts in them. So each load leaves a record in
-# LOADED: a hash of what the load defined (its text without its rules) and a hash of nft's listing of
+# with their properties and the addresses the apply puts in them. So each load leaves a record,
+# LOADED.<family>-<table>: a hash of what the load defined (its text without its rules) and a hash of nft's listing of
 # the table right after it, counters left out. A table is changed in place only when its record holds
 # what this load defines and nft lists it as it listed it then: nothing was added to it, taken from it or
 # changed in it since. Its sets then hold what the load would put in them, and the change in place does
@@ -1283,7 +1283,7 @@ inpath_quiet
 # changed (the daily DoH list) changes what the load defines, and that apply remakes the table. The sets
 # the daemons fill live in the gate's, the attention's and the NTP count's tables, which load with `add`
 # statements and keep them, as before.
-LOADED=/run/tvgw/loaded # root's alone, like the apply's other records
+LOADED=/run/tvgw/loaded # files beside the apply's other records, root's alone
 REMADE="" # (ledger) "; <table> (<why>)" for each table this apply remade
 load_text() { # $1: shape, body or flushes; $2 $3: the table; stdin: its load as rendered. Read by nesting:
 	# the table's block holds chains and sets, a chain its `type` line and its rules, a set its properties
@@ -1305,8 +1305,8 @@ loaded() { # $1 $2: the table just loaded; $3: the hash of what its load defined
 	# reads. A load nft refused changed nothing, so the record before it still says what the table holds
 	local listed
 	listed=$(nft -s list table "$1" "$2" 2>/dev/null | digest) || return 0
-	{ (umask 077; mkdir -p "$LOADED" && printf '%s\n%s\n' "$3" "$listed" >"$LOADED/$1-$2.tmp" &&
-		mv -f "$LOADED/$1-$2.tmp" "$LOADED/$1-$2"); } 2>/dev/null || true
+	{ (umask 077; printf '%s\n%s\n' "$3" "$listed" >"$LOADED.$1-$2.tmp" && mv -f "$LOADED.$1-$2.tmp" "$LOADED.$1-$2"); } \
+		2>/dev/null || true
 }
 load_table() { # $1 $2: the table; stdin: its load as rendered, `table T` and `delete table T` first. Status
 	# 1 when nft refused it. Under --check the load as rendered is what nft -c judges, whatever stands
@@ -1318,7 +1318,7 @@ load_table() { # $1 $2: the table; stdin: its load as rendered, `table T` and `d
 		return
 	fi
 	shape=$(load_text shape "$family" "$table" <<<"$text" | digest)
-	{ read -r was_shape && read -r was_listed; } 2>/dev/null <"$LOADED/$family-$table" || true
+	{ read -r was_shape && read -r was_listed; } 2>/dev/null <"$LOADED.$family-$table" || true
 	if ! tables=$(nft list tables 2>/dev/null); then
 		why="the tables could not be listed"
 	elif ! grep -qxF "table $family $table" <<<"$tables"; then

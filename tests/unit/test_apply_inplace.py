@@ -448,7 +448,7 @@ def test_the_first_apply_after_an_install_remakes_its_tables_once_and_quiets_the
     """The deploy: the tables stand, made by an older version that left no record of them."""
     gw = Gateway(tmp_path)
     gw.apply(ALL_ON)
-    for record in (tmp_path / "run" / "tvgw" / "loaded").iterdir():
+    for record in (tmp_path / "run" / "tvgw").glob("loaded.*"):
         record.unlink()
     step = gw.apply(ALL_ON)
     assert gw.kernel.tables == fresh(*sorted(ALL_ON.items())).tables
@@ -504,16 +504,27 @@ def test_an_address_list_that_changed_remakes_its_table_alone(tmp_path):
     assert "192.0.2.53" in gw.kernel.tables["inet", "tvgw"].sets["doh4"][1]
 
 
-def test_a_version_that_moves_a_chain_remakes_its_table_and_says_why(tmp_path):
+@pytest.mark.parametrize(
+    ("was", "now"),
+    [
+        ("priority mangle + 10;", "priority mangle + 11;"),
+        ("172.16.0.0/12, ", "172.16.0.0/12, 198.18.0.0/15, "),
+    ],
+    ids=["a chain moved", "the home network's set widened"],
+)
+def test_a_version_that_changes_a_chain_or_a_set_remakes_its_table_and_says_why(tmp_path, was, now):
     """The kernel will not move a hook in place (and adds a netdev chain's new device beside the old on
-    some versions): the definitions differ, so the table is made again, and nothing rests on nft refusing."""
-    moved = test_apply.APPLY.replace("priority mangle + 10;", "priority mangle + 11;", 1)
+    some versions), and the change in place keeps a set as it stands: so a version whose chains or sets
+    differ makes the table again, and ends as a fresh load of that version ends, resting on no refusal."""
+    assert test_apply.APPLY.count(was) == 1
+    changed = test_apply.APPLY.replace(was, now)
     direct = SETTINGS["the matrix's direct"]
-    gw = Gateway(tmp_path)
+    gw, fresh_load = Gateway(tmp_path / "gateway"), Gateway(tmp_path / "fresh")
     gw.apply(direct)
-    step = gw.apply(direct, moved)
+    step = gw.apply(direct, changed)
     assert step.word == "remade: inet tvgw (this load defines other chains, sets or addresses)"
-    assert "priority mangle + 11;" in gw.kernel.tables["inet", "tvgw"].chains["pre_mangle"][0]
+    fresh_load.apply(direct, changed)
+    assert gw.kernel.tables == fresh_load.kernel.tables
 
 
 @pytest.mark.parametrize(
