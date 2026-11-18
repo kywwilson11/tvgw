@@ -90,6 +90,8 @@ class Conn:
                     self.writer.write(bytes([0x8A, len(data)]) + data)
                     await self.writer.drain()
                 continue
+            if op == 0xA:  # the probe's answer to a ping of this TV's
+                continue
             if op == 0x8:
                 self.tv.closes.append(struct.unpack("!H", data[:2])[0] if len(data) >= 2 else 1005)
                 return None
@@ -451,6 +453,107 @@ def test_a_refused_subscription_is_logged_and_the_other_kept(tmp_path):
     assert ("app", None, None, "com.webos.app.home") in got
 
 
+# ---- (decision 106) the frames a TV may send to tvgw's own client ---------------------------------------
+class Wire:
+    """The socket's far end, as `_WebSocket` writes to it."""
+
+    def __init__(self):
+        self.sent = bytearray()
+
+    def write(self, data: bytes) -> None:
+        self.sent += data
+
+    async def drain(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+    async def wait_closed(self) -> None:
+        pass
+
+
+def frame(opcode: int, payload: bytes = b"", fin: bool = True) -> bytes:
+    """One frame as a TV sends it: unmasked."""
+    n = len(payload)
+    size = bytes([n]) if n < 126 else bytes([126]) + struct.pack("!H", n)
+    return bytes([(0x80 if fin else 0) | opcode]) + size + payload
+
+
+def unmasked(sent: bytes) -> list[tuple[int, bytes]]:
+    """(opcode, payload) of each frame the client sent, every one masked, unmasked byte by byte."""
+    out, i = [], 0
+    while i < len(sent):
+        opcode, n, masked = sent[i] & 0x0F, sent[i + 1] & 0x7F, sent[i + 1] & 0x80
+        assert masked, "a client frame must be masked"
+        i += 2
+        if n in (126, 127):
+            width = 2 if n == 126 else 8
+            n, i = int.from_bytes(sent[i : i + width], "big"), i + width
+        mask, i = sent[i : i + 4], i + 4
+        out.append((opcode, bytes(b ^ mask[k % 4] for k, b in enumerate(sent[i : i + n]))))
+        i += n
+    return out
+
+
+def received(data: bytes):
+    """What `_WebSocket.recv` makes of `data` from the TV: (the message, or the error it raised; the client)."""
+
+    async def go():
+        reader = asyncio.StreamReader()
+        reader.feed_data(data)
+        reader.feed_eof()
+        ws = lgwebos._WebSocket(reader, Wire(), lgwebos.PROBE_FRAME_MAX)
+        try:
+            return await ws.recv(), ws
+        except lgwebos.ProbeError as e:
+            return e, ws
+
+    return run(go())
+
+
+PING = frame(0x9, b"p" * lgwebos.CONTROL_MAX)
+# one message of PROBE_FRAGMENTS_MAX frames, the most it may have, with a ping and a pong among them
+WHOLE = frame(0x1, b"[", fin=False) + PING + frame(0xA) + frame(0x0, fin=False) * 1022 + frame(0x0, b"]")
+
+
+FULL = WHOLE[: -len(frame(0x0, b"]"))] + frame(0x0, fin=False)  # 1,024 frames, and the message goes on
+ECHO = (0xA, b"p" * lgwebos.CONTROL_MAX)
+
+
+@pytest.mark.parametrize(
+    ("data", "close", "error", "echoed"),
+    [
+        (frame(0x9, bytes(126)), 1002, "a control frame of 126 bytes", []),  # RFC 6455 allows 125
+        (frame(0x8, bytes(126)), 1002, "a control frame of 126 bytes", []),
+        (frame(0x9, b"ping", fin=False), 1002, "a control frame of 4 bytes, fragmented", []),
+        (FULL + PING + frame(0x0, b"]"), 1009, "a message of more than 1024 frames", [ECHO, ECHO]),
+    ],
+)
+def test_the_frames_the_size_cap_did_not_cover_close_the_session(data, close, error, echoed):
+    """Empty fragments add nothing to a message's size: 4,000,000 of them held 33.8 MiB and passed the
+    1 MiB cap. A ping of up to 1 MiB was echoed through a loop over its bytes: 20 of them cost 4 s of
+    CPU and 20 MiB sent back. Each now closes the session before its payload is read; a ping between
+    a message's frames is still answered."""
+    got, ws = received(data)
+    assert isinstance(got, lgwebos.ProbeError) and str(got) == error
+    assert unmasked(ws.writer.sent) == [*echoed, (0x8, struct.pack("!H", close))]
+
+
+def test_a_message_of_1024_frames_is_taken_and_the_control_frames_among_them_answered_and_counted():
+    got, ws = received(WHOLE)
+    assert got == "[]" and (ws.controls, ws.pongs) == (2, 1)
+    assert unmasked(ws.writer.sent) == [ECHO]  # the ping's echo, whole
+
+
+@pytest.mark.parametrize("size", [0, 1, 125, 126, 70_001])  # each length form, and sizes not a multiple of 4
+def test_what_the_client_sends_is_masked_as_rfc_6455_says(size):
+    text = "".join(chr(0x61 + i % 26) for i in range(size))
+    ws = lgwebos._WebSocket(None, Wire(), lgwebos.PROBE_FRAME_MAX)
+    run(ws.send_text(text))
+    assert unmasked(ws.writer.sent) == [(0x1, text.encode())]
+
+
 def test_probe_main_refuses_to_start_without_a_pairing(tmp_path, capsys):
     assert (
         lgwebos.probe_main("10.10.10.17", str(tmp_path / "none.sqlite"), str(tmp_path / "e"), 1, "eth0") == 1
@@ -492,12 +595,28 @@ def test_the_consent_record_is_flattened_and_a_missing_flag_is_unknown():
     assert set(lgwebos.consent({"eulaStatus": "garbage"}).values()) == {"unknown"}
 
 
+def test_the_tv_does_not_choose_how_many_consent_keys_a_reading_keeps():
+    """100,000 unknown flags gave 100,022 keys and 100,000 documents 300,000: each a line of tvcheck.txt
+    and, on each change, a row no retention removes. The first by name are kept, so the choice is the
+    same at every reading, and the flags left out are counted."""
+    flags = {f"x{i:03d}Allowed": i % 2 == 0 for i in range(100)}
+    got = lgwebos.consent({"eulaStatus": dict(reversed(flags.items()))})
+    extra = [k for k in got if k.removeprefix("eula.") not in lgwebos.CONSENT_FLAGS]
+    assert extra == [f"eula.x{i:03d}Allowed" for i in range(64)] + ["eula.more"] and got["eula.more"] == "36"
+    assert got["eula.x000Allowed"] == "true" and got["eula.x001Allowed"] == "false"
+    assert "eula.more" not in lgwebos.consent({"eulaStatus": dict(list(flags.items())[:64])})
+    docs = [{"id": f"S_{i:03d}", "accepted": True, "version": "1"} for i in reversed(range(40))]
+    got = lgwebos.agreements({"eulaInfoNetwork": [*docs, {"id": "S_000", "accepted": False}]})
+    assert len(got) == 3 * 32 - 1 and "eula.doc.S_031" in got and "eula.doc.S_032" not in got
+    assert got["eula.doc.S_000"] == "false"  # an id listed twice keeps its last entry, as before
+
+
 def test_the_hourly_reading_asks_for_the_consent_record_and_ble_advertising(monkeypatch, tmp_path):
     asked = []
 
     class Tv:
         @classmethod
-        async def create(cls, ip, states, key_file_path):
+        async def create(cls, ip, states, client_key, storage):
             return cls()
 
         async def connect(self):

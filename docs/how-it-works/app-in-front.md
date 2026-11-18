@@ -166,9 +166,9 @@ A service started while the TV is already on has seen no quiet, so the boot guar
 |---|---|
 | The TV sends an error denying the key (a 403) | Records the refusal where the hourly reading obeys it; attempts nothing until `sudo tvgw tv pair`. A prompt that the TV does not follow with a denial (a slow answer, a reset, a close) is never recorded as a refusal: the daemon counts it a failed attempt and stands itself down after `PROMPT_LIMIT = 3` of them, so a transient at a wake moment never stops the hourly reading |
 | The TV says it is switching off | Writes the event, closes the session with a close frame, waits `STANDBY_HOLD` |
-| A ping is not answered within 10 s, the socket breaks, the TV closes | Writes the loss; a failure for the back-off unless the session had been up `STABLE = 600` s |
+| A ping is not answered within 10 s, the socket breaks, the TV closes, or a message is more than the 1 GB of address space the service caps itself at (`READ_AS_LIMIT` in src/tvgw/lgwebos.py) can hold | Writes the loss; a failure for the back-off unless the session had been up `STABLE = 600` s |
 | An hourly reading finds the TV unreachable `CONFLICT_AFTER = 60` s or more into the session | Ends the session and backs off; a second such reading (`CONFLICT_LIMIT = 2`) stands the daemon down |
-| The TV pushes more than `FLOOD_PER_MINUTE = 120` messages a minute | Ends the session, so a TV cannot fill the Pi's disk through the events file. A flood is a failure for the back-off and counts toward `GIVE_UP` |
+| The TV pushes more than `FLOOD_PER_MINUTE = 120` messages and control frames (pings and pongs) a minute | Ends the session, so a TV cannot fill the Pi's disk through the events file, or hold its CPU with pings the client answers. A flood is a failure for the back-off and counts toward `GIVE_UP` |
 | The TV refuses a subscription, or `GIVE_UP = 12` attempts fail with no session between them that stayed up `STABLE` | Stands down |
 | It is stopped | Closes the session with a close frame |
 
