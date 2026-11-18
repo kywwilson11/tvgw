@@ -1,14 +1,17 @@
 """End-to-end ingest on the fake gateway: counts, idempotency, rotation, hosts, rules, pruning."""
 
+import base64
 import dataclasses
 import json
 import os
 import sqlite3
+import struct
+from pathlib import Path
 
 import pytest
-from conftest import DNS_ALLOWED, DNS_BLOCKED, FLOW_TCP, GFTS_TV_ALLOWED, fake_extract, fake_oddport
+from conftest import DNS_ALLOWED, DNS_BLOCKED, FLOW_TCP, GFTS_TV_ALLOWED, NOW, TV, fake_extract, fake_oddport
 
-from tvgw import db, ingest
+from tvgw import adguard, db, ingest
 
 
 def no_kernel_lines(since):
@@ -390,6 +393,133 @@ def test_an_oddly_typed_record_does_not_hold_the_query_log_back(gateway, lg):
     conn = db.connect(gateway.db_path, readonly=True)
     offset = conn.execute("SELECT offset FROM ingest_state WHERE source='adguard'").fetchone()[0]
     assert offset == os.path.getsize(gateway.adguard_querylog)
+
+
+# ---- (bounds) the query log's lines, bounded where they enter (design decision 107) ------------------------
+def lookup(i: int, **fields) -> str:
+    """One query-log line of the TV's: an A lookup of n<i>.example, `fields` over it."""
+    line = {
+        "T": f"2026-10-26T09:10:{i:02d}-05:00",
+        "QH": f"n{i}.example",
+        "QT": "A",
+        "IP": TV,
+        "Elapsed": 1000,
+    }
+    return json.dumps({**line, **fields}) + "\n"
+
+
+def answer(addresses: int = 0, cnames: int = 0) -> str:
+    """AdGuard's base64 of an answer: `cnames` CNAMEs, each naming the question's 251-character name through
+    one pointer, then A records of `addresses` addresses. A 64 KB answer to a name an app controls (over
+    TCP) holds thousands; the reference's largest held 14."""
+    question = b"".join(b"\x01a" for _ in range(126)) + b"\x00" + struct.pack(">HH", 1, 1)
+    rdata = [(5, b"\xc0\x0c")] * cnames + [(1, struct.pack(">I", 0xC6336401 + i)) for i in range(addresses)]
+    records = b"".join(b"\xc0\x0c" + struct.pack(">HHIH", t, 1, 60, len(rd)) + rd for t, rd in rdata)
+    head = struct.pack(">HHHHHH", 1, 0x8180, 1, len(rdata), 0, 0)
+    return base64.b64encode(head + question + records).decode()
+
+
+def read_log(gateway, *lines: str) -> tuple[sqlite3.Connection, int, list[str]]:
+    """The query log made of `lines`, read once by the dns step: the store, the rows and the warnings."""
+    Path(gateway.adguard_querylog).write_text("".join(lines), encoding="utf-8")
+    conn, warnings = db.connect(gateway.db_path), []
+    n = ingest.ingest_dns(conn, gateway, warnings.append)
+    conn.commit()
+    return conn, n, warnings
+
+
+ODD = {
+    "a list id past 64 bits": (lookup(1, Result={"Rules": [{"Text": "||x^", "FilterListID": 2**70}]}), 2),
+    "a time past a float's range": (lookup(1).replace('"Elapsed": 1000', '"Elapsed": 1' + "0" * 400), 3),
+    "a lone surrogate in the name": (lookup(1).replace("n1.example", "n\\ud800.example"), 2),
+    "a lone surrogate in the upstream": (lookup(1, Upstream="https://\ud800.example"), 2),
+    "100,000 brackets": ("[" * 100_000 + "\n", 2),
+}
+
+
+@pytest.mark.parametrize(("odd", "stored"), ODD.values(), ids=ODD)
+def test_one_odd_line_neither_stops_the_query_log_nor_holds_its_cursor(gateway, odd, stored):
+    """Each line raised out of the dns step (OverflowError, UnicodeEncodeError at the bind, RecursionError),
+    so the hour rolled back with its cursor, and every hour after it did too: one odd line stopped the DNS
+    record for good. A number past a float's range now reads as no time; the others are malformed."""
+    conn, n, warnings = read_log(gateway, lookup(0), odd, lookup(2))
+    assert n == stored and conn.execute("SELECT COUNT(*) FROM dns").fetchone() == (stored,)
+    assert warnings == ([] if stored == 3 else ["dns: 1 malformed query-log record(s) skipped"])
+    offset = conn.execute("SELECT offset FROM ingest_state WHERE source='adguard'").fetchone()[0]
+    assert offset == os.path.getsize(gateway.adguard_querylog)
+
+
+@pytest.mark.parametrize(
+    ("addresses", "cnames", "kept", "named"),
+    [(4000, 0, 64, 64), (0, 4661, 64, 0), (65, 0, 64, 64), (64, 0, 64, 64), (12, 2, 14, 12)],
+    ids=["4,000 addresses", "4,661 CNAMEs", "one past the cut", "the cut", "the reference's largest"],
+)
+def test_an_answer_is_stored_to_its_first_64_records_and_the_cut_is_one_warning_a_run(
+    gateway, addresses, cnames, kept, named
+):
+    """Answers were stored whole: 4,000 A records were 4,000 answer_ip rows, and 4,661 CNAMEs 1.2 MB of
+    store and 400 ms of ingest, for one lookup an app can make several times a second."""
+    looked_up = [lookup(i, Answer=answer(addresses, cnames)) for i in range(2)]
+    conn, n, warnings = read_log(gateway, *looked_up)
+    stored = [a.split(",") for (a,) in conn.execute("SELECT answers FROM dns")]
+    assert n == 2 and [len(a) for a in stored] == [kept, kept]
+    assert conn.execute("SELECT COUNT(*) FROM answer_ip").fetchone() == (2 * named,)
+    cut = addresses + cnames > adguard.ANSWER_RECORDS
+    assert warnings == (["dns: 2 answer(s) held more than 64 records; cut"] if cut else [])
+
+
+@pytest.mark.parametrize(
+    ("others", "seen"),
+    [({"10.10.10.99": 40, "10.10.10.98": 1}, {"lookups": 41, "addresses": 2}), ({}, None)],
+    ids=["a second device", "the reference's own"],
+)
+def test_lookups_from_another_address_on_the_tv_side_are_counted_and_never_stored(gateway, others, seen):
+    """40 lookups from 10.10.10.99 were answered by AdGuard and dropped by the ingest without a word: the
+    TV under a second address could look names up outside the record. The gateway's own address on the
+    TV's side and the probe's look names up by design, and an address outside TV_NET is no device on the
+    TV's side: none of them is ever counted. The count is kept as counts, never an address."""
+    ours = {gateway.gw_ip: 5, gateway.tv_probe_ip: 5, "192.0.2.33": 2, "no address": 1}
+    elsewhere = [lookup(9, IP=ip) for ip, times in {**ours, **others}.items() for _ in range(times)]
+    conn, n, warnings = read_log(gateway, lookup(0), *elsewhere, lookup(1), lookup(2))
+    assert n == 3 and conn.execute("SELECT COUNT(*) FROM dns").fetchone() == (3,)
+    kept = db.get_meta(conn, ingest.OTHERS_KEY)
+    if seen is None:
+        assert warnings == [] and kept is None
+    else:
+        assert warnings == [
+            "dns: 41 lookup(s) came from 2 other address(es) on the TV's side; they are not in the record"
+        ]
+        assert json.loads(kept) == {"t": NOW, **seen} and "10.10" not in kept
+
+
+def stored(gateway, lg) -> list[str]:
+    """Every row a run stores from the fake gateway, as SQL text; the store is removed after it."""
+    assert run(gateway, lg).warnings == []
+    conn = sqlite3.connect(gateway.db_path)
+    try:
+        return list(conn.iterdump())
+    finally:
+        conn.close()
+        os.unlink(gateway.db_path)
+
+
+def test_a_normal_day_is_stored_row_for_row_the_same_with_and_without_the_bounds(gateway, lg, monkeypatch):
+    """Design decision 107's promise: no bound may lose what a normal day on the reference stores. A day
+    shaped like the reference's (the fixture's hour, the largest answer it has seen, of 14 records with
+    their CNAMEs, and the gateway's own and the probe's lookups on the TV's side) stores the same rows in
+    every table with the bounds as shipped and with each of them lifted."""
+    day = [
+        lookup(1, Answer=answer(12, cnames=2)),
+        lookup(2, IP=gateway.gw_ip),
+        lookup(3, IP=gateway.tv_probe_ip),
+    ]
+    Path(gateway.adguard_querylog).write_text(DNS_BLOCKED + DNS_ALLOWED + "".join(day), encoding="utf-8")
+    shipped = stored(gateway, lg)
+    assert any("CNAME:" in row and "A:198.51.100.12" in row for row in shipped)
+    monkeypatch.setattr(adguard, "ANSWER_RECORDS", 2**16)  # more than any answer holds
+    monkeypatch.setattr(ingest, "_tv_side_other", lambda s: lambda client: False)
+    monkeypatch.setattr(ingest._Clock, "install", lambda clock: None)  # no step on a clock
+    assert stored(gateway, lg) == shipped
 
 
 def test_pcaps_done_marks_live_while_the_file_exists(gateway, lg):

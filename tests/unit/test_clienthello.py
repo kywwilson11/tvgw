@@ -278,3 +278,36 @@ def test_random_bytes_after_a_hello_header_never_raise():
         junk = bytes(rng.getrandbits(8) for _ in range(rng.randint(0, 300)))
         h = parse_record(b"\x16\x03\x01" + len(junk).to_bytes(2, "big") + b"\x01" + junk)
         assert h is None or isinstance(h, clienthello.Hello)
+
+
+def largest_hello() -> bytes:
+    """A handshake of 32,767 ciphers, the most a hello's cipher list holds, and 16,000 empty extensions."""
+    ciphers = b"".join(build.u16(0x1000 + i) for i in range(32_767))
+    exts = b"".join(build.u16(0x4000 + i) + b"\x00\x00" for i in range(16_000))
+    body = build.u16(0x0303) + bytes(32) + b"\x00" + build.vec(ciphers, 2) + b"\x01\x00" + build.vec(exts, 2)
+    return b"\x01" + build.vec(body, 3)
+
+
+def held_back(hs: bytes) -> list:
+    """The rows tshark.parse_row makes of `hs` printed as the held-back data of one segment, in records of
+    16 KB as a stack writes them."""
+    records = b"".join(b"\x16\x03\x01" + build.vec(hs[i : i + 16384], 2) for i in range(0, len(hs), 16384))
+    fields = {"frame.time_epoch": "1", "ip.src": "s", "ip.dst": "d", "tcp.segment_data": records.hex()}
+    return tshark.parse_row(build.tsv_row(**fields))
+
+
+@pytest.mark.parametrize("read", [parse_handshake, held_back], ids=["the byte parser", "a held-back segment"])
+def test_each_cipher_and_extension_is_copied_once_however_many_a_hello_holds(monkeypatch, read):
+    """(bounds) The parser rebuilt its tuple after every cipher and every extension: 32,767 ciphers were
+    537 million copies and a second for one 64 KB segment, and a file of such segments outran the ingest's
+    unit. An operation count, which no loaded test runner can make flaky."""
+    copied: list[int] = []
+
+    def counted(items):
+        made = tuple(items)
+        copied.append(len(made))
+        return made
+
+    monkeypatch.setattr(clienthello, "tuple", counted, raising=False)
+    assert read(largest_hello())
+    assert sorted(copied) == [16_000, 32_767]

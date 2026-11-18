@@ -152,22 +152,23 @@ def parse_handshake(hs: bytes) -> Hello | None:
         whole = False
     except (ValueError, UnicodeError):  # a malformed vector inside an extension
         whole = False
-    return Hello(
-        complete=whole and fields.get("_done", False), **{k: v for k, v in fields.items() if k[0] != "_"}
-    )
+    # (bounds) the lists the body filled in place become tuples here, once each
+    kept = {k: tuple(v) if isinstance(v, list) else v for k, v in fields.items() if k[0] != "_"}
+    return Hello(complete=whole and fields.get("_done", False), **kept)
 
 
 def _parse_body(r: _Reader, f: dict) -> None:
-    """Fill `f` field by field, so whatever was read before a cut is kept."""
+    """Fill `f` field by field, so whatever was read before a cut is kept. (bounds) The cipher and
+    extension lists are filled in place: a tuple rebuilt after each item made a hello of 32,767
+    ciphers cost a second."""
     f["version"] = r.u16()
     r.take(32)  # random
     r.vector(1)  # legacy_session_id
     n = r.u16()
     ciphers: list[int] = []
-    f["ciphers"] = ()
+    f["ciphers"] = ciphers
     for _ in range(n // 2):
         ciphers.append(r.u16())
-        f["ciphers"] = tuple(ciphers)
     if n % 2:
         raise _Short
     r.vector(1)  # compression methods
@@ -177,10 +178,10 @@ def _parse_body(r: _Reader, f: dict) -> None:
     ext_total = r.u16()
     end = r.pos + ext_total
     exts: list[int] = []
+    f["extensions"] = exts
     while r.pos < end:
         etype = r.u16()
         exts.append(etype)
-        f["extensions"] = tuple(exts)
         edata = r.vector(2)
         _extension(etype, edata, f)
     if r.pos != end:

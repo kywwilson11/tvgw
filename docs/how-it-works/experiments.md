@@ -152,7 +152,7 @@ Nothing is stored and nothing is refused on the strength of it. The run adds no 
 
 - the hourly ingest ran during the day, so a day the gateway was off, or that a clock stepped forward skipped, is left out rather than written empty;
 - it ran again after the day settled, so the day's last connections are in the store;
-- no run from the day's start to that one warned that connections or lookups were lost (a log rotated past, malformed lines, conntrack's lost events, the resolver's log missing).
+- no run from the day's start to that one warned that connections or lookups were lost (a log rotated past, malformed lines, conntrack's lost events, the resolver's log missing). (bounds) An answer stored to its first 64 records loses no lookup, and its warning keeps no day out.
 
 A day that fails is named in the run's output with the reason and is not written. A day whose settled run has not come yet is written by a later run; a day that failed for good stays a gap in the file, which the header says is a gap in the record and not a quiet day. The first line is that header: it tells a reader who has never seen the gateway what the lines are, what was observed and what was estimated, and what the file cannot show.
 

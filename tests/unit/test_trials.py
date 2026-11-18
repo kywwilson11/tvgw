@@ -300,6 +300,7 @@ def test_a_day_waits_until_it_settles_and_a_record_with_a_hole_is_not_measured(s
         (-3600, "flows: conntrack lost events 2 time(s)", 3600, "the record lost lookups or connections"),
         (-3600, "tvlive: x", 3600, "the record lost lookups or connections"),
         (-3600, "dns: x", 3600, "the record lost lookups or connections"),
+        (-3600, "dns: 1 answer(s) held more than 64 records; cut", 3600, None),  # (bounds) every lookup kept
         (-3600, "threats: x", 3600, None),
         (-3600, "pcaps: deferred to the next run (time budget)", 3600, None),  # names, not losses
         (-3600, "flows: x", 25 * 3600, "the record lost lookups or connections"),  # while the day settled

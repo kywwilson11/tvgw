@@ -442,6 +442,7 @@ def test_healthy_gateway_passes_every_check(lg):
         "dnsmasq_caps",
         "web",  # (web) off: nothing listens on its port
         "flowlog_events",  # (events)
+        "tv_side_others",  # (bounds) no lookup from another address on the TV's side
         "store_version",  # (reliability)
         "jobs",  # (decision 92)
         "disk",  # (depth)

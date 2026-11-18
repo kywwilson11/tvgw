@@ -163,7 +163,20 @@ def test_a_log_no_run_read_for_longer_than_the_ingest_allows_is_not_known_from_r
             coverage.WHY_LOST,
         ),
         ("dns: 3 malformed query-log record(s) skipped", None, None),  # a line lost, not a stretch
+        # (bounds) lines read: an answer stored to its first records, another TV-side address counted
+        ("dns: 2 answer(s) held more than 64 records; cut", None, None),
+        (
+            "dns: 41 lookup(s) came from 2 other address(es) on the TV's side; they are not in the record",
+            None,
+            None,
+        ),
         ("dns: OSError: [Errno 5] Input/output error", coverage.WHY_UNREAD, None),  # failed: nothing read
+        # (bounds) the step's clock ran out: what it had not committed waits, and the run did not read it
+        (
+            "dns: stopped at its limit of 300 s; what it had not stored waits for the next run",
+            coverage.WHY_UNREAD,
+            None,
+        ),
         ("flows: /var/log/tvgw/flows.log is missing", None, coverage.WHY_UNREAD),
     ],
     ids=[
@@ -172,7 +185,10 @@ def test_a_log_no_run_read_for_longer_than_the_ingest_allows_is_not_known_from_r
         "flow log lost",
         "socket dropped",
         "malformed",
+        "an answer cut",
+        "another TV-side address",
         "dns failed",
+        "dns stopped by its clock",
         "no flow log",
     ],
 )
@@ -185,6 +201,18 @@ def test_three_runs_that_found_lines_lost_or_read_nothing_leave_their_stretch_no
         end = run_at(21) if why == coverage.WHY_UNREAD else run_at(20)  # a failed run is not a read
         found = spans(coverage.covered(conn, source, DAY_A, DAY_B, NOW))
         assert found == ([(run_at(17), end, why)] if why else []), source
+
+
+def test_a_run_that_cut_an_answer_and_then_failed_is_no_read(conn):
+    """(bounds) A warning about lines a run read vouches for no run whose step then failed."""
+    cut, failed = (
+        "dns: 2 answer(s) held more than 64 records; cut",
+        "dns: OSError: [Errno 5] Input/output error",
+    )
+    runs(conn, hourly())
+    runs(conn, [run_at(h) for h in (18, 19, 20)], cut, failed)
+    found = spans(coverage.covered(conn, "dns", DAY_A, DAY_B, NOW))
+    assert found == [(run_at(17), run_at(21), coverage.WHY_UNREAD)]
 
 
 @pytest.mark.parametrize("late", [0, 1], ids=["within the ingest's schedule", "behind it"])
