@@ -329,7 +329,7 @@ def generation_tv(answers: dict, refuse: set[str] = frozenset()):
 
     class Tv:
         @classmethod
-        async def create(cls, ip, states, key_file_path, manifest_file_path=None):
+        async def create(cls, ip, states, client_key, storage, manifest_file_path=None):
             return cls()
 
         async def connect(self):

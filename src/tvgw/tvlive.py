@@ -200,8 +200,11 @@ class Ledger:
             ]
             kept.append((now, who))
             body = "".join(f"{t:.3f} {w}\n" for t, w in kept).encode()
-            os.ftruncate(fd, 0)
+            # the new body first, then the cut: a crash between the two leaves every attempt and the old
+            # tail after them, which can only count more (a torn line counts as made now), never an
+            # empty file, which would count none
             os.pwrite(fd, body, 0)
+            os.ftruncate(fd, len(body))
             os.fsync(fd)
         finally:
             os.close(fd)  # and with it the lock
@@ -562,7 +565,9 @@ async def _listen(env: Env, rules: Rules, log: EventLog, ws, queue, subs: dict, 
     up_wall = env.clock()
     sent, pongs, waiting = env.mono(), ws.pongs, None
     last_alive = env.mono()
-    events, minute_at = 0, env.mono()  # the TV's power and app changes, capped per minute
+    # the TV's messages and control frames, capped per minute: pings without end hold the Pi's CPU as a
+    # flood of changes would, and recv() answers them without handing anything over
+    events, minute_at, controls = 0, env.mono(), ws.controls
     offset = env.clock() - env.mono()  # how far the wall clock is ahead of the steady one
     restate_at: float | None = None
     while True:
@@ -583,6 +588,7 @@ async def _listen(env: Env, rules: Rules, log: EventLog, ws, queue, subs: dict, 
             if verdict is not None:
                 return verdict
         now = env.mono()
+        events, controls = events + ws.controls - controls, ws.controls
         if now - minute_at >= 60:
             events, minute_at = 0, now
         elif events > rules.flood_per_minute:  # a TV cannot flood the Pi's disk through this session
@@ -632,8 +638,8 @@ def _message(raw: str, subs: dict, st: _State, log: EventLog) -> str | None:
     except ValueError:
         return None
     sid = msg.get("id") if isinstance(msg, dict) else None
-    if sid not in subs:
-        return None  # nothing else was asked
+    if not isinstance(sid, str) or sid not in subs:
+        return None  # nothing else was asked, and an id that is not a string was not asked either
     payload = msg.get("payload") if isinstance(msg.get("payload"), dict) else {}
     if msg.get("type") == "error" or payload.get("returnValue") is False:
         log.write("sub.err", sub=sid)
@@ -912,7 +918,7 @@ def hear(s, key_file: str, seconds: float = 5.0) -> tuple[str, list[dict]]:
     refusal is recorded where the hourly reading obeys it."""
     if s.profile != PROFILE:
         return f"skipped: PROFILE={s.profile} has no live reading", []
-    key = asyncio.run(lgwebos._stored_key(key_file, s.tv_ip))
+    key = lgwebos._stored_key(key_file, s.tv_ip)
     rec = lgkeys.record(key_file, s.tv_ip) if key else None
     now = time.time()
     with tempfile.TemporaryDirectory() as tmp:
@@ -974,6 +980,10 @@ def main(s, key_file: str) -> int:
     if s.live_reading != "on" or s.profile != PROFILE:
         print(f"tvgw tvlive: LIVE_READING={s.live_reading}, PROFILE={s.profile}: nothing to do")
         return 0
+    # the unit's MemoryMax= does nothing without the kernel's memory controller: the process caps itself.
+    # A MemoryError ends a session as any error does; outside a session it ends the process with an
+    # error, and systemd starts it again a minute later (Restart=on-failure)
+    lgwebos.cap_memory()
     ledger = Ledger(state_path(key_file, ATTEMPTS_FILE))
     ledger.create()
     log = EventLog(os.path.join(s.state_dir, EVENTS_FILE))
@@ -983,7 +993,7 @@ def main(s, key_file: str) -> int:
         return await lgwebos._connect_ws(s.tv_ip, CONNECT_TIMEOUT)
 
     async def key():
-        return await lgwebos._stored_key(key_file, s.tv_ip)
+        return lgwebos._stored_key(key_file, s.tv_ip)
 
     def record():
         try:

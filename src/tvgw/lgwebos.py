@@ -25,6 +25,12 @@ timeout: port 3000 is gone on 2022+ firmware and can accept the connection and t
 
 Firmware 04.64 (webOS 5) refuses writes through this API (its `isCallAllowed` guard rejects the
 Luna side-door every LAN tool uses), so this module only reads.
+
+tvgw reads the key from the key store itself (lgkeys.py) and hands it to the library, with a storage of
+its own for the key a pairing brings: the library's storage unpickles every value it reads. The library
+also takes a message of any size and asks a terminal for a PIN inside the event loop, so a reading runs
+with stdin at /dev/null, and `tvgw tvcheck` and `tvgw tvlive` cap their own address space (design
+decision 106).
 """
 
 from __future__ import annotations
@@ -36,8 +42,10 @@ import hashlib
 import json
 import os
 import re
+import resource
 import ssl
 import struct
+import sys
 import time
 from dataclasses import dataclass, field
 from importlib import resources
@@ -73,6 +81,11 @@ CONSENT_FLAGS = (
 )  # fmt: skip
 CONSENT_PREFIX = "eula."
 _FLAG = re.compile(r"[A-Za-z][A-Za-z0-9]{0,39}")
+# the TV chooses how many flags and documents its record holds, and each is a line of tvcheck.txt and a
+# stored row: a reading keeps this many beyond CONSENT_FLAGS, and this many documents, the first by name
+CONSENT_EXTRA_MAX = 64
+AGREEMENTS_MAX = 32
+CONSENT_MORE = f"{CONSENT_PREFIX}more"  # how many flags a reading left out, when it left any
 
 # ---- (W12) the per-document consent record, the standby switches and the TV's webOS ---------------------
 # `eulaInfoNetwork` sits beside `eulaStatus` in every public list from webOS 5 to 26 (bscpylgtv's dumps).
@@ -145,7 +158,8 @@ def manifest_for(kind: str) -> dict:
 
 def consent(settings) -> dict[str, str]:
     """The consent record as settings-like keys. Every known flag is present: `true` or `false` when the
-    TV said so, `unknown` otherwise; a flag this list does not know is kept when its name is plain."""
+    TV said so, `unknown` otherwise; a flag this list does not know is kept when its name is plain, the
+    first CONSENT_EXTRA_MAX by name, and CONSENT_MORE says how many more there were."""
     record = settings.get(CONSENT_KEY) if isinstance(settings, dict) else None
     record = record if isinstance(record, dict) else {}
 
@@ -157,9 +171,11 @@ def consent(settings) -> dict[str, str]:
         return "unknown"
 
     out = {f"{CONSENT_PREFIX}{flag}": word(record.get(flag)) for flag in CONSENT_FLAGS}
-    for flag in sorted(record):
-        if isinstance(flag, str) and flag not in CONSENT_FLAGS and _FLAG.fullmatch(flag):
-            out[f"{CONSENT_PREFIX}{flag}"] = word(record[flag])
+    extra = sorted(f for f in record if isinstance(f, str) and f not in CONSENT_FLAGS and _FLAG.fullmatch(f))
+    for flag in extra[:CONSENT_EXTRA_MAX]:
+        out[f"{CONSENT_PREFIX}{flag}"] = word(record[flag])
+    if len(extra) > CONSENT_EXTRA_MAX:
+        out[CONSENT_MORE] = str(len(extra) - CONSENT_EXTRA_MAX)
     return out
 
 
@@ -167,7 +183,8 @@ def agreements(settings) -> dict[str, str]:
     """(W12) `eulaInfoNetwork` as settings-like keys: for each document, `eula.doc.<id>` (accepted:
     true, false or unknown), `agreement.<id>.updated` (true, false or unknown) and `agreement.<id>.version`.
     The record is a list of entries, or a table keyed by id (both shapes are read; neither is verified on
-    a set here). An entry without a plain id, or a record of another shape, gives nothing: never a guess."""
+    a set here). An entry without a plain id, or a record of another shape, gives nothing: never a guess.
+    The first AGREEMENTS_MAX documents by id are kept; an id listed twice keeps its last entry."""
     record = settings.get(AGREEMENTS_KEY) if isinstance(settings, dict) else None
     entries: list[tuple[str, dict]] = []
     if isinstance(record, list):
@@ -183,9 +200,9 @@ def agreements(settings) -> dict[str, str]:
             return v.lower()
         return "unknown"
 
-    for doc, entry in entries:
-        if not isinstance(doc, str) or not _DOC_ID.fullmatch(doc):
-            continue
+    docs = {doc: entry for doc, entry in entries if isinstance(doc, str) and _DOC_ID.fullmatch(doc)}
+    for doc in sorted(docs)[:AGREEMENTS_MAX]:
+        entry = docs[doc]
         out[f"{CONSENT_PREFIX}doc.{doc}"] = word(entry.get("accepted"))
         out[f"{AGREEMENT_PREFIX}{doc}.updated"] = word(entry.get("updated"))
         version = entry.get("version")
@@ -364,31 +381,38 @@ class TvReading:
         return 2 if self.acr_off is False else 0
 
 
-async def _stored_key(key_file: str, ip: str) -> str | None:
-    """The pairing key the key file holds for `ip`, read through the library's own storage, as the
-    reading would read it. A missing file is never opened, because opening it creates it; a file that
-    cannot be read, or no library, holds no usable key."""
-    if not os.path.isfile(key_file):
-        return None
+def _stored_key(key_file: str, ip: str) -> str | None:
+    """The pairing key the key file holds for `ip`, as the key store reads it (lgkeys.keys): never
+    through the library's storage, which unpickles what it reads. A missing file is never opened, because
+    opening it creates it; a file that cannot be read holds no usable key."""
     try:
-        from bscpylgtv.storage_sqlitedict import StorageSqliteDict  # optional dependency
-
-        storage = await StorageSqliteDict.create(key_file)
-    except Exception:  # not the library's database, unreadable, or no library: no key to use
+        return lgkeys.keys(key_file).get(ip)
+    except Exception:  # locked, damaged, not a database: no key, so nothing is asked of the TV
         return None
-    try:
-        key = await storage.get_key(ip)
-    except Exception:
-        key = None
-    with contextlib.suppress(Exception):  # the database's writer thread; nothing was written
-        storage.db.close()
-    return key if isinstance(key, str) and key else None
 
 
 def has_key(key_file: str, ip: str) -> bool:
     """Whether the gateway is paired with the TV at `ip`: the key file holds a key for that address.
-    Reads only; a missing key file stays missing."""
-    return asyncio.run(_stored_key(key_file, ip)) is not None
+    Writes nothing but the key store's one-time migration; a missing key file stays missing."""
+    return _stored_key(key_file, ip) is not None
+
+
+class _KeyStore:
+    """The library's key storage (its `StorageProto`) over the key store: the library asks it for a key
+    only when it was handed none, at a pairing, and gives it the key the TV sends then."""
+
+    def __init__(self, key_file: str):
+        self.key_file = key_file
+
+    async def get_key(self, ip):
+        return _stored_key(self.key_file, ip)
+
+    async def set_key(self, ip, key) -> None:
+        if isinstance(key, str) and key:  # the TV chooses what it sends as the key
+            lgkeys.save_key(self.key_file, ip, key)
+
+    async def list_keys(self) -> dict:
+        return lgkeys.keys(self.key_file)
 
 
 # ---- (W12) the handshake: `hello`, then the stored key, on one short connection of tvgw's own ----------
@@ -516,7 +540,7 @@ async def _read(
     except ImportError as e:  # pragma: no cover - depends on the install
         r.error = f"bscpylgtv not installed ({e})"
         return r
-    key = await _stored_key(key_file, ip)
+    key = _stored_key(key_file, ip)
     if not register and key is None:
         r.error = NOT_PAIRED
         return r
@@ -542,8 +566,11 @@ async def _read(
     _count_attempt(key_file)  # (app in front) the library's connection
     try:
         kwargs = {"manifest_file_path": unsigned_manifest_path()} if kind == "unsigned" else {}
+        # the key read above, which a reading never leaves None: a library left to look for its own key
+        # could register without one, and that is the pairing prompt. A pairing's key goes to the storage
         c = await asyncio.wait_for(
-            WebOsClient.create(ip, states=[], key_file_path=key_file, **kwargs), timeout
+            WebOsClient.create(ip, states=[], client_key=key, storage=_KeyStore(key_file), **kwargs),
+            timeout,
         )
         await asyncio.wait_for(c.connect(), timeout)
     except Exception as e:  # any failure here just means "not reachable now"
@@ -560,7 +587,7 @@ async def _read(
                     value = "unknown"
                 r.values[f"{cat}.{k}"] = clean(value)
             except Exception as e:  # a TV that stalls or refuses one key must not hide the others
-                r.values[f"{cat}.{k}"] = f"ERR {type(e).__name__} {str(e)[:60]}"
+                r.values[f"{cat}.{k}"] = f"ERR {type(e).__name__} {clean(str(e))[:60]}"
                 if _refused_text(e) and f"{cat}.{k}" in STANDBY_KEYS:  # (W12) asked once, recorded
                     lgkeys.unreadable(key_file, ip, f"{cat}.{k}")
     # (W12) the TV's webOS, from the handshake: the record of its software where getCurrentSWInformation
@@ -574,7 +601,7 @@ async def _read(
     try:
         r.values.update(paths(await asyncio.wait_for(c.request(PATHS_URI), timeout)))
     except Exception as e:  # an older or stranger webOS: the rest of the reading stands
-        r.values["network.paths"] = f"ERR {type(e).__name__} {str(e)[:60]}"
+        r.values["network.paths"] = f"ERR {type(e).__name__} {clean(str(e))[:60]}"
     try:
         sw = await asyncio.wait_for(c.get_software_info(), timeout)
         r.values["firmware"] = clean(f"{sw.get('major_ver')}.{sw.get('minor_ver')}")
@@ -592,7 +619,7 @@ async def _read(
         r.values["power"] = clean((await asyncio.wait_for(c.get_power_state(), timeout)).get("state"))
         r.values["app"] = clean(await asyncio.wait_for(c.get_current_app(), timeout) or "")
     except Exception as e:
-        r.values["info"] = f"ERR {type(e).__name__} {str(e)[:60]}"
+        r.values["info"] = f"ERR {type(e).__name__} {clean(str(e))[:60]}"
     # (ledger) the consent record, flattened, last and on a shorter clock: the call is not yet verified
     # on every webOS, so a TV that stalls on it loses these keys only, never power, app or the paths.
     # A refusal leaves the flags unread, not off
@@ -602,7 +629,7 @@ async def _read(
         )
         r.values.update(consent((res or {}).get("settings", {})))
     except Exception as e:
-        r.values[f"{CONSENT_PREFIX}status"] = f"ERR {type(e).__name__} {str(e)[:60]}"
+        r.values[f"{CONSENT_PREFIX}status"] = f"ERR {type(e).__name__} {clean(str(e))[:60]}"
     # (W12) the per-document half of the consent record, on the same short clock, unless the TV said 401
     # to it before (then it is not asked again until the next pairing)
     if AGREEMENTS_KEY not in skip:
@@ -612,7 +639,7 @@ async def _read(
             )
             r.values.update(agreements((res or {}).get("settings", {})))
         except Exception as e:
-            r.values[f"{AGREEMENT_PREFIX}status"] = f"ERR {type(e).__name__} {str(e)[:60]}"
+            r.values[f"{AGREEMENT_PREFIX}status"] = f"ERR {type(e).__name__} {clean(str(e))[:60]}"
             if _refused_text(e):
                 lgkeys.unreadable(key_file, ip, AGREEMENTS_KEY)
     with contextlib.suppress(Exception):  # nothing left to do with a half-closed socket
@@ -677,17 +704,59 @@ def _reading(
 ) -> TvReading:
     r = TvReading(False, error="TimeoutError")
     try:
-        return asyncio.run(
-            asyncio.wait_for(
-                _read(ip, key_file, timeout, r, register=register, manifest=manifest), timeout * 4
+        with _stdin_closed():
+            return asyncio.run(
+                asyncio.wait_for(
+                    _read(ip, key_file, timeout, r, register=register, manifest=manifest), timeout * 4
+                )
             )
-        )
     except TimeoutError:
         if r.reachable:
             for cat, keys in READS:
                 for k in keys:
                     r.values.setdefault(f"{cat}.{k}", "ERR TimeoutError the reading ran out of time")
         return r
+    except (asyncio.CancelledError, MemoryError) as e:
+        # the library cancels what it waits on when its socket fails, and a message held whole past the
+        # cap on the address space (cap_memory) is a MemoryError: the TV was not read, and the caller goes
+        # on with what was read so far, never a traceback
+        r.reachable, r.error = False, type(e).__name__
+        return r
+
+
+@contextlib.contextmanager
+def _stdin_closed():
+    """sys.stdin at /dev/null while the library runs. It calls input() for a PIN when a TV asks for one,
+    inside the event loop, where no timeout can fire while a terminal waits; at end of file input()
+    raises EOFError at once, and nothing a person types is sent to the TV."""
+    saved = sys.stdin
+    with open(os.devnull, encoding="utf-8") as devnull:
+        sys.stdin = devnull
+        try:
+            yield
+        finally:
+            sys.stdin = saved
+
+
+# a reading process's address space, at most: the live reading peaked at 181 MiB after days of running on
+# the reference gateway, so 1 GiB is about 5.6 times that, and a message the library holds whole stops here
+READ_AS_LIMIT = 1 << 30
+
+
+def cap_memory(limit: int = READ_AS_LIMIT) -> bool:
+    """Cap this process's address space at `limit` (RLIMIT_AS; never above the hard limit, and a lower
+    limit already set is kept), so a TV's oversized message ends the reading with MemoryError rather than
+    pushing the gateway to the kernel's OOM killer: `MemoryMax=` does nothing on a kernel without the
+    memory controller. True when a cap is in force; False where the platform refuses one (macOS)."""
+    soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+    want = limit if hard == resource.RLIM_INFINITY else min(limit, hard)
+    if soft != resource.RLIM_INFINITY and soft <= want:
+        return True
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (want, hard))
+    except (ValueError, OSError):
+        return False
+    return True
 
 
 # ---- (ledger) `tvgw tvprobe`: one long-lived, read-only session ---------------------------------------
@@ -706,6 +775,9 @@ def _reading(
 # session with 1009 before its payload is read.
 PROBE_PORT = SSAP_PORT  # wss on 3001: this CX refuses ws on 3000 (section 14, F2), and newer sets hang on it
 PROBE_FRAME_MAX = 1 << 20  # bytes in one frame or one message
+# frames in one message: an empty fragment adds nothing to its size, but holding it is not free
+PROBE_FRAGMENTS_MAX = 1024
+CONTROL_MAX = 125  # bytes in a ping, pong or close frame (RFC 6455, 5.5), which is never fragmented
 PROBE_MIN_RECONNECT = 5.0  # seconds between two connection attempts, whatever happened
 PROBE_BACKOFF = (5.0, 15.0, 30.0, 60.0)  # after a failure: then every 60 s
 PROBE_PING = 30.0  # seconds between our pings; the library's pinger runs only while it thinks the TV is on
@@ -726,7 +798,8 @@ class ProbeError(Exception):
 
 
 class FrameTooBig(ProbeError):
-    """The TV sent a frame or a message over PROBE_FRAME_MAX."""
+    """The TV sent a frame or a message over PROBE_FRAME_MAX, or a message of more than
+    PROBE_FRAGMENTS_MAX frames."""
 
 
 class PairingRejected(Exception):
@@ -743,11 +816,13 @@ class PairingRejected(Exception):
 
 class _WebSocket:
     """A client WebSocket (RFC 6455) over asyncio streams: text frames, ping and pong, close, with every
-    frame's length checked against PROBE_FRAME_MAX before its payload is read."""
+    frame's length checked against PROBE_FRAME_MAX before its payload is read. `controls` counts the
+    control frames received, which recv() answers on its own: the live reading counts them as events."""
 
     def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, frame_max: int):
         self.reader, self.writer, self.frame_max = reader, writer, frame_max
         self.pongs = 0
+        self.controls = 0
 
     @classmethod
     async def connect(
@@ -798,7 +873,9 @@ class _WebSocket:
             head += bytes([0x80 | 126]) + struct.pack("!H", n)
         else:
             head += bytes([0x80 | 127]) + struct.pack("!Q", n)
-        body = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+        # one XOR of two integers: a loop over the bytes cost a second of CPU for each 5 MiB echoed
+        key = (mask * (n // 4 + 1))[:n]
+        body = (int.from_bytes(payload, "big") ^ int.from_bytes(key, "big")).to_bytes(n, "big")
         self.writer.write(head + mask + body)
         await self.writer.drain()
 
@@ -833,10 +910,19 @@ class _WebSocket:
             if masked:
                 await self.close(1002)
                 raise ProbeError("the TV sent a masked frame")
+            control = opcode >= 0x8
+            if control and (n > CONTROL_MAX or not fin):
+                # a ping is echoed whole, so a large one costs the Pi what it costs the TV, again
+                await self.close(1002)
+                raise ProbeError(f"a control frame of {n} bytes{'' if fin else ', fragmented'}")
             if n > self.frame_max or size + n > self.frame_max:
                 await self.close(1009)
                 raise FrameTooBig(f"a frame of {n} bytes; the cap is {self.frame_max}")
+            if not control and len(parts) >= PROBE_FRAGMENTS_MAX:
+                await self.close(1009)
+                raise FrameTooBig(f"a message of more than {PROBE_FRAGMENTS_MAX} frames")
             payload = await self.reader.readexactly(n)
+            self.controls += control
             if opcode == 0x9:
                 await self._send(0xA, payload)
                 continue
@@ -1015,8 +1101,8 @@ def _on_message(raw: str, subs: dict[str, str], acked: set[str], log: ProbeLog) 
         log.write("frame.invalid")
         return
     sid = msg.get("id") if isinstance(msg, dict) else None
-    if sid not in subs:
-        return  # nothing else was asked
+    if not isinstance(sid, str) or sid not in subs:
+        return  # nothing else was asked, and an id that is not a string was not asked either
     payload = msg.get("payload") if isinstance(msg.get("payload"), dict) else {}
     if msg.get("type") == "error" or payload.get("returnValue") is False:
         why = clean(msg.get("error") or payload.get("errorText") or "refused")[:200]
@@ -1100,7 +1186,7 @@ def probe_main(ip: str, key_file: str, out: str, hours: float, tv_if: str) -> in
     if not os.path.exists(key_file):
         print(f"tvgw tvprobe: no key file at {key_file}; the probe never pairs (pair with sudo tvgw tv pair)")
         return 1
-    key = asyncio.run(_stored_key(key_file, ip))
+    key = _stored_key(key_file, ip)
     if not key:
         print(f"tvgw tvprobe: no pairing for {ip} in {key_file}; the probe never pairs")
         return 1
