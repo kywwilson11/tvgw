@@ -3,6 +3,7 @@ and which retention may delete."""
 
 import calendar
 import os
+import sqlite3
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -293,6 +294,45 @@ def test_the_prune_command_reads_every_mark_in_the_store_and_writes_none(tmp_pat
     assert cli.main(["prune-pcaps"]) == 1
     assert capsys.readouterr().err == f"tvgw prune-pcaps: WARNING {gone(1)}\n"  # 3, never seen
     assert opened == [{"readonly": True}]
+
+
+def test_the_prune_commands_total_leaves_the_live_file_out(tmp_path, monkeypatch, capsys):
+    """Run every 5 minutes, a total with the live file in it put a 5-minute series of the TV's captured
+    bytes in the journal: the total is the finished files'."""
+    d = pcap_dir(
+        tmp_path, {ring_file(HOURS[46], 47): (7200, 3 * MIB), ring_file(HOURS[47], 48): (60, 5 * MIB)}
+    )
+    monkeypatch.setattr(
+        config, "load", lambda path, **kw: Settings(pcap_dir=d, db_path=str(tmp_path / "none.db"))
+    )
+    monkeypatch.setattr(
+        pcaps, "live_files", lambda pcap_dir: {os.path.join(pcap_dir, ring_file(HOURS[47], 48))}
+    )
+    assert cli.main(["prune-pcaps"]) == 0
+    assert capsys.readouterr().out == "tvgw prune-pcaps: deleted 0, kept 1 (3 MB)\n"
+    monkeypatch.setattr(pcaps, "live_files", lambda pcap_dir: None)  # the live file unknown: no total
+    assert cli.main(["prune-pcaps"]) == 1
+    assert capsys.readouterr().out == "tvgw prune-pcaps: deleted 0\n"
+
+
+def test_a_store_held_past_the_prunes_wait_skips_the_run_and_fails_nothing(tmp_path, monkeypatch, capsys):
+    """A VACUUM holds the store's exclusive lock past a reader's 60 s wait: the prune failed, a failed job
+    for 5 minutes. It skips, and the next run deletes what this one would have."""
+    d = pcap_dir(tmp_path, {ring_file(HOURS[0], 1): (30 * DAY, 10)})
+    store = str(tmp_path / "tvgw.db")
+    db.connect(store).close()
+    monkeypatch.setattr(config, "load", lambda path, **kw: Settings(pcap_dir=d, db_path=store))
+    real = db.connect
+    monkeypatch.setattr(db, "connect", lambda path, **kw: real(path, **{**kw, "timeout": 0.1}))
+    holder = sqlite3.connect(store)
+    holder.execute("BEGIN EXCLUSIVE")
+    try:
+        assert cli.main(["prune-pcaps"]) == 0
+    finally:
+        holder.rollback()
+        holder.close()
+    assert capsys.readouterr().out == "tvgw prune-pcaps: store busy, skipped\n"
+    assert left(d) == [ring_file(HOURS[0], 1)]
 
 
 def test_the_ring_command_prints_the_units_drop_in_line(tmp_path, capsys):

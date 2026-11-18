@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import glob
 import json
 import os
 import random
@@ -1263,7 +1262,8 @@ def cmd_ingest(a, s, prof) -> int:
 def cmd_prune_pcaps(a, s, prof) -> int:
     """Retention for the raw captures: only files ingest has read, never the one the capture is writing.
     (edges) It reads the store and never writes it, so its run every 5 minutes cannot fail an ingest:
-    under the rollback journal a reader at most makes the ingest's commit wait for a moment."""
+    under the rollback journal a reader at most makes the ingest's commit wait for a moment. A store held
+    past the reader's wait (a VACUUM) skips the run, which the next one, 5 minutes on, makes up."""
     from tvgw import forget
 
     deletable: set[str] = set()
@@ -1271,22 +1271,33 @@ def cmd_prune_pcaps(a, s, prof) -> int:
     marked: frozenset[str] = frozenset()
     if os.path.exists(s.db_path):  # no store yet means nothing has been read
         conn = _ro(s)
-        deletable = ingest.deletable_pcaps(conn)
-        doomed = forget.doomed_pcaps(conn)  # captures a forget could not delete while they were open
-        marked = frozenset(r[0] for r in conn.execute("SELECT name FROM pcaps_done"))  # (edges) read or tried
-        conn.close()
+        try:
+            deletable = ingest.deletable_pcaps(conn)
+            doomed = forget.doomed_pcaps(conn)  # captures a forget could not delete while they were open
+            # (edges) every name ingest read or tried
+            marked = frozenset(r[0] for r in conn.execute("SELECT name FROM pcaps_done"))
+        except sqlite3.OperationalError as e:
+            if e.sqlite_errorcode not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                raise
+            print("tvgw prune-pcaps: store busy, skipped")  # (edges) not a failed job
+            return 0
+        finally:
+            conn.close()
     budget = int(s.pcap_max_gb * 2**30)
+    live = pcaps.live_files(s.pcap_dir)
     deleted, warnings = pcaps.prune(
-        s.pcap_dir,
-        deletable,
-        s.pcap_days,
-        budget,
-        pcaps.live_files(s.pcap_dir),
-        doomed=doomed,
-        marked=marked,
+        s.pcap_dir, deletable, s.pcap_days, budget, live, doomed=doomed, marked=marked
     )
-    sizes = [os.path.getsize(p) for p in glob.glob(os.path.join(s.pcap_dir, "*.pcap"))]
-    print(f"tvgw prune-pcaps: deleted {len(deleted)}, kept {len(sizes)} ({sum(sizes) / 2**20:.0f} MB)")
+    # (edges) the finished files alone: with a run every 5 minutes, a total with the live file in it would
+    # put a 5-minute series of what the TV sends in the journal; with the live file unknown, no total
+    if live is None:
+        print(f"tvgw prune-pcaps: deleted {len(deleted)}")
+    else:
+        sizes = []
+        for path in pcaps.finished(s.pcap_dir, live):
+            with contextlib.suppress(FileNotFoundError):  # the capture's ring may remove one meanwhile
+                sizes.append(os.path.getsize(path))
+        print(f"tvgw prune-pcaps: deleted {len(deleted)}, kept {len(sizes)} ({sum(sizes) / 2**20:.0f} MB)")
     for w in warnings:
         print(f"tvgw prune-pcaps: WARNING {clean(w)}", file=sys.stderr)
     return 1 if warnings else 0  # a failed oneshot shows in `systemctl --failed`

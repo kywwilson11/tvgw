@@ -102,7 +102,7 @@ journalctl -u tvgw -n 20                      # firewall applies: "tvgw: applied
 journalctl -u tvgw-analyze -n 50              # the hourly TV reading, ingest and reports
 journalctl -u tvgw-verify -n 20               # one line per check, OK, WARN or FAIL
 journalctl -u tvgw-doh-update -n 20           # "tvgw: N DoH IPs loaded", or why the old list was kept
-journalctl -u tvgw-prune -n 5                 # "tvgw prune-pcaps: deleted N, kept M (X MB)" and its warnings
+journalctl -u tvgw-prune -n 5                 # "tvgw prune-pcaps: deleted N, kept M (X MB)", the finished files, and its warnings
 journalctl -u tvgw-backup -n 7                # one line per daily copy: path, size, quick_check ok
 journalctl -u tvgw-threat-update -n 5         # "tvgw threats: <file>: N names", or why the old copy was kept
 journalctl -u tvgw-dnsgate -n 20              # the feeder's start line, tcpdump's own errors
