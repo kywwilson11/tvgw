@@ -175,6 +175,17 @@ def probe_commands(tmp_path) -> list[str]:
 # ---- with the defaults nothing changes ------------------------------------------------------------------
 
 
+INPLACE_CALLS = re.compile(r"^(list tables|-s list table \w+ \w+|delete table \w+ \w+)\n", re.M)
+
+
+def inplace_calls_left_out(calls: str) -> str:
+    """(inplace) nft's calls without the looks at which tables stand, the listings for the records and the
+    deletes of tables, and with one look for the in-path half where design decision 110 made it two."""
+    calls = INPLACE_CALLS.sub("", calls)
+    look = "list chain inet tvgw_gate forward_inpath\n"
+    return calls.replace(look + look, look)
+
+
 @pytest.mark.parametrize(
     "conf",
     [
@@ -196,7 +207,10 @@ def test_with_the_probe_off_every_ruleset_is_byte_for_byte_what_the_script_befor
     and 96). (attention) The attention count, which
     came after the probe, is left out of the comparison: where the live reading is off, as here, it loads
     nothing, and its calls are a listing of its table beside the others and the delete of a table that
-    is not there, with its two keys in settings.applied."""
+    is not there, with its two keys in settings.applied. (inplace) So are the calls design decision 110
+    adds and takes away: a look at which tables stand before each table is loaded or taken away, a
+    listing after each load for its record, and no `delete table` of a table that is not there (the
+    stub's `list tables` names none); and its line that says how the tables went in."""
     new = run_apply(tmp_path / "new", conf=conf)
     monkeypatch.setattr(test_apply, "APPLY", BEFORE)
     old = run_apply(tmp_path / "old", conf=conf.replace("TV_PROBE", "#").replace("APPLY_CONFIRM", "#"))
@@ -206,7 +220,7 @@ def test_with_the_probe_off_every_ruleset_is_byte_for_byte_what_the_script_befor
         one_rule_for_both_protocols(as_before_decision_87(text, lg)) for text in scripts(tmp_path / "new")
     ]
     assert folded == scripts(tmp_path / "old")
-    assert new.stdout == old.stdout
+    assert new.stdout.replace("tvgw: load: in place\n", "") == old.stdout
     for name in ("nft.calls", "ip.calls"):
         a, b = ((tmp_path / side / "stub" / name).read_text(encoding="utf-8") for side in ("new", "old"))
         # (ports) the one call more: the in-path half's cleanup also takes the clock port's resolved chain
@@ -217,6 +231,7 @@ def test_with_the_probe_off_every_ruleset_is_byte_for_byte_what_the_script_befor
         if name == "nft.calls":  # (attention) its own calls, as the docstring says
             assert "-f -" not in [ln for ln in a.splitlines() if "tvgw_attn" in ln]
             a = "".join(ln for ln in a.splitlines(keepends=True) if "tvgw_attn" not in ln)
+            a, b = (inplace_calls_left_out(calls) for calls in (a, b))
         assert a.replace(str(tmp_path / "new"), "") == b.replace(str(tmp_path / "old"), ""), name
     assert [row[:1] for row in spool(tmp_path / "new")] == [["apply"]]
     assert not (tmp_path / "new" / "stub" / "tvgw.calls").exists()
@@ -539,8 +554,9 @@ def test_report_with_a_probe_that_passes_keeps_last_good_arms_the_timer_and_canc
         "--restore" in armed and f" 75 {tmp_path}/tvgw-apply {good} " in armed and armed.endswith(" report")
     )
     assert not (good / "armed").exists()
+    # (inplace) the table stood, made by nothing that left a record: remade, as the first apply after an install
     assert spool(tmp_path) == [
-        ["apply", spool(tmp_path)[0][1], "changed"],
+        ["apply", spool(tmp_path)[0][1], "changed", "load: remade: inet tvgw (no record of its last load)"],
         ["confirm", "report", "pass", "-"],
     ]
     assert list((tmp_path / "run" / "tvgw").glob("confirm.*")) == []

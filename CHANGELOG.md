@@ -63,6 +63,13 @@
 - **What you must do.** Nothing. Nothing the TV sends is refused or changed: only the test's own packets are.
 - For developers: `probe.WALLS`, `probe.BUDGET`, `probe.unwinding()`, `probe._owned()`, `probe._hop_answered()`; `ports_try`'s words `reset` and `expired`; `locked()` yields why a run may not go on; `control(left=)`, `_settled(left=)`, `Namespace.observe(timeout=)`, `Env.clock`, `ask(port=)`; `tvgw probe --budget`; `tcp_try` and `udp_try` are gone.
 
+### An apply changes the firewall in place, and DNS answers stay held while it runs (2026-11-17)
+
+- **What went wrong.** Every apply deleted the firewall's tables and made them again, 13 to 22 times a day on the reference gateway. The kernel drops whatever waits in a packet queue when a table goes, so each apply first switched off the holding of the TV's DNS answers (`DNSGATE_FILL=inpath`): for a few seconds no answer was held, and an answer held by a filler that was slow at that moment was lost, and the TV asked again. The namespace tier's stress test lost a lookup now and then for this reason.
+- **Now.** A table that stands as the last apply left it is changed in place: its chains are emptied and their rules written again in one step, and nothing is taken down, so the answers stay held through the apply. A table is still made again, as before, when what it holds must change (the daily DoH list on a day it changed, the test client switched on or off), when something else changed it, or when nft refuses the change; the apply says which and why, in a line `tvgw: load: in place` or `tvgw: load: remade: ...`, also kept in the change ledger's spool ([design decision 110](docs/design-decisions.md#110-a-table-that-stands-is-changed-in-place-and-an-apply-removes-a-hook-only-where-what-it-defines-changed)).
+- **What you must do.** Nothing. The first apply after this install makes the tables again once, and every later one changes them in place. The rules are the same as before; only the way they are loaded changed.
+- For developers: `tvgw-apply`'s `load_table`, `load_text`, `loaded`, `quiet_queue` and `drop_table`, the records in `/run/tvgw/loaded`, and the spool line's fifth field; `tests/unit/test_apply_inplace.py` (a model of nf_tables' objects, and every pair of test_fwcheck's variants) and `tests/virtual/test_virtual_inplace.py`.
+
 ## 0.5.0 (2026-11-14)
 
 ### Highlights

@@ -13,9 +13,10 @@ What only a kernel can say, and this module asks it:
 - a filler that is killed, stopped (SIGSTOP), or left with no table costs no later lookup: the kernel
   passes the answers itself. A stopped filler traps at most MAXLEN answers; under systemd, with the
   shipped unit's watchdog settings, it is killed and lookups answer again within seconds;
-- the kernel drops what waits in a queue when any hook is removed, by anyone; tvgw-apply, which
-  removes hooks at every run, takes the filler's switch away first, so three re-applies under load
-  lose no lookup, and the filler switches itself on again within seconds;
+- the kernel drops what waits in a queue when any hook is removed, by anyone; tvgw-apply removes none
+  where its tables stand as its last apply left them (design decision 110), so three re-applies under
+  load lose no lookup, the filler's switch stays on through them, and a filler stopped through each of
+  them loses none of what it holds;
 - a clean stop loses no lookup at all, and DNSGATE_FILL=passive takes the rules and sets away.
 
 The stand-in resolver of the gateway namespace answers a name `ip-A-B-C-D.<anything>` with A.B.C.D
@@ -665,10 +666,10 @@ def test_a_hook_removed_by_anyone_drops_what_waits_and_the_filler_carries_on(gw)
 
 
 def test_a_reapply_under_a_live_filler_keeps_the_set_and_loses_no_lookup(gw, filler):
-    """Every apply removes hooks (`delete table inet tvgw`), and the kernel drops what waits in a queue
-    when one goes. tvgw-apply takes the filler's switch away first and waits for the queue to empty, so
-    three applies under load lose nothing; while one runs, answers pass unheld, and the filler switches
-    itself on again when the last load has made its set anew."""
+    """The kernel drops what waits in a queue when a hook goes. Pass 6, L4-15: every apply removed hooks,
+    so it took the filler's switch away first and waited for the queue to empty, and one lookup in a run
+    of this test was lost now and then at the first apply. An apply changes the tables in place now and
+    removes no hook, so three applies under load lose nothing and the filler holds every answer."""
     net = gw
     assert lookup(net, "203.0.113.85") == "answer:203.0.113.85"
     load = ask_in_background(net, "--seconds", "8", "--interval", "0.003", "--timeout", "1")
@@ -679,12 +680,15 @@ def test_a_reapply_under_a_live_filler_keeps_the_set_and_loses_no_lookup(gw, fil
     out, _ = load.communicate(timeout=60)
     got = json.loads(out)
     # what the gateway saw, read before anything is judged, so that a lost lookup comes with its own
-    # numbers: what the queue dropped, and what the filler held, answered late or found gone
-    seen = {"queue": queues(net)[inpath.QUEUE], "filler": fresh_stats(net, filler, 1)}
+    # numbers: what the queue dropped, and what the filler held, answered late or found gone, once its
+    # status has caught up with every answer
+    seen = {"queue": queues(net)[inpath.QUEUE], "filler": fresh_stats(net, filler, got["answered"])}
     # as JSON: pytest shortens a long tuple, and the numbers are the whole of what a failure leaves
     assert got["lost"] == 0 and got["wrong"] == 0 and got["answered"] > 300, json.dumps(
         [got, seen], default=str
     )
+    # every answer went through the filler, those of the applies' seconds too: the switch never went off
+    assert seen["filler"]["received"] >= got["answered"], json.dumps([got, seen], default=str)
     assert "203.0.113.85" in elements(net, inpath.SET)  # `add set` kept what the filler had put in
     wait_switch(net)
     assert lookup(net, "203.0.113.86") == "answer:203.0.113.86"
@@ -697,9 +701,6 @@ def test_a_reapply_under_a_live_filler_keeps_the_set_and_loses_no_lookup(gw, fil
 DRAIN_S = int(re.search(r"^INPATH_DRAIN_S=(\d+)", vnet.APPLY.read_text(encoding="utf-8"), re.M)[1])
 
 
-@pytest.mark.xfail(
-    strict=True, reason="every apply removes hooks, so the kernel drops what a stopped filler holds"
-)
 def test_a_filler_stopped_through_each_of_three_applies_loses_no_lookup(gw, filler):
     """Pass 6, L4-14: an apply removed hooks, so it took the filler's switch away first and waited
     INPATH_DRAIN_S seconds at most (a second more as the shell counts) for the queue to empty, then removed
