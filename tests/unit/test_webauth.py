@@ -19,11 +19,17 @@ def stored() -> str:
 
 # ---- the password --------------------------------------------------------------------------------------
 def test_the_hash_checks_the_right_password_and_no_other(stored):
-    assert stored.startswith("scrypt$15$8$1$") and PASSWORD not in stored
+    assert stored.startswith("scrypt$15$8$3$") and PASSWORD not in stored  # (edges) OWASP's p for N = 2**15
     assert webauth.check_password(PASSWORD, stored)
     for wrong in ("", " ", "correct horse batterY", PASSWORD + " ", PASSWORD[:-1], "x" * 5000):
         assert not webauth.check_password(wrong, stored), wrong
     assert webauth.hash_password(PASSWORD) != stored  # a random salt each time
+
+
+def test_a_password_stored_before_p_was_three_still_verifies():
+    """(edges) A gateway's web-password file from 0.5.0 holds p = 1; the hash names its own cost."""
+    old = "scrypt$15$8$1$AAECAwQFBgcICQoLDA0ODw$xy6UCICz8Vv_P6JqOkkUD4DOmhxN0tXSe6sQAUBxupQ"
+    assert webauth.check_password(PASSWORD, old) and not webauth.check_password(PASSWORD + "!", old)
 
 
 def test_a_new_password_shorter_than_twelve_or_only_spaces_is_refused():

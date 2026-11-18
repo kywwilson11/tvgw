@@ -27,6 +27,8 @@ names nothing, so it never becomes a candidate's host name or the TV_NAME setup 
 from __future__ import annotations
 
 import contextlib
+import http.client
+import io
 import ipaddress
 import json
 import os
@@ -91,6 +93,14 @@ SAMSUNG_PROFILE = "samsung-tizen"
 # discourse, 2022), which dnsmasq refuses because /etc/hosts has it, and which must never become TV_NAME
 NOT_NAMES = frozenset({"localhost", "localhost.localdomain", "localdomain"})
 MAC_RE = re.compile(r"^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$")
+# (edges) what discovery spends on what answers it (design decision 108): the SSDP responders it follows
+# (the TV and room for a few more devices on its wire; one that answered from outside TV_NET is never
+# followed), the seconds every description, port and REST question share, and those of one description
+# however its bytes are spaced
+RESPONDERS_MAX = 16
+PROBE_DEADLINE = 60.0
+DESCRIBE_DEADLINE = 5.0
+DESCRIPTION_TAGS = ("friendlyName", "manufacturer", "modelName", "modelNumber", "modelDescription", "UDN")
 
 
 @dataclass
@@ -138,6 +148,8 @@ def parse_neigh(json_text: str) -> list[tuple[str, str, str]]:
     try:
         rows = json.loads(json_text) if json_text.strip() else []
     except ValueError:
+        return []
+    if not isinstance(rows, list):  # (edges) `true` or a number is JSON too, and not a table
         return []
     out = []
     for r in rows:
@@ -347,11 +359,19 @@ def parse_ssdp(payload: bytes) -> dict[str, str]:
 
 
 def parse_description(xml: str) -> dict[str, str]:
+    """The UPnP description's identity tags: each value from its first opening tag to the closing tag
+    after it, its spaces folded, cut at 120 characters. (edges) Found with str.find: the regular
+    expression's lazy `.*?` scanned the rest of the text again from every opening tag, so 64 KB of
+    unclosed `<UDN>` took seconds per responder."""
     out = {}
-    for tag in ("friendlyName", "manufacturer", "modelName", "modelNumber", "modelDescription", "UDN"):
-        m = re.search(rf"<{tag}>(.*?)</{tag}>", xml, re.S)
-        if m:
-            out[tag] = re.sub(r"\s+", " ", m.group(1)).strip()[:120]
+    for tag in DESCRIPTION_TAGS:
+        start = xml.find(f"<{tag}>")
+        if start < 0:
+            continue
+        start += len(tag) + 2
+        end = xml.find(f"</{tag}>", start)
+        if end >= 0:
+            out[tag] = re.sub(r"\s+", " ", xml[start:end]).strip()[:120]
     return out
 
 
@@ -424,11 +444,50 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+class _Deadline(io.RawIOBase):
+    """(edges) A socket's reads under one deadline for all of them: each read may wait only what is left."""
+
+    def __init__(self, raw: io.RawIOBase, sock: socket.socket, deadline: float):
+        self.raw, self.sock, self.deadline = raw, sock, deadline
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, b) -> int | None:
+        left = self.deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("the description took longer than its deadline")
+        self.sock.settimeout(left)
+        return self.raw.readinto(b)
+
+    def close(self) -> None:
+        self.raw.close()
+        super().close()
+
+
+class _DescriptionResponse(http.client.HTTPResponse):
+    """(edges) A response read, status line and headers included, within DESCRIBE_DEADLINE: the socket's
+    timeout is per read, so a responder that sent a byte every 2.9 s held setup for hours."""
+
+    def __init__(self, sock: socket.socket, *args, **kwargs):
+        super().__init__(sock, *args, **kwargs)
+        self.fp = io.BufferedReader(_Deadline(self.fp.detach(), sock, time.monotonic() + DESCRIBE_DEADLINE))
+
+
+class _DescriptionConnection(http.client.HTTPConnection):
+    response_class = _DescriptionResponse
+
+
+class _DescriptionHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_DescriptionConnection, req)
+
+
 def _http_only_opener() -> urllib.request.OpenerDirector:
     # built by hand: build_opener() would add file://, ftp://, data: and proxy handlers
     o = urllib.request.OpenerDirector()
     for h in (
-        urllib.request.HTTPHandler(),
+        _DescriptionHandler(),
         urllib.request.HTTPDefaultErrorHandler(),
         urllib.request.HTTPErrorProcessor(),
         urllib.request.UnknownHandler(),  # any other scheme raises URLError instead of returning None
@@ -443,7 +502,8 @@ _OPENER = _http_only_opener()
 
 def fetch_description(url: str, timeout: float = 3.0, responder_ip: str | None = None) -> dict[str, str]:
     """The UPnP description behind an SSDP LOCATION, read on a first install as root: pinned to the
-    responder when its address is given (location_ok), http only, no redirects, at most 64 KiB."""
+    responder when its address is given (location_ok), http only, no redirects, at most 64 KiB, connected
+    within `timeout` seconds and read within DESCRIBE_DEADLINE."""
     if responder_ip is not None and not location_ok(url, responder_ip):
         return {}
     if not url.startswith("http://"):
@@ -476,13 +536,21 @@ def discover(
     describe: Callable[[str], dict[str, str]] = fetch_description,
     profiles: Iterable[Profile] | None = None,
     rest: Callable[[str], Any] | None = None,
+    *,
+    tv_net: str,
+    clock: Callable[[], float] = time.monotonic,
 ) -> list[Candidate]:
     """Merge every source into one candidate per address on the TV side, the gateway excluded, each
     with the profile assign() gives it among `profiles` (the bundled ones by default). (samsung) `rest` is
     Samsung's REST question (tizen.identify on the live system), asked of a device another signal names
-    Samsung; without it nothing is asked and no Samsung profile is assigned."""
+    Samsung; without it nothing is asked and no Samsung profile is assigned. (edges) An SSDP responder
+    outside `tv_net` is never followed, at most RESPONDERS_MAX are (those the lease or the neighbour
+    table already names first), and nothing more is fetched or probed once PROBE_DEADLINE has passed:
+    a forged answer could otherwise make the gateway, as root, fetch from any host and probe nine of its
+    ports, and enough of them stall setup for half an hour."""
     by_ip: dict[str, Candidate] = {}
     profiles = bundled_profiles() if profiles is None else tuple(profiles)
+    deadline = clock() + PROBE_DEADLINE
 
     def cand(ip: str) -> Candidate:
         return by_ip.setdefault(ip, Candidate(ip=ip))
@@ -503,11 +571,14 @@ def discover(
         c = cand(ip)
         c.mac = c.mac or mac
         c.evidence.append(f"neighbour table ({state or 'seen'})")
-    for ip, hdr in (ssdp(gw_ip) if ssdp else {}).items():
+    answered = ssdp(gw_ip) if ssdp else {}
+    followed = sorted((ip for ip in answered if _inside(ip, tv_net)), key=lambda ip: ip not in by_ip)
+    for ip in followed[:RESPONDERS_MAX]:
+        hdr = answered[ip]
         c = cand(ip)
         loc = hdr.get("location", "")
         # the description is fetched only from the address that answered (see location_ok)
-        desc = describe(loc) if loc and location_ok(loc, ip) else {}
+        desc = describe(loc) if loc and location_ok(loc, ip) and clock() < deadline else {}
         c.model = desc.get("modelName") or desc.get("modelNumber") or c.model
         if desc.get("manufacturer"):
             c.vendor = c.vendor or desc["manufacturer"].split()[0]
@@ -520,16 +591,26 @@ def discover(
             c.evidence.append("SSDP LOCATION points off-device; not fetched")
     by_ip.pop(gw_ip, None)
     for c in by_ip.values():
-        sig, ev = fingerprint(c.ip, probe, c.open_ports)
-        c.evidence += ev
+        sig = None
+        if clock() < deadline:
+            sig, ev = fingerprint(c.ip, probe, c.open_ports)
+            c.evidence += ev
+        else:
+            c.evidence.append(f"not probed: discovery's {PROBE_DEADLINE:.0f} s were spent")
         hint = hostname_hint(c.hostname) if c.hostname else None
         for s in (sig, hint):
             if s:
                 c.vendor, c.platform = c.vendor or s[0], c.platform or s[1]
-        if rest is not None and _asks_samsung(c):
+        if rest is not None and _asks_samsung(c) and clock() < deadline:
             _ask_samsung(c, rest)
         c.profile = assign(c, profiles).profile  # (profile) on evidence only
     return sorted(by_ip.values(), key=lambda c: (c.profile is None, c.ip))
+
+
+def _inside(ip: str, net: str) -> bool:
+    """(edges) Whether the address `ip`, as a socket reports a sender, is in the network `net` (TV_NET,
+    which config.load has checked)."""
+    return ipaddress.ip_address(ip) in ipaddress.ip_network(net)
 
 
 def _asks_samsung(c: Candidate) -> bool:
@@ -559,14 +640,16 @@ def _ask_samsung(c: Candidate, rest: Callable[[str], Any]) -> None:
 GUARD_TABLE = ("inet", "tvgw_guard")
 
 
-def _ssdp_with_exemption(iface: str):
+def _ssdp_with_exemption(iface: str, tv_net: str):
     """The gateway's own output chain drops the Pi's multicast chatter into the TV subnet (by design),
     which also stops an SSDP search, and its input chains drop what the TV sends to any other port of
     the Pi, which stops the answers: they come back by unicast from the TV to the search socket, a flow
     conntrack cannot tie to a search sent to the multicast group. Open exactly those holes for the
     duration of the search, in each table that is loaded, and close them all again whatever happens.
     The input hole goes at the head of inet tvgw's input chain and of the guard's: the guard runs
-    after inet tvgw, and without inet tvgw (a first install) it is the only input chain there is."""
+    after inet tvgw, and without inet tvgw (a first install) it is the only input chain there is.
+    (edges) Ahead of both chains' source check, so it names the TV subnet itself: without it, a datagram
+    with a forged source address reached the search socket."""
 
     def search(bind_ip: str) -> dict[str, dict[str, str]]:
         rule = [
@@ -603,6 +686,9 @@ def _ssdp_with_exemption(iface: str):
                         "iifname",
                         iface,
                         "ip",
+                        "saddr",
+                        tv_net,
+                        "ip",
                         "daddr",
                         bind_ip,
                         "udp",
@@ -638,8 +724,10 @@ def _ssdp_with_exemption(iface: str):
     return search
 
 
-def gather(iface: str, gw_ip: str, leases_path: str = LEASES, with_ssdp: bool = True) -> list[Candidate]:
-    """discover() on the live system."""
+def gather(
+    iface: str, gw_ip: str, leases_path: str = LEASES, with_ssdp: bool = True, *, tv_net: str
+) -> list[Candidate]:
+    """discover() on the live system, on the TV subnet `tv_net` (TV_NET)."""
     try:
         with open(leases_path, encoding="utf-8", errors="replace") as fh:
             leases = fh.read()
@@ -651,8 +739,9 @@ def gather(iface: str, gw_ip: str, leases_path: str = LEASES, with_ssdp: bool = 
         leases_text=leases,
         neigh_json=run_cmd(["ip", "-j", "neigh", "show", "dev", iface]),
         journal_text=run_cmd(["journalctl", "-u", "dnsmasq", "--no-pager", "-o", "cat", "-n", "2000"]),
-        ssdp=_ssdp_with_exemption(iface) if with_ssdp else None,
+        ssdp=_ssdp_with_exemption(iface, tv_net) if with_ssdp else None,
         rest=tizen.identify,
+        tv_net=tv_net,
     )
 
 

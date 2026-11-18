@@ -33,7 +33,7 @@ GATHER = (
     "import dataclasses, json, sys\n"
     "sys.path.insert(0, sys.argv[1])\n"
     "from tvgw import discover\n"
-    "found = discover.gather(sys.argv[4], sys.argv[2], leases_path=sys.argv[3], with_ssdp=False)\n"
+    "found = discover.gather(sys.argv[4], sys.argv[2], leases_path=sys.argv[3], with_ssdp=False, tv_net=sys.argv[5])\n"
     "print(json.dumps([dataclasses.asdict(c) for c in found]))\n"
 )
 
@@ -60,6 +60,7 @@ def found(net) -> list[discover.Candidate]:
         vnet.GW_TV,
         str(leases),
         vnet.TV_IF,
+        config.Settings().tv_net,  # the general profile's scenario keeps the template's TV subnet
     )
     # the neighbour table may also hold the TV's other addresses, from the matrix's alias probes
     return [discover.Candidate(**c) for c in json.loads(got.stdout) if c["ip"] == vnet.TV_IP]

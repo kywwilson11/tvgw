@@ -266,7 +266,9 @@ def test_prune_pcaps_on_the_fixture_deletes_nothing_and_says_so(conf, gateway, c
     monkeypatch.setattr(shutil, "disk_usage", lambda path: types.SimpleNamespace(free=1 << 40))
     assert cli.main(["--conf", str(conf), "prune-pcaps"]) == 0
     out = capsys.readouterr()
-    assert lines(out.out) == ["tvgw prune-pcaps: deleted 0, kept 2 (0 MB)"] and out.err == ""
+    assert (
+        lines(out.out) == ["tvgw prune-pcaps: deleted 0, kept 1 (0 MB)"] and out.err == ""
+    )  # (edges) live out
     assert sorted(os.listdir(gateway.pcap_dir)) == ["tv-20261026-0800.pcap", "tv-20261026-0900.pcap"]
 
 

@@ -1,6 +1,11 @@
 """TV discovery: every source is parsed from captured text and the network is a fake."""
 
+import contextlib
 import json
+import socket
+import threading
+import time
+from collections.abc import Callable
 
 import pytest
 
@@ -27,6 +32,9 @@ XML = """<?xml version="1.0"?><root xmlns="urn:schemas-upnp-org:device-1-0"><dev
 <deviceType>urn:schemas-upnp-org:device:Basic:1</deviceType><friendlyName>[LG] webOS TV OLED55CXPUA</friendlyName>
 <manufacturer>LG Electronics</manufacturer><modelName>OLED55CXPUA</modelName><modelNumber>
   1.0 </modelNumber><UDN>uuid:abc</UDN></device></root>"""
+
+
+TV_NET = "10.10.10.0/24"
 
 
 def lg_ports(ip, port):
@@ -79,6 +87,7 @@ def test_discover_merges_sources_and_excludes_the_gateway():
     cands = disc.discover(
         "eth0",
         "10.10.10.1",
+        tv_net=TV_NET,
         leases_text=LEASES,
         neigh_json=NEIGH,
         journal_text=JOURNAL,
@@ -112,7 +121,7 @@ def test_discover_merges_sources_and_excludes_the_gateway():
 
 
 def test_discover_without_a_network_still_lists_leases():
-    cands = disc.discover("eth0", "10.10.10.1", leases_text=LEASES, probe=lambda ip, p: False)
+    cands = disc.discover("eth0", "10.10.10.1", tv_net=TV_NET, leases_text=LEASES, probe=lambda ip, p: False)
     assert [c.ip for c in cands] == ["10.10.10.12", "10.10.10.17"]  # no profile either: by address
     # (profile) the announced host name alone names the vendor, never the profile (design decision 62)
     lg = cands[1]
@@ -215,7 +224,7 @@ def test_discover_records_the_ports_and_targets_it_assigns_by():
         "10.10.10.17": {**disc.parse_ssdp(SSDP), "st": "upnp:rootdevice " + disc.SSDP_SIGNATURES[0][0]}
     }
     cands = disc.discover(
-        "eth0", "10.10.10.1", leases_text=LEASES, journal_text=JOURNAL, probe=lg_ports,
+        "eth0", "10.10.10.1", tv_net=TV_NET, leases_text=LEASES, journal_text=JOURNAL, probe=lg_ports,
         ssdp=lambda ip: targets, describe=lambda url: disc.parse_description(XML),
     )  # fmt: skip
     tv = next(c for c in cands if c.ip == "10.10.10.17")
@@ -224,7 +233,7 @@ def test_discover_records_the_ports_and_targets_it_assigns_by():
         disc.SSDP_SIGNATURES[0][0],
     ]
     assert tv.profile == "lg-webos"
-    alone = disc.discover("eth0", "10.10.10.1", leases_text=LEASES, probe=lambda ip, p: False,
+    alone = disc.discover("eth0", "10.10.10.1", tv_net=TV_NET, leases_text=LEASES, probe=lambda ip, p: False,
                           ssdp=lambda ip: targets, describe=lambda url: {})  # fmt: skip
     assert next(c for c in alone if c.ip == "10.10.10.17").profile == "lg-webos"  # the target alone
     roku = next(c for c in cands if c.ip == "10.10.10.12")
@@ -326,14 +335,18 @@ def test_cli_discover_json_and_write(monkeypatch, tmp_path, capsys):
         profile="lg-webos",
         evidence=["DHCP lease"],
     )
-    monkeypatch.setattr(disc, "gather", lambda iface, gw_ip, with_ssdp=True: [tv])
+    asked = []
+    monkeypatch.setattr(
+        disc, "gather", lambda iface, gw_ip, with_ssdp=True, tv_net=None: asked.append(tv_net) or [tv]
+    )
     assert cli.main(["--conf", str(conf), "discover", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)[0]["profile"] == "lg-webos"
+    assert asked == [TV_NET]  # (edges) the settings' TV subnet: the template's here
     assert cli.main(["--conf", str(conf), "discover", "--write", "--yes"]) == 0
     out = capsys.readouterr().out
     assert "wrote TV_MAC, TV_IP, TV_NAME, PROFILE" in out
     assert "TV_MAC=b4:b2:91:aa:bb:cc" in conf.read_text() and "TV_NAME=lgwebostv" in conf.read_text()
-    monkeypatch.setattr(disc, "gather", lambda iface, gw_ip, with_ssdp=True: [])
+    monkeypatch.setattr(disc, "gather", lambda iface, gw_ip, with_ssdp=True, tv_net=None: [])
     assert cli.main(["--conf", str(conf), "discover"]) == 1
     assert "no device found" in capsys.readouterr().out
 
@@ -346,13 +359,13 @@ def test_cli_discover_write_leaves_the_profile_on_one_signal_and_names_the_vendo
     conf = tmp_path / "tvgw.conf"
     conf.write_text("TV_MAC=00:00:00:00:00:00\nPROFILE=generic-tv\n")
     tv = disc.Candidate(ip="10.10.10.17", mac="02:00:00:00:00:17", vendor="Samsung", platform="Tizen")
-    monkeypatch.setattr(disc, "gather", lambda iface, gw_ip, with_ssdp=True: [tv])
+    monkeypatch.setattr(disc, "gather", lambda iface, gw_ip, with_ssdp=True, tv_net=None: [tv])
     assert cli.main(["--conf", str(conf), "discover", "--write", "--yes"]) == 0
     out = capsys.readouterr().out
     assert "wrote TV_MAC, TV_IP, TV_NAME to" in out and "PROFILE=generic-tv" in conf.read_text()
     assert "PROFILE was left as it was; if it is a Samsung TV, set PROFILE=samsung-tizen" in out
     cast = disc.Candidate(ip="10.10.10.17", mac="02:00:00:00:00:17", vendor="Google", platform="Cast")
-    monkeypatch.setattr(disc, "gather", lambda iface, gw_ip, with_ssdp=True: [cast])
+    monkeypatch.setattr(disc, "gather", lambda iface, gw_ip, with_ssdp=True, tv_net=None: [cast])
     assert cli.main(["--conf", str(conf), "discover", "--write", "--yes"]) == 0
     out = capsys.readouterr().out
     assert "PROFILE was left as it was (docs/project/adding-a-profile.md)" in out and "set PROFILE" not in out
@@ -365,7 +378,7 @@ def test_cli_discover_refuses_to_guess_between_several_without_a_terminal(monkey
         disc.Candidate(ip="10.10.10.17", mac="b4:b2:91:aa:bb:cc"),
         disc.Candidate(ip="10.10.10.12", mac="02:11:22:33:44:55"),
     ]
-    monkeypatch.setattr(disc, "gather", lambda iface, gw_ip, with_ssdp=True: two)
+    monkeypatch.setattr(disc, "gather", lambda iface, gw_ip, with_ssdp=True, tv_net=None: two)
     monkeypatch.setattr("sys.stdin", type("S", (), {"isatty": staticmethod(lambda: False)})())
     with pytest.raises(SystemExit, match="several devices"):
         cli.main(["--conf", str(conf), "discover", "--write"])
@@ -429,7 +442,7 @@ def test_redirects_are_refused_and_the_opener_speaks_only_http():
     assert disc._NoRedirect().redirect_request(None, None, 302, "Found", {}, "http://10.10.10.1/") is None
     kinds = {type(h).__name__ for h in disc._OPENER.handlers}
     assert "FileHandler" not in kinds and "HTTPSHandler" not in kinds and "ProxyHandler" not in kinds
-    assert "HTTPHandler" in kinds and "_NoRedirect" in kinds
+    assert "_DescriptionHandler" in kinds and "_NoRedirect" in kinds  # (edges) http, under one deadline
     # a file:// URL is an "unknown url type" to this opener, which fetch_description turns into nothing
     with pytest.raises(OSError):
         disc._OPENER.open("file:///etc/hostname", timeout=1)
@@ -444,6 +457,7 @@ def test_discover_does_not_fetch_a_location_that_points_elsewhere():
     cands = disc.discover(
         "eth0",
         "10.10.10.1",
+        tv_net=TV_NET,
         leases_text=LEASES,
         probe=lambda ip, port: False,
         ssdp=lambda bind_ip: {"10.10.10.17": hdr},
@@ -499,12 +513,12 @@ def test_the_ssdp_exemption_lets_the_answers_in_and_closes_both_ways(monkeypatch
         return {"10.10.10.17": {"location": "http://10.10.10.17:1140/description.xml"}}
 
     monkeypatch.setattr(disc, "ssdp_search", search)
-    assert disc._ssdp_with_exemption("eth0")("10.10.10.1") == {
+    assert disc._ssdp_with_exemption("eth0", TV_NET)("10.10.10.1") == {
         "10.10.10.17": {"location": "http://10.10.10.17:1140/description.xml"}
     }
     assert seen["output"] == ["oifname eth0 udp dport 1900 counter accept comment tvgw-discover"]
     assert seen["input"] == [
-        "iifname eth0 ip daddr 10.10.10.1 udp dport 54321 counter accept comment tvgw-discover"
+        "iifname eth0 ip saddr 10.10.10.0/24 ip daddr 10.10.10.1 udp dport 54321 counter accept comment tvgw-discover"
     ]
     assert nft.rules == {}  # both closed again
 
@@ -521,7 +535,7 @@ def test_without_the_firewall_the_search_runs_with_no_exemption(monkeypatch):
         return {}
 
     monkeypatch.setattr(disc, "ssdp_search", search)
-    assert disc._ssdp_with_exemption("eth0")("10.10.10.1") == {} and nft.rules == {}
+    assert disc._ssdp_with_exemption("eth0", TV_NET)("10.10.10.1") == {} and nft.rules == {}
     assert calls == [None]
 
 
@@ -569,7 +583,7 @@ def test_discover_replaces_the_settings_file_whole_and_keeps_its_mode(monkeypatc
     conf.chmod(0o640)
     before = os.stat(conf).st_ino
     tv = disc.Candidate(ip="10.10.10.17", mac="b4:b2:91:aa:bb:cc", hostname="LGwebOSTV", profile="lg-webos")
-    monkeypatch.setattr(disc, "gather", lambda iface, gw_ip, with_ssdp=True: [tv])
+    monkeypatch.setattr(disc, "gather", lambda iface, gw_ip, with_ssdp=True, tv_net=None: [tv])
     assert cli.main(["--conf", str(conf), "discover", "--write", "--yes"]) == 0
     st = os.stat(conf)
     assert st.st_ino != before and stat.S_IMODE(st.st_mode) == 0o640
@@ -600,8 +614,8 @@ def test_the_answer_hole_is_opened_in_the_guard_as_well_and_closed_with_the_rest
         return {}
 
     monkeypatch.setattr(disc, "ssdp_search", search)
-    disc._ssdp_with_exemption("eth0")("10.10.10.1")
-    hole = "iifname eth0 ip daddr 10.10.10.1 udp dport 54321 counter accept comment tvgw-discover"
+    disc._ssdp_with_exemption("eth0", TV_NET)("10.10.10.1")
+    hole = "iifname eth0 ip saddr 10.10.10.0/24 ip daddr 10.10.10.1 udp dport 54321 counter accept comment tvgw-discover"
     assert seen == {
         "tvgw": [hole],
         "guard": [hole],
@@ -623,9 +637,9 @@ def test_with_only_the_guard_loaded_a_first_install_still_hears_the_answers(monk
         return {}
 
     monkeypatch.setattr(disc, "ssdp_search", search)
-    disc._ssdp_with_exemption("eth0")("10.10.10.1")
+    disc._ssdp_with_exemption("eth0", TV_NET)("10.10.10.1")
     assert seen["guard"] == [
-        "iifname eth0 ip daddr 10.10.10.1 udp dport 54321 counter accept comment tvgw-discover"
+        "iifname eth0 ip saddr 10.10.10.0/24 ip daddr 10.10.10.1 udp dport 54321 counter accept comment tvgw-discover"
     ]
     assert nft.rules == {}
 
@@ -683,7 +697,7 @@ def answering(kind: str, asked: list | None = None):
 
 def find(**kw) -> disc.Candidate:
     kw.setdefault("probe", lambda ip, p: False)
-    (c,) = [c for c in disc.discover("eth0", "10.10.10.1", **kw) if c.ip == "10.10.10.17"]
+    (c,) = [c for c in disc.discover("eth0", "10.10.10.1", tv_net=TV_NET, **kw) if c.ip == "10.10.10.17"]
     return c
 
 
@@ -798,9 +812,172 @@ def test_a_udn_that_changes_at_every_boot_changes_nothing():
 
 
 def test_the_live_gather_asks_with_the_hourly_readings_get(monkeypatch):
-    """gather() hands discover the reader's identify, the one GET to /api/v2/."""
+    """gather() hands discover the reader's identify, the one GET to /api/v2/, and (edges) the TV subnet."""
     got = {}
     monkeypatch.setattr(disc, "discover", lambda *a, **k: got.update(k) or [])
     monkeypatch.setattr(disc, "run_cmd", lambda cmd: "")
-    disc.gather("eth0", "10.10.10.1", leases_path="/nonexistent", with_ssdp=False)
-    assert got["rest"] is tizen.identify
+    disc.gather("eth0", "10.10.10.1", leases_path="/nonexistent", with_ssdp=False, tv_net=TV_NET)
+    assert got["rest"] is tizen.identify and got["tv_net"] == TV_NET
+
+
+def test_the_live_search_opens_its_answer_hole_to_the_tv_subnet_alone(monkeypatch):
+    """(edges) The hole sits ahead of the input chains' source check: it names TV_NET itself."""
+    got, nft = {}, FakeNft()
+    monkeypatch.setattr(disc, "discover", lambda *a, **k: got.update(k) or [])
+    monkeypatch.setattr(disc, "run_cmd", nft)
+    disc.gather("eth0", "10.10.10.1", leases_path="/nonexistent", tv_net=TV_NET)
+    holes = []
+    monkeypatch.setattr(
+        disc, "ssdp_search", lambda ip, on_bound: on_bound(54321) or holes.extend(nft.chain("input")) or {}
+    )
+    got["ssdp"]("10.10.10.1")
+    assert holes == [
+        "iifname eth0 ip saddr 10.10.10.0/24 ip daddr 10.10.10.1 udp dport 54321 counter accept comment tvgw-discover"
+    ]
+
+
+# ---- (edges) what discovery spends on what answers it (design decision 108) -----------------------------
+
+
+@pytest.mark.parametrize("text", ["true", "1", "null", '"eth0"', "{}"])
+def test_neighbour_json_that_is_not_a_table_is_no_neighbour(text):
+    """`true` is JSON too: parse_neigh iterated it and raised TypeError."""
+    assert disc.parse_neigh(text) == []
+
+
+@pytest.mark.parametrize("tag", disc.DESCRIPTION_TAGS)
+def test_a_description_of_unclosed_tags_parses_at_once(tag):
+    """The lazy `.*?` scanned the rest of the text from every opening tag: 64 KB of unclosed `<UDN>`
+    took 2.3 s, and of `<friendlyName>` 0.9 s, per responder."""
+    flood = f"<{tag}>" * (65536 // (len(tag) + 2))
+    started = time.perf_counter()
+    assert disc.parse_description(flood) == {}
+    assert time.perf_counter() - started < 0.05
+    assert disc.parse_description(flood + "x" * 200 + f"</{tag}>") == {
+        tag: (flood + "x" * 200)[len(tag) + 2 :][:120]
+    }
+
+
+def test_a_description_value_is_its_first_tag_folded_and_cut():
+    xml = (
+        "<UDN>a</UDN><modelName> two\n  words </modelName><UDN>b</UDN><manufacturer>"
+        + "m" * 200
+        + "</manufacturer>"
+    )
+    assert disc.parse_description(xml) == {"UDN": "a", "modelName": "two words", "manufacturer": "m" * 120}
+    assert disc.parse_description("a closing tag alone</UDN>") == {}
+    assert disc.parse_description("</UDN><UDN>late</UDN>") == {
+        "UDN": "late"
+    }  # a closing tag before counts not
+
+
+def http_server(send: Callable[[socket.socket], None]) -> str:
+    """The URL of a one-connection HTTP server on 127.0.0.1 that reads the request and runs `send`."""
+    srv = socket.create_server(("127.0.0.1", 0))
+
+    def run() -> None:
+        with srv, srv.accept()[0] as conn:
+            conn.recv(4096)
+            with contextlib.suppress(OSError):  # the client may have gone
+                send(conn)
+
+    threading.Thread(target=run, daemon=True).start()
+    return f"http://127.0.0.1:{srv.getsockname()[1]}/description.xml"
+
+
+def test_a_description_read_byte_by_byte_is_given_up_at_its_deadline(monkeypatch):
+    """The 3 s timeout was per read: a responder that sends a byte every 2.9 s held setup for hours. The
+    status line and headers are under the same deadline as the body."""
+    assert disc.DESCRIBE_DEADLINE == 5.0  # the documented 5 seconds; this test waits a tenth of it
+    monkeypatch.setattr(disc, "DESCRIBE_DEADLINE", 0.5)
+
+    def drip(conn: socket.socket) -> None:
+        for byte in b"HTTP/1.0 200 OK\r\nContent-Type: text/xml\r\n\r\n" + XML.encode():
+            conn.send(bytes([byte]))
+            time.sleep(0.05)
+
+    def stall(conn: socket.socket) -> None:  # a read in progress at the deadline is cut there too
+        conn.send(b"HTTP/1.0 200 OK\r\n")
+        time.sleep(2.5)
+
+    for send in (drip, stall):
+        started = time.monotonic()
+        assert disc.fetch_description(http_server(send)) == {}
+        assert time.monotonic() - started < 1.5, send.__name__
+
+
+def test_a_description_is_read_whole_from_a_server_that_keeps_the_connection(monkeypatch):
+    body = XML.encode()
+
+    def send(conn: socket.socket) -> None:
+        conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
+        time.sleep(3)  # open, as an HTTP/1.1 server may keep it
+
+    started = time.monotonic()
+    assert disc.fetch_description(http_server(send))["modelName"] == "OLED55CXPUA"
+    assert time.monotonic() - started < 1
+    assert disc.fetch_description(http_server(lambda c: c.sendall(b"HTTP/1.0 404 Not Found\r\n\r\n"))) == {}
+
+
+def forged(n: int, net: str = "198.51.100", first: int = 1) -> dict[str, dict[str, str]]:
+    """`n` SSDP answers from `net`.`first` up, each pointing at itself, as the lane's repro forged them."""
+    ips = (f"{net}.{i}" for i in range(first, first + n))
+    return {ip: {"location": f"http://{ip}/d.xml", "st": "upnp:rootdevice"} for ip in ips}
+
+
+def test_an_answer_from_outside_the_tv_subnet_is_never_fetched_or_probed():
+    """Every responder was followed: 201 answers forged from outside 10.10.10.0/24 made 201 candidates,
+    1,809 connects and 201 GETs as root, such as http://203.0.113.9:8080/setup.cgi?reboot=1."""
+    probed, fetched = [], []
+    cands = disc.discover(
+        "eth0", "10.10.10.1", tv_net=TV_NET, leases_text=LEASES, ssdp=lambda gw: forged(201),
+        probe=lambda ip, port: probed.append(ip) or False, describe=lambda url: fetched.append(url) or {},
+    )  # fmt: skip
+    assert sorted(c.ip for c in cands) == ["10.10.10.12", "10.10.10.17"] and fetched == []
+    assert set(probed) == {"10.10.10.12", "10.10.10.17"}
+
+
+def test_at_most_sixteen_answers_are_followed_the_leased_ones_first():
+    fetched = []
+    answers = {
+        **forged(40, "10.10.10", first=100),
+        "10.10.10.17": {"location": "http://10.10.10.17:1140/d.xml"},
+    }
+    cands = disc.discover(
+        "eth0", "10.10.10.1", tv_net=TV_NET, leases_text=LEASES, ssdp=lambda gw: answers,
+        probe=lambda ip, port: False, describe=lambda url: fetched.append(url) or {},
+    )  # fmt: skip
+    # the TV answered last, and is followed first: the lease file names it
+    assert fetched[0] == "http://10.10.10.17:1140/d.xml" and len(fetched) == 16
+    assert len(cands) == 2 + 15  # the two leases, and the other 15 answers
+
+
+def test_nothing_is_fetched_probed_or_asked_once_the_probe_phase_has_spent_its_minute():
+    """Nine 1 s connects and a description for each of 16 responders could hold setup for minutes. The
+    clock is checked before each description and each device; a device that started is finished."""
+    now = [0.0]
+    probed, fetched, asked = [], [], []
+
+    def spend(seconds: float, log: list, item):
+        log.append(item)
+        now[0] += seconds
+
+    samsungs = {
+        ip: {**hdr, "server": "Samsung UPnP SDK/1.0"} for ip, hdr in forged(12, "10.10.10", 100).items()
+    }
+    run = dict(
+        tv_net=TV_NET, ssdp=lambda gw: samsungs, clock=lambda: now[0], rest=lambda ip: spend(0, asked, ip)
+    )
+    cands = disc.discover(
+        "eth0", "10.10.10.1", probe=lambda ip, port: False, describe=lambda url: spend(10, fetched, url) or {}, **run
+    )  # fmt: skip
+    assert len(fetched) == 6 and asked == []  # 60 s of descriptions: the seventh would start at the minute
+    assert [c.evidence[-1] for c in cands] == ["not probed: discovery's 60 s were spent"] * 12
+    now[0] = 0.0
+    cands = disc.discover(
+        "eth0", "10.10.10.1", probe=lambda ip, port: spend(10 if port == 3000 else 0, probed, ip) or False,
+        describe=lambda url: {}, **run,
+    )  # fmt: skip
+    assert len(set(probed)) == 6  # 10 s of ports a device; the seventh would start at the minute
+    assert asked == sorted(set(probed))[:5]  # the sixth's ports end at the minute: no REST question after
+    assert sum(c.evidence[-1].startswith("not probed") for c in cands) == 6

@@ -606,20 +606,34 @@ def test_the_capture_reads_its_tv_side_from_the_drop_in_install_writes():
     and ${GW_IP} from the drop-in install.sh writes from the checked settings, before the units are
     reloaded and the capture is restarted."""
     (value,) = [v for k, v in exec_lines("tvgw-pcap.service") if k == "ExecStart"]
-    assert set(re.findall(r"\$\{([A-Z_]+)\}", value)) == {"TV_IF", "TV_NET", "GW_IP"}
+    # (edges) and the ring the same drop-in holds (design decision 108)
+    assert set(re.findall(r"\$\{([A-Z_]+)\}", value)) == {
+        "TV_IF",
+        "TV_NET",
+        "GW_IP",
+        "PCAP_RING_KB",
+        "PCAP_RING_FILES",
+    }
     assert value.startswith("/usr/bin/dumpcap -i ${TV_IF} ")  # (capture) dumpcap in place of tcpdump
     assert "ip src net ${TV_NET} and not ip src host ${GW_IP} and (" in value
     write = INSTALL.index(">/etc/systemd/system/tvgw-pcap.service.d/tv-side.conf")
-    assert INSTALL.index("tv_side || die") < write < INSTALL.index("restart_changed tvgw-pcap")
+    # (edges) the ring is worked out before the units that need it are installed: a settings file
+    # `tvgw pcap-ring` refuses stops the install with the old units and drop-ins, which agree
+    ring = INSTALL.index("RING=$(tvgw pcap-ring)")
+    assert INSTALL.index("tv_side || die") < ring < INSTALL.index("install -m 644 systemd/*.service") < write
+    assert write < INSTALL.index("restart_changed tvgw-pcap")
     assert write < INSTALL.index("systemctl daemon-reload", write)
 
 
 @needs_bash
 def test_the_drop_in_holds_the_settings_tv_side(tmp_path):
-    start = INSTALL.index("install -d /etc/systemd/system/tvgw-pcap.service.d\n")
-    end = INSTALL.index("tv-side.conf\n", start) + len("tv-side.conf\n")
+    start = INSTALL.index("install -d /etc/systemd/system/tvgw-pcap.service.d ")
+    end = INSTALL.index("ring.conf\n", start) + len("ring.conf\n")
     step = INSTALL[start:end].replace("/etc/systemd/system/", f"{tmp_path}/")
     env = {"PATH": os.environ["PATH"], "TV_IF": "enp1s0", "TV_NET": "10.20.30.0/24", "GW_IP": "10.20.30.1"}
-    subprocess.run([BASH, "-euo", "pipefail", "-c", step], env=env, check=True)
+    ring = "PCAP_RING_FILES=74 PCAP_RING_KB=7084"  # (edges) `tvgw pcap-ring`'s line
+    subprocess.run([BASH, "-euo", "pipefail", "-c", step], env={**env, "RING": ring}, check=True)
     text = (tmp_path / "tvgw-pcap.service.d" / "tv-side.conf").read_text(encoding="utf-8")
-    assert text == "[Service]\nEnvironment=TV_IF=enp1s0 TV_NET=10.20.30.0/24 GW_IP=10.20.30.1\n"
+    assert text == f"[Service]\nEnvironment=TV_IF=enp1s0 TV_NET=10.20.30.0/24 GW_IP=10.20.30.1 {ring}\n"
+    headers = (tmp_path / "tvgw-pcap-headers.service.d" / "ring.conf").read_text(encoding="utf-8")
+    assert headers == f"[Service]\nEnvironment={ring}\n"

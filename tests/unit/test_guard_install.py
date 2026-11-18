@@ -253,7 +253,10 @@ def test_a_hole_left_in_the_live_guard_is_closed_by_the_next_deploy(tmp_path):
     (state / "live").write_text(loaded, encoding="utf-8")
     rc, err, calls = run(tmp_path, "guard_load")  # live equals what the unit loaded: left alone
     assert rc == 0 and "systemctl reload-or-restart tvgw-guard.service" not in calls, err
-    hole = '\t\tiifname "eth0" ip daddr 10.10.10.1 udp dport 41234 counter accept comment "tvgw-discover"\n'
+    hole = (
+        '\t\tiifname "eth0" ip saddr 10.10.10.0/24 ip daddr 10.10.10.1 udp dport 41234 counter accept'
+        ' comment "tvgw-discover"\n'
+    )
     (state / "live").write_text(loaded.replace("input {\n", "input {\n" + hole), encoding="utf-8")
     rc, err, calls = run(tmp_path, "guard_load")
     assert rc == 0 and "systemctl reload-or-restart tvgw-guard.service" in calls, err

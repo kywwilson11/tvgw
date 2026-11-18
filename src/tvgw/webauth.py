@@ -22,9 +22,10 @@ from dataclasses import dataclass
 
 MIN_PASSWORD = 12  # characters
 MAX_PASSWORD = 1024  # characters: longer is refused before any hashing (the form's body is 4 KB anyway)
-# scrypt's cost: N = 2**15, r = 8, p = 1 takes 32 MiB and one core for a moment per check. The hash keeps
-# its own parameters, so a later version can raise them and still read an older file
-SCRYPT_LOG_N, SCRYPT_R, SCRYPT_P = 15, 8, 1
+# scrypt's cost: N = 2**15, r = 8 takes 32 MiB for a moment per check, and p = 3 three times the work of
+# p = 1, the least OWASP gives for that N (edges, design decision 108). The hash keeps its own parameters,
+# so a password stored with p = 1 still verifies, and the new cost applies at the next `tvgw web password`
+SCRYPT_LOG_N, SCRYPT_R, SCRYPT_P = 15, 8, 3
 SCRYPT_MAXMEM = 64 * 2**20  # OpenSSL's default ceiling is 32 MiB, which N = 2**15, r = 8 just passes
 # what a hash file may ask for: a file edited to ask for more would make each check a denial of service
 LOG_N_RANGE, R_RANGE, P_RANGE = range(14, 21), range(1, 17), range(1, 5)

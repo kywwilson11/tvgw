@@ -844,7 +844,8 @@ def test_the_hourly_prune_deletes_the_capture_a_forget_named_once_it_is_read(tre
     conn.close()
     monkeypatch.setattr(pcaps, "live_files", lambda pcap_dir: {str(new)})
     assert cli.cmd_prune_pcaps(None, tree, None) == 0
-    assert capsys.readouterr().out.startswith("tvgw prune-pcaps: deleted 1, kept 1 ")
+    # (edges) kept counts the finished files: the one left is the live file
+    assert capsys.readouterr().out.startswith("tvgw prune-pcaps: deleted 1, kept 0 ")
     assert not held.exists() and new.exists()
 
 

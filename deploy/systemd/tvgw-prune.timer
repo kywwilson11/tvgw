@@ -1,8 +1,11 @@
 [Unit]
-Description=LG TV gateway: prune old pcaps hourly
+Description=LG TV gateway: prune old pcaps every 5 minutes
 
 [Timer]
-OnCalendar=hourly
+# (edges) every 5 minutes (design decision 108): files the capture's ring overwrote in a flood are
+# reported, and PCAP_MAX_GB and the free-space floor applied, within minutes rather than at the next
+# hour. A run lists the capture directory and reads the store; it never writes the store
+OnCalendar=*:0/5
 Persistent=true
 
 [Install]

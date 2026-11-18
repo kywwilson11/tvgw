@@ -290,21 +290,44 @@ def restore_check(
     which: Callable[[str], str | None] = shutil.which,
     run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
     scratch_root: str | None = None,
+    statvfs: Callable[[str], os.statvfs_result] = os.statvfs,
 ) -> Drill:
     """Restore `path` into a scratch store and say whether it works: decrypted with `age` and `identity`
     when it is an age file, or copied when it is a store; `PRAGMA integrity_check` on the copy; refused
     when a newer tvgw wrote it (db.too_new); opened as this tvgw's writer, which migrates it; checked
     again; and its rows counted. The scratch directory (0700) is removed whatever happens, and the file
-    itself is only ever read."""
+    itself is only ever read.
+
+    (edges) The scratch directory is made beside the file (or in `scratch_root`), not in the system's
+    temporary directory, which is memory on Debian 13: a check of a 1 GB copy held 1 GB of RAM. It is
+    made only where a copy's own rule finds room, the file's size plus HEADROOM, so a check never fills
+    the disk the store and the capture write to; short of that the drill fails and says so. A value
+    that is not of its column's kind, or a copy that cannot be written, is a failed drill too, never a
+    traceback (design decision 108)."""
     from tvgw import db  # the writer applies the schema; the daily copy needs only sqlite3
 
     name = os.path.basename(path)
+    root = scratch_root or os.path.dirname(os.path.abspath(path))
     try:
         with open(path, "rb") as fh:
             head = fh.read(64)
+            need = COPIES * os.fstat(fh.fileno()).st_size + HEADROOM
+        st = statvfs(root)
     except OSError as e:
         return Drill(False, [f"cannot read {name}: {e.strerror or e}"])
-    scratch = tempfile.mkdtemp(prefix="tvgw-restore-check-", dir=scratch_root)
+    if (free := st.f_bavail * st.f_frsize) < need:
+        return Drill(
+            False,
+            [
+                f"{free / 2**20:.0f} MiB free beside {name}; its check needs its size plus"
+                f" {HEADROOM // 2**20} MiB, {need / 2**20:.0f} MiB: copy it where there is room and"
+                " check it there"
+            ],
+        )
+    try:
+        scratch = tempfile.mkdtemp(prefix="tvgw-restore-check-", dir=root)
+    except OSError as e:
+        return Drill(False, [f"cannot make a scratch directory beside {name}: {e.strerror or e}"])
     copy = os.path.join(scratch, "tvgw.db")
     try:
         if head.startswith(AGE_MAGIC):
@@ -326,6 +349,10 @@ def restore_check(
         return _drill(name, copy, db)
     except (sqlite3.Error, ValueError) as e:
         return Drill(False, [f"{name} does not open as a store: {e}"])
+    except (OverflowError, TypeError) as e:  # (edges) a time of 1e30, or text where a time belongs
+        return Drill(False, [f"{name} opens, but holds a value not of its column's kind: {e}"])
+    except OSError as e:  # (edges) the copy could not be written: the disk filled under it, say
+        return Drill(False, [f"{name} could not be copied to check it: {e.strerror or e}"])
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
