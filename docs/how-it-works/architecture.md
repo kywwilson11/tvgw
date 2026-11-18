@@ -206,7 +206,7 @@ Each job runs as often as its evidence changes and no more. The exact schedules 
 | Capture, flows, DNS, URL filter, kernel log | Continuous | Evidence is written as it happens |
 | `tvgw verify --record` | Every 10 minutes | Counters reset on every apply. The brief sums the positive steps between snapshots, and `tvgw-apply`'s listings either side of each reload are stored as snapshots of their own, so a reset costs nothing unless a second apply follows within the same interval ([design decision 13](../design-decisions.md#13-counters-not-logs-prove-the-firewall-held)). A window's first step is taken from the last snapshot in the hour before it (`FW_BASELINE = 3600` in `src/tvgw/queries.py`), so days nobody recorded are not credited to it. A failed check shows within 10 minutes |
 | `tvgw-analyze` | Hourly | The pcaps and the TV readings are hourly, and an incremental ingest stays small |
-| `tvgw prune-pcaps` | Hourly | It keeps the pcap directory within its limits, deleting only files the store has read |
+| `tvgw prune-pcaps` | Every 5 minutes | It keeps the pcap directory within its limits, deleting only files the store has read |
 | `tvgw autoblock check` | Hourly, after the ingest | The hourly judge needs the store the ingest has refreshed |
 | `tvgw backup` | Daily, after the daily report | One checked copy a day |
 | `tvgw analyst` | Daily, after the daily report and the backup; set by `ANALYST_SCHEDULE` | It reads a finished day, once its evidence has settled |

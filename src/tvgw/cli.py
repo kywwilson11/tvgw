@@ -1261,25 +1261,42 @@ def cmd_ingest(a, s, prof) -> int:
 
 
 def cmd_prune_pcaps(a, s, prof) -> int:
-    """Retention for the raw captures: only files ingest has read, never the one the capture is writing."""
+    """Retention for the raw captures: only files ingest has read, never the one the capture is writing.
+    (edges) It reads the store and never writes it, so its run every 5 minutes cannot fail an ingest:
+    under the rollback journal a reader at most makes the ingest's commit wait for a moment."""
     from tvgw import forget
 
     deletable: set[str] = set()
     doomed: frozenset[str] = frozenset()
+    marked: frozenset[str] = frozenset()
     if os.path.exists(s.db_path):  # no store yet means nothing has been read
         conn = _ro(s)
         deletable = ingest.deletable_pcaps(conn)
         doomed = forget.doomed_pcaps(conn)  # captures a forget could not delete while they were open
+        marked = frozenset(r[0] for r in conn.execute("SELECT name FROM pcaps_done"))  # (edges) read or tried
         conn.close()
     budget = int(s.pcap_max_gb * 2**30)
     deleted, warnings = pcaps.prune(
-        s.pcap_dir, deletable, s.pcap_days, budget, pcaps.live_files(s.pcap_dir), doomed=doomed
+        s.pcap_dir,
+        deletable,
+        s.pcap_days,
+        budget,
+        pcaps.live_files(s.pcap_dir),
+        doomed=doomed,
+        marked=marked,
     )
     sizes = [os.path.getsize(p) for p in glob.glob(os.path.join(s.pcap_dir, "*.pcap"))]
     print(f"tvgw prune-pcaps: deleted {len(deleted)}, kept {len(sizes)} ({sum(sizes) / 2**20:.0f} MB)")
     for w in warnings:
         print(f"tvgw prune-pcaps: WARNING {clean(w)}", file=sys.stderr)
     return 1 if warnings else 0  # a failed oneshot shows in `systemctl --failed`
+
+
+def cmd_pcap_ring(a, s, prof) -> int:
+    """(edges) The capture's ring as install.sh writes it into both capture units' drop-ins: dumpcap's
+    `-b files:` and `-b filesize:` from PCAP_DAYS and PCAP_MAX_GB (design decision 108)."""
+    print(pcaps.ring(s.pcap_max_gb, s.pcap_days).env())
+    return 0
 
 
 def _ro(s):
@@ -2291,6 +2308,10 @@ def build_parser() -> argparse.ArgumentParser:
         "prune-pcaps",
         help="delete raw pcaps past PCAP_DAYS or PCAP_MAX_GB: ingested files only, never the live one",
     ).set_defaults(fn=cmd_prune_pcaps)
+    sub.add_parser(
+        "pcap-ring",
+        help="print the capture's ring from PCAP_DAYS and PCAP_MAX_GB, for the capture units' drop-ins",
+    ).set_defaults(fn=cmd_pcap_ring)
     b = sub.add_parser("brief", help="one-screen daily brief (default: yesterday)")
     b.add_argument("day", nargs="?", type=_day)
     form = b.add_mutually_exclusive_group()  # (plain) the brief's form; without one, BRIEF_STYLE decides
@@ -4258,7 +4279,7 @@ def cmd_discover(a, s, prof) -> int:
 
     from tvgw import discover as disc
 
-    cands = disc.gather(a.iface or s.tv_if, s.gw_ip, with_ssdp=not a.no_ssdp)
+    cands = disc.gather(a.iface or s.tv_if, s.gw_ip, with_ssdp=not a.no_ssdp, tv_net=s.tv_net)
     if a.json:
         print(json.dumps([c.__dict__ for c in cands], indent=1))
         return 0 if cands else 1

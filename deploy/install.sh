@@ -555,12 +555,16 @@ trim_rotations
 journald_dropin
 systemd-analyze cat-config systemd/journald.conf 2>/dev/null | journald_note || true
 install -D -m 644 sysctl/60-tvgw.conf /etc/sysctl.d/60-tvgw.conf # (events) conntrack's switches from boot (deploy/sysctl)
+# (edges) dumpcap's ring from PCAP_DAYS and PCAP_MAX_GB (design decision 108), worked out before the units
+# that need it are installed: a refused settings file stops the install with the old units and drop-ins
+RING=$(tvgw pcap-ring)
 install -m 644 systemd/*.service systemd/*.timer /etc/systemd/system/
 # (packaging) the capture's TV side: systemd reads this as root and fills in dumpcap's interface and
 # filter; the capture user cannot read the settings file, and the values passed tv_side above
-install -d /etc/systemd/system/tvgw-pcap.service.d
-printf '[Service]\nEnvironment=TV_IF=%s TV_NET=%s GW_IP=%s\n' "$TV_IF" "$TV_NET" "$GW_IP" \
+install -d /etc/systemd/system/tvgw-pcap.service.d /etc/systemd/system/tvgw-pcap-headers.service.d
+printf '[Service]\nEnvironment=TV_IF=%s TV_NET=%s GW_IP=%s %s\n' "$TV_IF" "$TV_NET" "$GW_IP" "$RING" \
 	>/etc/systemd/system/tvgw-pcap.service.d/tv-side.conf
+printf '[Service]\nEnvironment=%s\n' "$RING" >/etc/systemd/system/tvgw-pcap-headers.service.d/ring.conf
 # (app in front) the live reading may reach the TV and nothing else: its unit denies every address, and
 # this is the one it is allowed (design decision 67)
 install -d /etc/systemd/system/tvgw-tvlive.service.d
@@ -792,7 +796,7 @@ started_with() {
 	cat "systemd/$1.service"
 	case $1 in
 		tvgw-pcap)
-			echo "TV_IF=$TV_IF TV_NET=$TV_NET GW_IP=$GW_IP" # (packaging) its drop-in
+			echo "TV_IF=$TV_IF TV_NET=$TV_NET GW_IP=$GW_IP $RING" # (packaging) its drop-in, (edges) and the ring
 			# (capture) the headers unit stops and starts with it (PartOf=), and each unit's ExecCondition
 			# reads CAPTURE_MODE at start: a change to either reaches the capture at the next deploy
 			cat systemd/tvgw-pcap-headers.service

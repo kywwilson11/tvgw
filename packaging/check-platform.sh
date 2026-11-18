@@ -20,8 +20,8 @@
 #   4. `tvgw-apply --check` with this distribution's nft against the running kernel, with the TV on dummy0
 #      and the uplink on dummy1, for settings that between them give every switch each of its values, and
 #      the container's nftables tables after it as they were before;
-#   5. one second of dumpcap with tvgw-pcap.service's own ring options, whose file must be named
-#      tv_<14 digits>_00001.pcap, and dumpcap executable by the capture user;
+#   5. one second of dumpcap with tvgw-pcap.service's own ring options, sized for the default settings,
+#      whose file must be named tv_<14 digits>_00001.pcap, and dumpcap executable by the capture user;
 #   6. `nginx -t` of the URL filter's files, with the stream include appended to nginx.conf (what install.sh
 #      writes today) and as modules-enabled/99-tvgw-stream.conf (nginx.conf left as shipped);
 #   7. `dnsmasq --test` of the DHCP file: open with the TV not yet known, open with it pinned, and pinned
@@ -50,6 +50,10 @@ CI_USER=tvgwci # runs the unit suite: as root, the tests that need an unreadable
 TV_IF=dummy0 WAN_IF=dummy1 TV_NET=10.10.10.0/24 GW_IP=10.10.10.1 TV_NETMASK=255.255.255.0
 DHCP_FIRST=10.10.10.10 DHCP_LAST=10.10.10.20 TV_IP=10.10.10.17 TV_NAME=tv TV_MAC=02:00:00:00:00:17
 WAN_GW=198.51.100.1 URL_FILTER_RESOLVER=1.1.1.1
+# (edges) the capture's ring as install.sh's drop-ins give it for the default PCAP_DAYS and PCAP_MAX_GB
+# (`tvgw pcap-ring`); tests/unit/test_check_platform.py keeps the two numbers equal to pcaps.ring()
+RING_FILES=170 RING_KB=9252
+RING="PCAP_RING_FILES=$RING_FILES PCAP_RING_KB=$RING_KB"
 # what `tvgw-apply --check` is run with, beside the template: name and settings. Between them every
 # switch takes each of its values (tests/virtual checks every combination on the runner's own nft)
 # (attention) LIVE_READING=on rides with inpath: the attention count's table, at its default count
@@ -272,6 +276,8 @@ dumpcap_check() { # tvgw-pcap.service's ring options on this distribution's dump
 		failed dumpcap "cannot read the ring options from $_unit"
 		return 0
 	}
+	# (edges) the unit's ring, filled in as the drop-in fills it
+	_opts=$(printf '%s' "$_opts" | sed "s/\${PCAP_RING_KB}/$RING_KB/; s/\${PCAP_RING_FILES}/$RING_FILES/")
 	_dir=$TMP/pcap
 	mkdir -p "$_dir"
 	# shellcheck disable=SC2086 # the unit's options, one word each
@@ -410,11 +416,12 @@ judge() { # $1 = systemd-analyze's output: each line with its verdict; status 1 
 
 systemd_check() { # tvgw's units and drop-ins as install.sh installs them, read by this distribution's systemd
 	_sd=$ROOT/etc/systemd/system
-	install -d -m 755 "$_sd/tvgw-pcap.service.d" "$_sd/dnsmasq.service.d" "$_sd/nginx.service.d" \
-		"$ROOT/usr/local/sbin" "$ROOT/usr/local/bin"
+	install -d -m 755 "$_sd/tvgw-pcap.service.d" "$_sd/tvgw-pcap-headers.service.d" "$_sd/dnsmasq.service.d" \
+		"$_sd/nginx.service.d" "$ROOT/usr/local/sbin" "$ROOT/usr/local/bin"
 	install -m 644 "$DEPLOY"/systemd/*.service "$DEPLOY"/systemd/*.timer "$_sd/"
-	printf '[Service]\nEnvironment=TV_IF=%s TV_NET=%s GW_IP=%s\n' "$TV_IF" "$TV_NET" "$GW_IP" \
+	printf '[Service]\nEnvironment=TV_IF=%s TV_NET=%s GW_IP=%s %s\n' "$TV_IF" "$TV_NET" "$GW_IP" "$RING" \
 		>"$_sd/tvgw-pcap.service.d/tv-side.conf"
+	printf '[Service]\nEnvironment=%s\n' "$RING" >"$_sd/tvgw-pcap-headers.service.d/ring.conf"
 	sed "s|__TV_NET__|$TV_NET|g" "$DEPLOY/dnsmasq/20-tvgw-hardening.conf.template" \
 		>"$_sd/dnsmasq.service.d/20-tvgw-hardening.conf"
 	{

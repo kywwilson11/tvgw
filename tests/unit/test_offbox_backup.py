@@ -11,6 +11,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 
 import pytest
 from conftest import NOW, ROOT
@@ -171,6 +172,66 @@ def test_a_damaged_copy_a_newer_one_and_a_file_that_is_no_copy_are_refused(tmp_p
         "notes.txt is neither a copy of the store nor an age-encrypted one"
     ]
     assert not backup.restore_check(str(tmp_path / "missing.db")).ok
+
+
+@pytest.mark.parametrize("t", [1e30, "soon"])
+def test_a_copy_whose_times_are_not_times_fails_the_drill_and_leaves_nothing(tmp_path, t):
+    """A lookup time of 1e30 raised OverflowError, and text where a time belongs TypeError, out of
+    `tvgw restore --check` as a traceback."""
+    odd = tmp_path / "odd.db"
+    conn = db.connect(str(odd))
+    conn.execute("INSERT INTO dns(t, qname, blocked) VALUES (?, 'a.example', 0)", (t,))
+    conn.commit()
+    conn.close()
+    drill = backup.restore_check(str(odd))
+    assert not drill.ok and drill.lines[0].startswith(
+        "odd.db opens, but holds a value not of its column's kind: "
+    )
+    assert os.listdir(tmp_path) == ["odd.db"]  # the scratch went with the failure
+
+
+def space(free: int):
+    return lambda path: os.statvfs_result((4096, 4096, 10**6, free // 4096, free // 4096, 0, 0, 0, 0, 255))
+
+
+def test_the_scratch_copy_is_made_beside_the_file_where_a_copy_has_room(tmp_path, copies, monkeypatch):
+    """The scratch directory was the system's temporary one, which is memory on Debian 13: a check of a
+    1 GB copy held 1 GB of RAM. It is beside the file, and only where the copy and HEADROOM fit."""
+    _, copy = copies
+    made, real = [], tempfile.mkdtemp
+    monkeypatch.setattr(backup.tempfile, "mkdtemp", lambda **kw: made.append(kw["dir"]) or real(**kw))
+    need = os.path.getsize(copy) + backup.HEADROOM
+    assert backup.restore_check(copy, statvfs=space(need)).ok
+    assert made == [os.path.dirname(copy)] and os.listdir(made[0]) == [os.path.basename(copy)]
+    short = backup.restore_check(copy, statvfs=space(need - 4096))
+    assert not short.ok and short.lines == [
+        f"{(need - 4096) // 4096 * 4096 / 2**20:.0f} MiB free beside {os.path.basename(copy)}; its check needs"
+        f" its size plus 512 MiB, {need / 2**20:.0f} MiB: copy it where there is room and check it there"
+    ]
+    assert len(made) == 1  # nothing made for the check that had no room
+
+
+def test_a_copy_that_cannot_be_written_fails_the_drill_and_leaves_nothing(tmp_path, copies, monkeypatch):
+    _, copy = copies
+
+    def full(src, dst):
+        open(dst, "wb").close()
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(backup.shutil, "copyfile", full)
+    drill = backup.restore_check(copy, scratch_root=str(tmp_path / "backup"))
+    assert drill.lines == [
+        f"{os.path.basename(copy)} could not be copied to check it: No space left on device"
+    ]
+    assert os.listdir(tmp_path / "backup") == [os.path.basename(copy)]
+
+
+def test_a_scratch_directory_that_cannot_be_made_fails_the_drill(tmp_path, copies):
+    _, copy = copies
+    drill = backup.restore_check(copy, scratch_root=str(tmp_path / "gone"), statvfs=space(1 << 40))
+    assert drill.lines == [
+        f"cannot make a scratch directory beside {os.path.basename(copy)}: No such file or directory"
+    ]
 
 
 def test_restore_check_needs_no_settings_and_exits_by_its_verdict(tmp_path, copies, capsys, monkeypatch):

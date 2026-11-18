@@ -339,17 +339,25 @@ def exec_lines(unit: str) -> list[tuple[str, str]]:
     return [(key, value.strip()) for key, eq, value in parts if eq and key.startswith("Exec")]
 
 
-# (packaging) the TV side install.sh writes into tvgw-pcap's drop-in, with the shipped defaults
-CAPTURE_ENV = {"TV_IF": Settings().tv_if, "TV_NET": Settings().tv_net, "GW_IP": Settings().gw_ip}
+# (packaging) the TV side install.sh writes into tvgw-pcap's drop-in, with the shipped defaults, and (edges)
+# the ring it writes into both capture units' drop-ins
+RING = pcaps.ring(Settings().pcap_max_gb, Settings().pcap_days)
+CAPTURE_ENV = {
+    "TV_IF": Settings().tv_if,
+    "TV_NET": Settings().tv_net,
+    "GW_IP": Settings().gw_ip,
+    "PCAP_RING_FILES": str(RING.files),
+    "PCAP_RING_KB": str(RING.filesize_kb),
+}
 
 
 def capture_argv(
     unit: str = "tvgw-pcap.service", directive: str = "ExecStart", env: dict[str, str] | None = None
 ) -> list[str]:
-    """The argv of one Exec line of a capture unit (dumpcap's, by default): the drop-in's ${TV_IF},
-    ${TV_NET} and ${GW_IP} filled in as systemd fills them (the shipped defaults unless `env` says
-    otherwise), specifiers and variables unescaped, words split as systemd splits them. A `+` (run as
-    root) prefix is dropped."""
+    """The argv of one Exec line of a capture unit (dumpcap's, by default): the drop-ins' ${TV_IF},
+    ${TV_NET}, ${GW_IP} and (edges) ring filled in as systemd fills them (the shipped defaults unless
+    `env` says otherwise), specifiers and variables unescaped, words split as systemd splits them. A `+`
+    (run as root) prefix is dropped."""
     (value,) = [v for k, v in exec_lines(unit) if k == directive]
     for key, val in (env or CAPTURE_ENV).items():
         value = value.replace("${" + key + "}", val)

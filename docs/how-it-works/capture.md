@@ -26,7 +26,7 @@ Both units write the same directory, `/var/lib/tvgw/pcap`, as the same user with
 `tvgw-pcap.service` runs:
 
 ```
-/usr/bin/dumpcap -i ${TV_IF} -q -P -g -s 0 -b interval:3600 -b nametimenum:2 -w /var/lib/tvgw/pcap/tv.pcap -f "<the capture filter>"
+/usr/bin/dumpcap -i ${TV_IF} -q -P -g -s 0 -b interval:3600 -b filesize:${PCAP_RING_KB} -b files:${PCAP_RING_FILES} -b nametimenum:2 -w /var/lib/tvgw/pcap/tv.pcap -f "<the capture filter>"
 ```
 
 | Option | Why |
@@ -37,11 +37,13 @@ Both units write the same directory, `/var/lib/tvgw/pcap`, as the same user with
 | `-g` | Group read. Without it dumpcap creates each ring file `0600`, which the extractor, running as `nobody:nogroup`, cannot read: the 2026-10-27 incident again. With the unit's `UMask=0027` the files are `640 tvgw-pcap:nogroup`. |
 | `-s 0` | Whole frames, as before: requests to port 80 are kept whole. |
 | `-b interval:3600` | A new file whenever the clock reaches an exact multiple of 3600 seconds, so each file covers one clock hour (the first after a start covers the rest of its hour). The check runs in dumpcap's main loop, not on a packet, so a file closes on time with the TV off. tcpdump's `-G 3600` rotated 3600 seconds after its own start, and only when the next packet arrived (data-architecture finding 6). |
+| `-b filesize:${PCAP_RING_KB}` | A new file also once the open one reaches `PCAP_RING_KB` KB: an equal share of `PCAP_MAX_GB` among the ring's files, and never under 1 MB (`RING_FLOOR_KB` in src/tvgw/pcaps.py). The reference gateway's share is 9,252 KB, about 9 MB; its largest hour was 0.8 MB, so an ordinary hour still makes one file ([design decision 108](../design-decisions.md#108-the-capture-is-a-ring-sized-from-both-retention-settings-and-what-answers-the-gateway-is-checked-before-it-is-believed)). |
+| `-b files:${PCAP_RING_FILES}` | The ring: once the run has `PCAP_RING_FILES` files, dumpcap removes the run's oldest as it opens the next. That is `PCAP_DAYS` of hours plus two (`RING_SPARE`), 170 by default, so on an ordinary day a file outlives retention, which deletes it first. A flood that fills a file in seconds overwrites the ring's oldest files instead of filling the disk. `tvgw pcap-ring` works out both numbers from the settings, and `install.sh` writes them into the drop-ins of both capture units. |
 | `-b nametimenum:2` | The time before the number in the name. dumpcap numbers files from `00001` at every start, so with the number first a restart would sort its files before the older ones. |
 | `-w .../tv.pcap` | The name template: dumpcap splits it at the last dot and writes `tv_20261101120000_00002.pcap`. The stamp is the local time the file was opened, and the unit sets `TZ=UTC`, so it is UTC. |
 | `-f "..."` | The capture filter, one argument, unchanged from tcpdump: libpcap compiles it the same way. `tests/unit/test_capture_filter.py` still runs it on a synthetic hour. |
 
-There is no `-b files:`, so dumpcap never deletes a file; retention stays with `tvgw prune-pcaps`, which deletes only what the store has read.
+On an ordinary day dumpcap deletes nothing: retention, `tvgw prune-pcaps`, deletes a file once the store has read it and it is older than `PCAP_DAYS`, before the ring comes round to it. Under a flood the ring overwrites files the ingest has not read yet, and `tvgw prune-pcaps` counts them in a warning ([raw pcaps](privacy-and-retention.md#raw-pcaps)). The ring forgets its files at a restart, so a restarted capture's older files are retention's alone.
 
 An hour with nothing from the TV is now a 24-byte file, a pcap header and no frames, where tcpdump wrote no file. The ingest reads it like any other: tshark finds no rows and the store marks it read.
 
@@ -101,7 +103,7 @@ table inet tvgw_capture {
 - **One packet at a time.** `queue-threshold 1` makes `nfnetlink_log` send each packet as it is logged. By default it batches up to 100 packets or one second, and a reader that stamps a packet when it receives it would then give a SYN or a hello a time up to a second late, which moves it against the flow the ingest joins it to. Step 5 of [the measurements](#measuring-it-on-the-pi) checks the times.
 - **One reader.** NFLOG group 7 is read by `tvgw-pcap-headers` alone; a second process cannot subscribe to the same group. `CAPTURE_GROUP` in `tvgw-apply` and the unit's `nflog:7` are checked equal by `tests/unit/test_capture.py`.
 
-`tvgw-pcap-headers.service` runs `dumpcap -i nflog:7 -q -P -g -s 0 -b interval:3600 -b nametimenum:2 -w /var/lib/tvgw/pcap/tvhdr.pcap`, with no BPF filter: the rule already chose the packets, and libpcap would run a filter on an NFLOG source in userspace.
+`tvgw-pcap-headers.service` runs `dumpcap -i nflog:7 -q -P -g -s 0 -b interval:3600 -b filesize:${PCAP_RING_KB} -b files:${PCAP_RING_FILES} -b nametimenum:2 -w /var/lib/tvgw/pcap/tvhdr.pcap`, the same ring from its own drop-in `tvgw-pcap-headers.service.d/ring.conf`, with no BPF filter: the rule already chose the packets, and libpcap would run a filter on an NFLOG source in userspace.
 
 ### One switch for two units
 

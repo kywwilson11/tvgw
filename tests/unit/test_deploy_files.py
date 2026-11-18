@@ -165,10 +165,11 @@ def test_install_takes_only_the_first_backup(tmp_path):
 LONG_RUNNING = ("tvgw-pcap", "tvgw-flowlog", "tvgw-dnsgate")
 
 
-def restart_changed(tmp_path, tv_ip="10.10.10.17", fail="", tv_if="eth0", mode="source"):
+def restart_changed(tmp_path, tv_ip="10.10.10.17", fail="", tv_if="eth0", mode="source", ring="170 9252"):
     """Run install.sh's restart_changed for the three long-running units against copies of their unit
     files, a settings file and a package tree under tmp_path, with a fake systemctl (which fails to
-    restart `fail`); returns the units it restarted. `mode` is install.sh's MODE, source or package."""
+    restart `fail`); returns the units it restarted. `mode` is install.sh's MODE, source or package;
+    (edges) `ring` the capture's ring, files and KB, as `tvgw pcap-ring` gave it."""
     bash = shutil.which("bash")
     if bash is None or shutil.which("sha256sum") is None:
         pytest.skip("bash and sha256sum are needed here")
@@ -195,6 +196,7 @@ def restart_changed(tmp_path, tv_ip="10.10.10.17", fail="", tv_if="eth0", mode="
             f"MODE={mode}",
             f"TV_IP={tv_ip}",
             f"TV_IF={tv_if} TV_NET=10.10.10.0/24 GW_IP=10.10.10.1",
+            'RING="PCAP_RING_FILES={} PCAP_RING_KB={}"'.format(*ring.split()),
             block.replace("/var/lib/tvgw", str(tmp_path / "state")).replace(
                 "/etc/tvgw", str(tmp_path / "etc")
             ),
@@ -351,6 +353,8 @@ def test_the_capture_restarts_when_its_tv_side_changed(tmp_path):
     assert restart_changed(tmp_path) == list(LONG_RUNNING)
     assert restart_changed(tmp_path, tv_if="eth1") == ["tvgw-pcap"]
     assert restart_changed(tmp_path, tv_if="eth1") == []
+    # (edges) and its ring, from PCAP_DAYS and PCAP_MAX_GB in the same drop-in
+    assert restart_changed(tmp_path, tv_if="eth1", ring="74 7084") == ["tvgw-pcap"]
 
 
 def test_a_stray_wheels_directory_in_a_checkout_does_not_change_what_the_feeder_is_stamped_with(tmp_path):

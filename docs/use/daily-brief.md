@@ -77,6 +77,8 @@ The first page shows the gateway's last check and yesterday's brief, with its Ac
 
 Anyone on your home network who knows the password can read the page, so choose one your household does not guess. After five wrong passwords the page makes that device wait, longer each time. A phone that has signed in once is never kept out by someone else's guesses.
 
+The page serves 32 connections at once, and 4 to any one device. So eight devices on your home network that hold their connections open can keep it busy, 15 seconds at a time. If the page does not load, try again a little later.
+
 The page stays on your home network: the gateway never opens a port on your router. To read it away from home, use a connection to your home network of your own, such as your router's VPN.
 
 To change the password, run `sudo tvgw web password` again: everyone signed in is signed out. [Your household's privacy](privacy.md#the-page-on-your-phone) says who can read the page. To turn the page off again, on the gateway:

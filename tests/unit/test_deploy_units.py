@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 
 import pytest
-from conftest import CAPTURE_ENV, UNITS, capture_argv, exec_lines
+from conftest import CAPTURE_ENV, RING, UNITS, capture_argv, exec_lines
 
 SERVICES = sorted(p.name for p in UNITS.glob("*.service"))
 
@@ -35,7 +35,13 @@ def test_pcaps_are_named_in_utc_with_the_time_first(unit, prefix):
     argv = capture_argv(unit)
     assert argv[0] == "/usr/bin/dumpcap"
     assert argv[argv.index("-w") + 1] == f"/var/lib/tvgw/pcap/{prefix}.pcap"
-    assert ring_options(argv) == {"interval": "3600", "nametimenum": "2"}  # no files: no self-deletion
+    # (edges) the hour, and the ring's size and length from the drop-in (design decision 108)
+    assert ring_options(argv) == {
+        "interval": "3600",
+        "filesize": str(RING.filesize_kb),
+        "files": str(RING.files),
+        "nametimenum": "2",
+    }
     assert "-P" in argv and "-n" not in argv  # pcap, not pcapng (dumpcap's -n means pcapng)
     assert "Environment=TZ=UTC" in (UNITS / unit).read_text(encoding="utf-8").splitlines()
 
@@ -65,6 +71,13 @@ def test_utc_names_sort_in_time_order_through_the_fall_back_hour_and_a_restart(m
     assert sorted(ring_name(template, t, n, False) for t, n in written)[0].startswith("tv_00001_")
 
 
+def test_the_prune_runs_every_five_minutes():
+    """(edges) Hourly, files the ring overwrote in a flood were reported, and PCAP_MAX_GB and the free-space
+    floor applied, only at the next hour (design decision 108)."""
+    lines = (UNITS / "tvgw-prune.timer").read_text(encoding="utf-8").splitlines()
+    assert [line for line in lines if line.startswith("OnCalendar=")] == ["OnCalendar=*:0/5"]
+
+
 def test_the_analyze_job_is_the_first_to_go_when_memory_runs_out():
     """It parses the backlog and runs tshark; the resolver must outlive it."""
     assert "OOMScoreAdjust=500" in (UNITS / "tvgw-analyze.service").read_text(encoding="utf-8").splitlines()
@@ -74,10 +87,10 @@ def test_the_analyze_job_is_the_first_to_go_when_memory_runs_out():
 def test_exec_lines_escape_every_specifier_and_variable(unit):
     """A lone `%` is a systemd specifier and a lone `$` is expanded by systemd before the command runs,
     quotes or not: `%%` and `$$` are the escapes, and nothing else may remain, except the capture's
-    TV side, which systemd is meant to fill in from the drop-in install.sh writes."""
+    TV side and its ring, which systemd is meant to fill in from the drop-ins install.sh writes."""
     for directive, value in exec_lines(unit):
         assert "%" not in value.replace("%%", ""), f"{unit} {directive}: stray % (strftime needs %%)"
-        if unit == "tvgw-pcap.service":  # (packaging) systemd's own: the drop-in install.sh writes
+        if unit.startswith("tvgw-pcap"):  # (packaging) systemd's own: the drop-ins install.sh writes
             for key in CAPTURE_ENV:
                 value = value.replace("${" + key + "}", "")
         assert "$" not in value.replace("$$", ""), f"{unit} {directive}: stray $ (the shell needs $$)"

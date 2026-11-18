@@ -20,6 +20,7 @@ remove | purge)
 	rm -f /etc/systemd/system/tvgw.service /etc/systemd/system/tvgw-*.service /etc/systemd/system/tvgw-*.timer
 	rm -rf /etc/systemd/system/tvgw-analyst.timer.d /etc/systemd/system/tvgw-analyst-weekly.timer.d
 	rm -rf /etc/systemd/system/tvgw-pcap.service.d /etc/systemd/system/tvgw-tvlive.service.d
+	rm -rf /etc/systemd/system/tvgw-pcap-headers.service.d # (edges) the capture's ring
 	rm -rf /etc/systemd/system/tvgw-web.service.d # (web)
 	# (updates) the update timer's window, and apt's configuration, so the system's own unattended-upgrades
 	# configuration applies again rather than tvgw's, which left the installs to a timer now gone

@@ -15,16 +15,23 @@ deleting it would lose the hour.
 
 Retention (`prune`) sees the same answer and the store's marks: it deletes evidence only once the
 store has it, or after a week of saying that it does not.
+
+(edges) The writer bounds itself as well (design decision 108): dumpcap keeps a ring of `ring()` files,
+so a flood that fills a file in seconds cannot fill the disk between two prunes. On a normal day each
+file is an hour and the ring holds more hours than PCAP_DAYS keeps; under a flood files turn on size,
+the ring overwrites its oldest, and `prune` counts the ones that went before ingest read them.
 """
 
 from __future__ import annotations
 
 import contextlib
 import glob
+import itertools
 import os
+import re
 import shutil
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import NamedTuple
 
 FREE_FLOOR = 1 << 30  # bytes that must stay free where the pcaps live, whatever the budget allows
@@ -33,6 +40,19 @@ FREE_FLOOR = 1 << 30  # bytes that must stay free where the pcaps live, whatever
 # install.sh restarts the unit, so for a few seconds the new ingest runs beside the old tcpdump) and
 # for a Pi rolled back to an older checkout, which runs tcpdump again
 WRITERS = frozenset({"dumpcap", "tcpdump"})
+# (edges) the ring: PCAP_DAYS of hourly files, plus the live one and one spare
+RING_SPARE = 2
+# a file is cut at no less than 1 MB (the reference gateway's largest hour is 0.8 MB): a small PCAP_MAX_GB
+# must not turn an ordinary hour into many files, each one more run of tshark for the ingest
+RING_FLOOR_KB = 1024
+# dumpcap's own bounds: a ring of fewer than 100,000 files (RINGBUFFER_MAX_NUM_FILES), and a file size
+# kept under 2 GB whether it counts a kB as 1,000 or 1,024 bytes
+DUMPCAP_FILES_MAX = 99_999
+DUMPCAP_KB_MAX = 2_000_000
+# a ring file's name under -b nametimenum:2: the -w prefix, the UTC time it was opened, its number in the run
+RING_NAME = re.compile(r"(?P<prefix>.+)_(?P<stamp>\d{14})_(?P<number>\d{5})\.pcap")
+# how long the store keeps a read file's mark once the file is gone (the 7 days in ingest.prune)
+MARKS_KEPT = 7 * 86400
 
 
 def live_files(pcap_dir: str, proc: str = "/proc") -> set[str] | None:
@@ -95,6 +115,48 @@ def _free_bytes(path: str) -> int:
     return shutil.disk_usage(path).free
 
 
+class Ring(NamedTuple):
+    """dumpcap's `-b files:` and `-b filesize:` for the capture units."""
+
+    files: int
+    filesize_kb: int
+
+    def env(self) -> str:
+        """The Environment= assignments install.sh writes into both capture units' drop-ins."""
+        return f"PCAP_RING_FILES={self.files} PCAP_RING_KB={self.filesize_kb}"
+
+
+def ring(max_gb: float, days: int) -> Ring:
+    """The ring for PCAP_MAX_GB and PCAP_DAYS: PCAP_DAYS of hourly files plus RING_SPARE, each cut at an
+    equal share of PCAP_MAX_GB. An ordinary hour stays far below that share, so the ring turns on the
+    hour and holds longer than retention keeps a file; a flood turns it on size, and the ring then holds
+    at most PCAP_MAX_GB. The share is in units of 1,024 bytes: a dumpcap that counts a kB as 1,000 bytes
+    cuts each file a little smaller, and the ring stays within the cap either way."""
+    files = min(days * 24 + RING_SPARE, DUMPCAP_FILES_MAX)
+    share = int(max_gb * 2**30) // files // 1024
+    return Ring(files, min(max(share, RING_FLOOR_KB), DUMPCAP_KB_MAX))
+
+
+def overwritten(names: Iterable[str], now: float, window: float) -> int:
+    """How many ring files went before ingest read them, from the gaps in the ring's numbers. `names` are
+    the files on disk and the files the store has a mark for. dumpcap numbers a run's files from 00001 in
+    the order it opens them and starts again at every start; a file opened after another closes after it,
+    so its mark, had it been read, would be in the store as long as the file before it opened less than
+    `window` seconds before `now`. Each number missing after such a file is a file never read: in the
+    middle of a run, or at the start of the next one."""
+    runs: dict[str, list[tuple[str, int]]] = {}
+    for name in names:
+        if m := RING_NAME.fullmatch(name):
+            runs.setdefault(m["prefix"], []).append((m["stamp"], int(m["number"])))
+    since = time.strftime("%Y%m%d%H%M%S", time.gmtime(now - window))  # the names' own UTC stamps
+    lost = 0
+    for files in runs.values():
+        for (stamp, before), (_, number) in itertools.pairwise(sorted(files)):
+            if stamp >= since:
+                lost += number - before - 1 if number > before else max(number - 1, 0)
+    return lost
+
+
 def prune(
     pcap_dir: str,
     deletable: set[str],
@@ -104,6 +166,7 @@ def prune(
     now: float | None = None,
     disk_free: Callable[[str], int] = _free_bytes,
     doomed: frozenset[str] = frozenset(),
+    marked: frozenset[str] = frozenset(),
 ) -> tuple[list[str], list[str]]:
     """Delete the finished pcaps the store has read (`deletable`, by name) once they are older than
     `days`, then the oldest of them while the directory is over `max_bytes` or the filesystem under
@@ -111,6 +174,9 @@ def prune(
     a broken ingest costs a week of warnings before it costs evidence. A file `tvgw forget` named
     (`doomed`: it was open, so forget could not delete it) goes as soon as it is finished and read,
     whatever its age. The live file is never touched, and when it cannot be told apart nothing is.
+    (edges) Files the capture's ring overwrote before ingest read them are counted in a warning, from
+    the names on disk and every name the store has a mark for (`marked`), over the span in which the
+    store still holds a read file's mark and prune itself deletes no unread file.
     Returns (deleted names, warnings)."""
     if live is None:
         return [], ["cannot tell which file the capture is writing; nothing deleted"]
@@ -118,6 +184,13 @@ def prune(
     files = _finished_files(pcap_dir, live)
     deleted: list[str] = []
     warnings: list[str] = []
+    on_disk = {f.name for f in files} | {os.path.basename(p) for p in live}
+    lost = overwritten(on_disk | deletable | marked, now, min(MARKS_KEPT, 2 * days * 86400))
+    if lost:
+        warnings.append(
+            f"{lost} pcap(s) were gone before ingest read them: the capture's ring overwrote them in a"
+            " flood, or they were deleted by hand"
+        )
 
     def delete(f: _File) -> None:
         os.unlink(f.path)

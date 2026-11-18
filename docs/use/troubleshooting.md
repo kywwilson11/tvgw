@@ -228,6 +228,7 @@ The job that deletes old packet captures prints these, and fails, so it shows in
 | `<N> finished pcap(s) older than PCAP_DAYS kept: not ingested yet` | Files due to go have not been read yet. | Find why ingest is not reading pcaps in the table above. |
 | `pcaps over PCAP_MAX_GB by <N> MB with nothing ingested left to delete` | Every read file is gone and the unread ones still exceed the budget. | Fix ingest, or raise `PCAP_MAX_GB`. |
 | `under 1 GB free where the pcaps live, with nothing ingested left to delete` | The filesystem is nearly full and only unread files remain. | Free space on that filesystem and fix ingest. |
+| `<N> pcap(s) were gone before ingest read them: the capture's ring overwrote them in a flood, or they were deleted by hand` | The TV sent so much that the capture filled its size limit before the hourly reading, and it wrote over its oldest files. The warning stays for up to 7 days. | Nothing to repair: the limit kept the disk from filling. Those minutes are missing from the record. |
 
 ## The analyst and autonomous blocks
 

@@ -1301,6 +1301,16 @@ def test_live_env_wires_every_field_to_a_callable():
     assert env.installed() in (True, False) and env.is_root() in (True, False)
 
 
+def test_live_discovery_follows_answers_from_the_settings_tv_subnet_only(monkeypatch):
+    """(edges) discover() follows an SSDP answer only from inside TV_NET: setup hands it the settings' own."""
+    from tvgw import discover
+
+    seen = {}
+    monkeypatch.setattr(discover, "gather", lambda iface, gw, **kw: seen.update(kw) or [])
+    setup.live_env(config.Settings()).discover("eth0", "10.10.10.1", False)
+    assert seen == {"with_ssdp": False, "tv_net": config.Settings().tv_net}
+
+
 def fake_venv(tmp_path, body: str) -> str:
     """A stand-in for the gateway's virtualenv Python: a shell script that checks how it was run."""
     py = tmp_path / "venv-python"

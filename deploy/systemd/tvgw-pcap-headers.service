@@ -35,6 +35,7 @@ ExecStartPre=/bin/sh -c 'test -x /usr/bin/dumpcap || { echo "tvgw-pcap-headers: 
 # 80. No BPF filter: the firewall rule already chose the packets, before the DNAT and the rejects, so
 # the attempts it rejects are kept too. Files are tvhdr_<YYYYmmddHHMMSS>_<nnnnn>.pcap, link type
 # NFLOG (239), which tshark reads; the prefix tells a headers hour from a full one in pcaps_done.
-ExecStart=/usr/bin/dumpcap -i nflog:7 -q -P -g -s 0 -b interval:3600 -b nametimenum:2 -w /var/lib/tvgw/pcap/tvhdr.pcap
+# (edges) The same ring as tvgw-pcap's, from the drop-in tvgw-pcap-headers.service.d/ring.conf install.sh writes
+ExecStart=/usr/bin/dumpcap -i nflog:7 -q -P -g -s 0 -b interval:3600 -b filesize:${PCAP_RING_KB} -b files:${PCAP_RING_FILES} -b nametimenum:2 -w /var/lib/tvgw/pcap/tvhdr.pcap
 Restart=always
 RestartSec=5

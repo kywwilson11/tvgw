@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from conftest import ROOT
+from conftest import CAPTURE_ENV, ROOT
 
 sys.path.insert(0, str(ROOT / "tests" / "virtual"))
 import vnet  # the switches' values, read from tvgw-apply's own case arms
@@ -491,6 +491,9 @@ def test_dumpcap_runs_with_the_capture_units_own_ring_options(box):
     unit = (ROOT / "deploy/systemd/tvgw-pcap.service").read_text(encoding="utf-8")
     (opts,) = re.findall(r"^ExecStart=/usr/bin/dumpcap -i \$\{TV_IF\} (.*?) -w ", unit, re.M)
     assert "-b nametimenum:2" in opts and "-b interval:3600" in opts
+    # (edges) the ring as install.sh's drop-in sizes it for the default settings
+    for key in ("PCAP_RING_KB", "PCAP_RING_FILES"):
+        opts = opts.replace("${" + key + "}", CAPTURE_ENV[key])
     (capture,) = [line for line in box.ran("dumpcap") if "--version" not in line]
     assert re.fullmatch(rf"dumpcap -i lo {re.escape(opts)} -a duration:1 -w \S+/pcap/tv\.pcap", capture)
     assert "runuser -u tvgw-pcap -- test -x /usr/bin/dumpcap" in box.log()  # install.sh's own check
@@ -611,8 +614,12 @@ def test_systemd_verifies_the_units_and_drop_ins_install_sh_writes(box):
         "nginx.service",
     ]
     assert sorted(Path(a).name for a in args[3:-2]) == units
+    ring = f"PCAP_RING_FILES={CAPTURE_ENV['PCAP_RING_FILES']} PCAP_RING_KB={CAPTURE_ENV['PCAP_RING_KB']}"
     assert (sd / "tvgw-pcap.service.d/tv-side.conf").read_text(encoding="utf-8") == (
-        "[Service]\nEnvironment=TV_IF=dummy0 TV_NET=10.10.10.0/24 GW_IP=10.10.10.1\n"
+        f"[Service]\nEnvironment=TV_IF=dummy0 TV_NET=10.10.10.0/24 GW_IP=10.10.10.1 {ring}\n"
+    )
+    assert (sd / "tvgw-pcap-headers.service.d/ring.conf").read_text(encoding="utf-8") == (
+        f"[Service]\nEnvironment={ring}\n"
     )
     hardening = (sd / "dnsmasq.service.d/20-tvgw-hardening.conf").read_text(encoding="utf-8")
     assert "IPAddressAllow=localhost 0.0.0.0/32 255.255.255.255/32 10.10.10.0/24" in hardening
@@ -674,7 +681,8 @@ def test_the_allow_list_names_debian_12s_two_restart_keys_and_nothing_else():
     "line",
     [
         'ngx="s/__RESOLVER__/$URL_FILTER_RESOLVER/; s/__GW_IP__/$GW_IP/"',
-        'printf \'[Service]\\nEnvironment=TV_IF=%s TV_NET=%s GW_IP=%s\\n\' "$TV_IF" "$TV_NET" "$GW_IP"',
+        'printf \'[Service]\\nEnvironment=TV_IF=%s TV_NET=%s GW_IP=%s %s\\n\' "$TV_IF" "$TV_NET" "$GW_IP" "$RING"',
+        "printf '[Service]\\nEnvironment=%s\\n' \"$RING\"",  # (edges) the headers unit's ring
         "printf '[Unit]\\nAfter=network-online.target\\nWants=network-online.target\\n[Service]\\nRestart=on-failure\\nRestartSec=5\\n'",
         "grep -v '^#' nginx/tvgw-hardening.conf",
         'sed -e "$side; /__TV_MAC__/d"',

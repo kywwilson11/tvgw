@@ -561,7 +561,7 @@ def live_env(s: config.Settings) -> Env:
     from tvgw import discover, verify
 
     return Env(
-        discover=lambda iface, gw, ssdp: discover.gather(iface, gw, with_ssdp=ssdp),
+        discover=lambda iface, gw, ssdp: discover.gather(iface, gw, with_ssdp=ssdp, tv_net=s.tv_net),
         tv_side_up=tv_side_is_up,
         run_installer=run_installer,
         can_pair=can_pair,
