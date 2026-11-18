@@ -14,7 +14,7 @@ import time
 from datetime import datetime
 
 import pytest
-from conftest import ROOT, UNITS, counting_lgtv, fake_lgtv
+from conftest import ROOT, UNITS, counting_lgtv, fake_lgtv, write_lgtv_keys
 from test_tvprobe import Conn, FakeTv, run
 
 from tvgw import appeval, appfront, cli, config, db, forget, ingest, lgkeys, lgwebos, tvlive
@@ -86,6 +86,32 @@ def test_a_missing_ledger_cannot_be_read_and_a_directory_cannot_be_written(tmp_p
         Ledger(str(tmp_path / "none")).recent(T0)
     with pytest.raises(OSError):
         Ledger(str(tmp_path)).note(SERVICE, T0)
+
+
+def test_a_crash_between_the_write_and_the_cut_of_a_note_loses_no_attempt(tmp_path, monkeypatch):
+    """The note emptied the file and then wrote the new body: a crash between the two left an empty
+    file, which counts no attempt, the one state a crash loop must never reach. The body goes first now,
+    and whatever the old file leaves after it can only count more."""
+    led = Ledger(str(tmp_path / "attempts"))
+    for t in (T0 - 3000, T0 - 3000, T0):
+        led.note(SERVICE, t)  # the next note cuts the first two: its body is shorter than the file
+    steps = []
+
+    def second_step_fails(real):
+        def step(*args):
+            steps.append(real.__name__)
+            if len(steps) == 2:
+                raise OSError("the power went")
+            return real(*args)
+
+        return step
+
+    with monkeypatch.context() as m:
+        m.setattr(os, "pwrite", second_step_fails(os.pwrite))
+        m.setattr(os, "ftruncate", second_step_fails(os.ftruncate))
+        with pytest.raises(OSError):
+            led.note(HOURLY, T0 + 1000)
+    assert {(T0, SERVICE), (T0 + 1000, HOURLY)} <= set(led.recent(T0 + 1000))
 
 
 def test_the_hourly_reading_counts_its_attempts_only_where_the_service_has_run(tmp_path):
@@ -991,6 +1017,61 @@ def test_a_tv_that_floods_the_events_ends_the_session(tmp_path):
     lines = b.lines()
     assert lines[-1] == ("session.down", {"why": "flood"})
     assert sum(1 for k, _ in lines if k == "app") < 60  # the flood was cut short, not written whole
+
+
+def test_a_tv_that_pings_without_end_is_a_flood(tmp_path):
+    """recv() answers a ping itself and hands the session nothing, so the cap on changes a minute never
+    saw one: a TV could hold one of the Pi's cores with pings for as long as the session lasted."""
+    rules = dataclasses.replace(FAST, flood_per_minute=20)
+
+    async def pings(conn):
+        conn.writer.write(bytes([0x89, 0]) * 200)
+        await conn.writer.drain()
+
+    b = Bench(tmp_path, lambda c: serve(c, then=pings), rules)
+    assert b.go()[0] == FLOOD and b.lines()[-1] == ("session.down", {"why": "flood"})
+
+
+def test_a_tv_that_pings_now_and_then_is_no_flood(tmp_path):
+    rules = dataclasses.replace(FAST, flood_per_minute=20)
+
+    async def pings(conn):
+        conn.writer.write(bytes([0x89, 0]) * 10)  # with the session's own pongs, under 20 a minute
+        await conn.writer.drain()
+
+    async def stop_soon(bench):
+        await asyncio.sleep(0.6)
+        bench.stop = True
+
+    b = Bench(tmp_path, lambda c: serve(c, then=pings), rules)
+    assert b.go(during=stop_soon)[0] == STOPPED
+
+
+def test_a_memory_error_ends_the_session_and_not_the_service(tmp_path, monkeypatch):
+    """Under the cap on the address space (design decision 106) a message the service cannot hold is a
+    MemoryError: the session is lost, as on any error, and the service goes on to its back-off."""
+
+    def no_room(*args):
+        raise MemoryError
+
+    monkeypatch.setattr(tvlive, "_message", no_room)
+    b = Bench(tmp_path, lambda c: serve(c, [push("power", state="Active")]))
+    assert b.go()[0] == LOST and b.lines()[-1] == ("session.down", {"why": "MemoryError"})
+
+
+def test_the_service_caps_its_address_space_then_runs_with_the_key_it_reads_itself(tmp_path, monkeypatch):
+    order = []
+    monkeypatch.setattr(lgwebos, "cap_memory", lambda: order.append("cap"))
+
+    async def run(env, ledger, log):
+        order.append(await env.key())
+        return 0
+
+    monkeypatch.setattr(tvlive, "run", run)
+    keys = tmp_path / "lgtv-keys.sqlite"
+    write_lgtv_keys(keys, {TV: "stored-key"})
+    on = config.Settings(live_reading="on", state_dir=str(tmp_path), tv_ip=TV)
+    assert tvlive.main(on, str(keys)) == 0 and order == ["cap", "stored-key"]
 
 
 def test_a_tv_that_accepts_and_then_says_nothing_is_a_failed_attempt_within_the_limit(tmp_path):

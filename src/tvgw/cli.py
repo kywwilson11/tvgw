@@ -4481,11 +4481,14 @@ def cmd_setup(a, s, prof) -> int:
 def cmd_tvcheck(a, s, prof) -> int:
     """The hourly reading: 4, having asked the TV nothing, when the gateway is not paired with it. (samsung)
     A Samsung on the samsung-tizen profile is read without pairing by tizen.read(), which no other
-    profile ever runs; every other profile keeps LG's reader, which asks nothing without a key."""
+    profile ever runs; every other profile keeps LG's reader, which asks nothing without a key. The
+    process caps its own address space first (design decision 106): it runs before the hourly ingest, and
+    a TV's oversized reply then ends this reading alone, as unreachable, never the run or the gateway."""
     from tvgw import lgwebos, tizen
 
+    lgwebos.cap_memory()
     reading = tizen.read(s.tv_ip) if s.profile == tizen.PROFILE else lgwebos.read(s.tv_ip, a.key_file)
-    print("\n".join(reading.lines()))
+    print("\n".join(clean(line) for line in reading.lines()))  # an error's text is the TV's words too
     return reading.exit_code()
 
 

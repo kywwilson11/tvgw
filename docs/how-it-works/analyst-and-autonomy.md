@@ -351,12 +351,12 @@ What uses it:
 
 - It never pairs. A key the TV refuses (an error, or a pairing prompt not answered `registered` within 3 seconds) ends the probe for good with exit 2: every registration attempt with a refused key puts a prompt on the screen. Once a prompt has been answered, every way the session can end before `registered` (silence, a closed socket, a close frame, a frame that is not JSON) counts as a refusal, and so does an answer that is not a JSON object; none of them leads to a reconnect.
 - At least 5 seconds between connection attempts; after a failure it waits 5, 15, 30, then 60 seconds; while `TV_IF` has no carrier it tries nothing.
-- Its own WebSocket client closes a session with code 1009 on any frame or message over 1 MiB, before the payload is read.
+- Its own WebSocket client closes a session with code 1009 on any frame or message over 1 MiB, or a message of more than 1,024 frames, before the payload is read, and with code 1002 on a ping, pong or close frame over 125 bytes or sent in pieces (`PROBE_FRAGMENTS_MAX` and `CONTROL_MAX` in src/tvgw/lgwebos.py). A message whose `id` is not a string is ignored.
 - It sends a ping every 30 seconds and ends the session when no pong comes within 10.
 - It sends nothing but the registration and the two subscriptions: no `set` call, no channel or programme subscription, no pointer-input socket, no Wake-on-LAN.
 - A power field outside the plain-word vocabulary is logged as `other`, and an app id that does not look like one as `invalid`.
 
-The file is a viewing record at app granularity: delete it once its report is read. The hourly reading also stores the TV's consent record: every flag of `eulaStatus` as `eula.<flag>` = `true`, `false` or `unknown` (a flag the TV leaves out is unknown, never off), and `network.bleAdvertisingOnOff`, which is recorded only. A flag that goes from `false` to `true` is a red line in the brief.
+The file is a viewing record at app granularity: delete it once its report is read. The hourly reading also stores the TV's consent record: every flag of `eulaStatus` as `eula.<flag>` = `true`, `false` or `unknown` (a flag the TV leaves out is unknown, never off), and `network.bleAdvertisingOnOff`, which is recorded only. Of the flags `lgwebos.CONSENT_FLAGS` does not name, it keeps the first 64 by name (`CONSENT_EXTRA_MAX`) and counts the rest in `eula.more`, so the TV does not choose how many rows a reading stores. A flag that goes from `false` to `true` is a red line in the brief.
 
 ## Files and records
 
