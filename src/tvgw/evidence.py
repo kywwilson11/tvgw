@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from tvgw import budget, companies, plain, queries
+from tvgw import coverage as cover
 from tvgw.names import is_public_address, is_public_name, registrable_domain
 from tvgw.profile import Profile
 
@@ -371,7 +372,8 @@ def verify(path: str, head: str | None = None) -> Verdict:
 
 
 # warnings of the hourly ingest that say a day's connections or lookups were lost (src/tvgw/ingest.py:
-# malformed lines, a log rotated past, conntrack's lost events, a source missing or failing)
+# malformed lines, a log rotated past, conntrack's lost events, a source missing or failing); (bounds) an
+# answer stored to its first records (cover.CUT) lost no lookup
 LOSS_PREFIXES = ("flows:", "dns:", "adguard:")
 
 
@@ -394,7 +396,14 @@ def uncovered(conn: sqlite3.Connection, day: str) -> str | None:
             warnings = json.loads(raw) if raw else []
         except ValueError:
             warnings = []
-        lost = next((w for w in warnings if isinstance(w, str) and w.startswith(LOSS_PREFIXES)), None)
+        lost = next(
+            (
+                w
+                for w in warnings
+                if isinstance(w, str) and w.startswith(LOSS_PREFIXES) and cover.CUT not in w
+            ),
+            None,
+        )
         if lost is not None:
             return f"the hourly ingest warned: {lost[:160]}"
     return None

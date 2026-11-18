@@ -396,7 +396,7 @@ QUIET = "no lookup from another address on the TV's side in the last day"
         ),
         (counted(NOW - 86400 + 1), "fail", None),
         (counted(NOW - 86400), "ok", QUIET),
-        ({ingest.OTHERS_KEY: "not a record"}, "ok", QUIET),
+        ({ingest.OTHERS_KEY: "[40]"}, "ok", QUIET),
         ("unreadable", "warn", "the store could not be read"),
     ],
     ids=["none counted", "an hour ago", "a day but a second", "a day ago", "unreadable row", "no store"],

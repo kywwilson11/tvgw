@@ -479,7 +479,9 @@ def ingest_pcaps(
     pending file failed. (bounds) A file's attempt is counted and committed before tshark starts
     (IN_PROGRESS), so a read that the process dies in counts as one: a file that killed the job every
     hour used to stop the pcaps and every step after them for 14 days, until retention deleted it. The
-    next run records such a read as STOPPED, and says so once the file is given up."""
+    next run records such a read as STOPPED, and says so once the file is given up. A listed file that
+    is deleted before or while it is read, as a capture ring deletes its oldest, is overwritten, not
+    unreadable: one warning counts them, no attempt is recorded, and the next file is read."""
     if not os.path.isdir(s.pcap_dir):
         raise SourceMissing(s.pcap_dir)
     # the directory is listed before /proc is asked, never after: a file the capture opened in between
@@ -519,6 +521,9 @@ def ingest_pcaps(
     deadline = clock() + budget
     tag = names or minimize.NameHasher((), "")  # (record)
     failed: list[str] = []
+    gone = (
+        0  # (bounds) listed, then deleted before tshark had read them, as a capture ring deletes its oldest
+    )
     for i, path in enumerate(pending):
         if clock() >= deadline:
             warn(f"pcaps: {len(pending) - i} file(s) deferred to the next run (time budget)")
@@ -526,7 +531,11 @@ def ingest_pcaps(
         name = os.path.basename(path)
         mark = marks.get(name)
         attempts = mark[1] if mark else 0
-        size = os.path.getsize(path)
+        try:
+            size = os.path.getsize(path)
+        except FileNotFoundError:  # overwritten, not unreadable: no attempt, and the next file is read
+            gone += 1
+            continue
         if size < PCAP_HEADER:
             _mark_pcap(conn, name, error=f"not a capture file ({size} bytes)", attempts=PCAP_MAX_ATTEMPTS)
             conn.commit()
@@ -540,6 +549,11 @@ def ingest_pcaps(
         try:
             rows = extract(path)
         except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as e:
+            if not os.path.exists(path):  # deleted while tshark read it: its mark goes with it
+                conn.execute("DELETE FROM pcaps_done WHERE name=?", (name,))
+                conn.commit()
+                gone += 1
+                continue
             _mark_pcap(conn, name, error=str(e)[:200], attempts=counted)
             conn.commit()
             if counted >= PCAP_MAX_ATTEMPTS:
@@ -617,6 +631,8 @@ def ingest_pcaps(
         _mark_pcap(conn, name, tls=len(tls), http=len(http), syn443=syn443, attempts=attempts)
         conn.commit()  # a long backlog (Pi was off) must not hold the lock for the whole run
         n_files, n_tls, n_http, n_lan = n_files + 1, n_tls + len(tls), n_http + len(http), n_lan + len(lan)
+    if gone:
+        warn(f"pcaps: {gone} capture file(s) were overwritten before they were read")
     if failed:
         warn(f"{len(failed)} pcap(s) could not be read ({failed[0]}); will retry next run")
     if (failed or gave_up) and not n_files:  # the hours those files cover are unknown, not quiet

@@ -54,7 +54,10 @@ AWAKE = ("Active", "Screen Off", "Screen Saver")  # queries.AWAKE, the readings 
 # step failing, and the next run reads on from the same cursor.
 PREFIXES = {"dns": ("dns: ", "adguard: "), "flows": ("flows: ",)}
 LOSS = ("log rotated or truncated", "conntrack lost events", "event socket dropped")
-SKIPPED = ("malformed", "records; cut", "on the TV's side")
+# (bounds) the words of the ingest's warning for answers stored to their first records: every lookup is in
+# the record, so the evidence pack and the trial record read it as no loss either
+CUT = "records; cut"
+SKIPPED = ("malformed", CUT, "on the TV's side")
 READ, LOST = "read", "lost"
 
 WHY_LOST = "the ingest found lines of the log lost"

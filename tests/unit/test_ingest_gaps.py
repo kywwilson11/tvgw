@@ -418,6 +418,33 @@ def test_a_file_a_run_died_in_and_then_read_keeps_its_attempts_as_a_failed_one_d
     assert conn.execute("SELECT error, attempts, tls_rows FROM pcaps_done").fetchone() == (None, 1, 1)
 
 
+def test_a_file_the_capture_ring_deleted_before_it_was_read_is_overwritten_and_the_next_one_is_read(
+    gateway, lg
+):
+    """(bounds) A ring that deletes its oldest file under a flood can do so between the step's listing and
+    its read: the step stopped at the first such file, and one deleted while tshark read it was booked as
+    a failed attempt."""
+    finished_pcaps(gateway, *(f"tv-{n}.pcap" for n in range(1, 5)))
+    pcap = Path(gateway.pcap_dir)
+    hello = [TlsHello(1793020100.0, TV, 40001, "1.2.3.4", 443, "h.example")]
+
+    def extract(path):
+        name = os.path.basename(path)
+        if name == "tv-1.pcap":
+            (pcap / "tv-2.pcap").unlink()  # deleted after the listing, before its turn
+        if name == "tv-3.pcap":
+            (pcap / name).unlink()  # deleted while tshark reads it
+            raise RuntimeError("tshark rc=2: The file doesn't exist.")
+        return hello
+
+    conn = db.connect(gateway.db_path)
+    warnings = []
+    assert ingest.ingest_pcaps(conn, gateway, extract, warnings.append, none_live) == (2, 2, 0, 0)
+    assert warnings == ["pcaps: 2 capture file(s) were overwritten before they were read"]
+    marks = conn.execute("SELECT name, error, attempts FROM pcaps_done ORDER BY name").fetchall()
+    assert marks == [("tv-1.pcap", None, 0), ("tv-4.pcap", None, 0)]
+
+
 def test_pcaps_past_the_time_budget_wait_for_the_next_run(gateway, lg):
     """A backlog of slow files used to run the step into the unit's timeout, and the sources after it
     were skipped every hour until it cleared."""
