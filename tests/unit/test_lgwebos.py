@@ -530,9 +530,10 @@ print(f"rc={rc} cap={resource.getrlimit(resource.RLIMIT_AS)[0]} VmPeak={peak} kB
 def test_on_linux_tvcheck_reads_under_its_cap_and_a_reply_held_without_end_ends_inside_it(
     tmp_path, tv, rc, first
 ):
-    """The cap is real only where the kernel enforces it. A benign reading runs whole under 1 GiB, and a
-    reply the library would hold without end (4 GiB here) ends the reading inside the cap, as unreachable,
-    and the command returns: the hourly run goes on to the ingest."""
+    """The cap is real only where the kernel enforces it. With a stand-in for the library (CI does not
+    install it) and for the handshake, a benign reading runs whole under 1 GiB, and a reply the library
+    would hold without end (4 GiB here) ends the reading inside the cap, as unreachable, and the command
+    returns: the hourly run goes on to the ingest."""
     keys = tmp_path / "lgtv-keys.sqlite"
     write_lgtv_keys(keys, {TV: "key"})
     env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}

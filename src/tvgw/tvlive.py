@@ -200,9 +200,9 @@ class Ledger:
             ]
             kept.append((now, who))
             body = "".join(f"{t:.3f} {w}\n" for t, w in kept).encode()
-            # the new body first, then the cut: a crash between the two leaves every attempt and the old
-            # tail after them, which can only count more (a torn line counts as made now), never an
-            # empty file, which would count none
+            # the new body first, then the cut: a crash between the two leaves every attempt, and what
+            # the old file holds after them can only add to the count; never an empty file, which would
+            # count none
             os.pwrite(fd, body, 0)
             os.ftruncate(fd, len(body))
             os.fsync(fd)
