@@ -8,6 +8,7 @@ name was blocked.
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 import struct
@@ -32,6 +33,10 @@ REASONS = {
 }
 
 _TIME_RE = re.compile(r"(\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d)(?:\.(\d+))?(Z|[+-]\d\d:?\d\d)?$")
+# (bounds) the records of one answer that are read, of any type, and the rest never: the reference's
+# largest real answer held 14, and a 64 KB answer to a name an app controls (over TCP) held 4,661 that
+# cost 400 ms and 1.2 MB of store a lookup
+ANSWER_RECORDS = 64
 
 
 def parse_time(s: str) -> float | None:
@@ -63,6 +68,8 @@ class DnsRecord:
     elapsed_ms: float
     # (namebound) the smallest lifetime of the answer's A records, in seconds; None without one
     a_ttl: int | None = None
+    # (bounds) the answer held more than ANSWER_RECORDS records: `answers` and `a_ttl` are of the first ones
+    cut: bool = False
 
 
 def parse_querylog_line(line: str, client: str | None = None) -> DnsRecord | None:
@@ -72,14 +79,26 @@ def parse_querylog_line(line: str, client: str | None = None) -> DnsRecord | Non
     (a truncated or NUL-filled line after a power loss). Every other field is coerced to its
     column's type, so an oddly typed record is stored, never rejected by the database: one
     unbindable row in a batch would roll back the whole hour and every hour after it."""
+    e = querylog_entry(line)
+    if client is not None and e.get("IP") != client:
+        return None
+    return querylog_record(e)
+
+
+def querylog_entry(line: str) -> dict:
+    """The JSON object of one query-log line, nothing in it read yet: the ingest asks whose lookup it is
+    before it decodes anything. ValueError for a line that is not one."""
     try:
         e = json.loads(line)
-    except ValueError:
+    except (ValueError, RecursionError):  # (bounds) 100,000 '[' are no record either, and stop no hour
         e = None
     if not isinstance(e, dict):
         raise ValueError("not a query-log record")
-    if client is not None and e.get("IP") != client:
-        return None
+    return e
+
+
+def querylog_record(e: dict) -> DnsRecord:
+    """The DnsRecord of a query-log line's object; ValueError when it has no readable time."""
     t = parse_time(str(e.get("T", "")))
     if t is None:
         raise ValueError("not a query-log record")
@@ -93,7 +112,8 @@ def _record(e: dict, t: float, answers: bool = True) -> DnsRecord:
     rules = res.get("Rules") if isinstance(res.get("Rules"), list) else []
     first = rules[0] if rules and isinstance(rules[0], dict) else {}
     blocked, reason = _verdict(res)
-    text, a_ttl = _answers(e["Answer"]) if answers and isinstance(e.get("Answer"), str) else (None, None)
+    read = answers and isinstance(e.get("Answer"), str)
+    text, a_ttl, cut = _answers(e["Answer"]) if read else (None, None, False)
     return DnsRecord(
         t=t,
         client=str(e.get("IP", "")),
@@ -108,18 +128,23 @@ def _record(e: dict, t: float, answers: bool = True) -> DnsRecord:
         cached=bool(e.get("Cached")),
         elapsed_ms=_number(e.get("Elapsed")) / 1e6,
         a_ttl=a_ttl,
+        cut=cut,
     )
 
 
-def _answers(message: str) -> tuple[str | None, int | None]:
-    """The answer as `dnsmsg.answers_text` stores it, and (namebound) the smallest lifetime of its A
-    records, from one decoding: (None, None) for a message that cannot be decoded, as there."""
+def _answers(message: str) -> tuple[str | None, int | None, bool]:
+    """The answer as `dnsmsg.answers_text` stores it, (namebound) the smallest lifetime of its A records,
+    from one decoding, and (bounds) whether it held more than ANSWER_RECORDS records, of which only the
+    first were read: (None, None, False) for a message that cannot be decoded, as there."""
     try:
-        found = dnsmsg.decode_answers(message)
+        msg = base64.b64decode(message)
+        found = dnsmsg.decode_answers(msg, limit=ANSWER_RECORDS)
     except (dnsmsg.DnsFormatError, struct.error, ValueError):  # the faults answers_text returns None for
-        return None, None
+        return None, None, False
+    held = struct.unpack_from(">H", msg, 6)[0]  # the header's answer count: decode_answers read its 12 bytes
     ttls = [a.ttl for a in found if a.rtype == "A"]
-    return ",".join(f"{a.rtype}:{a.value}" for a in found), min(ttls) if ttls else None
+    text = ",".join(f"{a.rtype}:{a.value}" for a in found)
+    return text, min(ttls) if ttls else None, held > ANSWER_RECORDS
 
 
 # (adguard) at most this much of each query-log file is read, from its end, to see whom AdGuard answered
@@ -286,7 +311,7 @@ def _verdict(res: dict) -> tuple[bool, str]:
 def _number(v) -> float:
     try:
         return float(v or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # (bounds) an integer past a float's range, 10**400
         return 0.0
 
 

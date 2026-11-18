@@ -53,6 +53,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from tvgw import appfront, autoblock, didit, evidencekit, minimize, receipt
+from tvgw import coverage as cover
 from tvgw.config import Settings
 
 STAGE = "trial"  # the decisions rows' stage
@@ -71,7 +72,8 @@ BAR = 1 / 20  # the rate a wall's trial must rule out (Q7)
 FIRST_LOOK = 0.02  # the error a trial's first planned look may spend
 INGEST_GAP = 2 * 3600.0 + 600  # seconds between two ingest runs that leave part of a day unread
 # warnings that the record lost lookups, connections or the live record; a capture's (pcaps:) names only
-# which name a connection had, which the subject `all` does not read, and its deferrals lose nothing
+# which name a connection had, which the subject `all` does not read, and its deferrals lose nothing; (bounds)
+# an answer stored to its first records (cover.CUT) lost no lookup either
 LOSSES = ("flows:", "dns:", "tvlive:")
 
 
@@ -248,7 +250,8 @@ def _not_whole(conn: sqlite3.Connection, a: float, b: float, now: float) -> str 
             warnings = json.loads(raw or "[]")
         except ValueError:
             warnings = []
-        if t >= a and t < b + receipt.SETTLE and any(str(w).startswith(LOSSES) for w in warnings):
+        lost = [w for w in map(str, warnings) if w.startswith(LOSSES) and cover.CUT not in w]
+        if t >= a and t < b + receipt.SETTLE and lost:
             return "the record lost lookups or connections"
     return None
 

@@ -33,6 +33,7 @@ from tvgw import (
     flowlog,
     guard,
     health,
+    ingest,
     inpath,
     ledger,
     lgkeys,
@@ -774,6 +775,8 @@ def _check(
     #     logger's event socket with the count of events the kernel dropped on it (for the store)
     events_check, drops = flowlog_check(run, read, ruleset, sockets)
     r.checks.append(events_check)
+    # 7f1. (bounds) lookups from another address on the TV's side, as the hourly ingest counted them
+    r.checks.append(Check("tv_side_others", *held("tv_side_others", *tv_side_level(record, r.t))))
     # 7g. (events) the VPN boundary, for the brief: the tunnel and PIA's own state; never a check
     r.vpn = {
         "vpn_if": s.vpn_if,
@@ -1702,6 +1705,8 @@ FAIL_AFTER: dict[str, str] = {
     # (decision 92) the hourly judge's last run failed while the record holds rules it watches; any other
     # failed job is a WARN
     "jobs": FAIL,
+    # (bounds) lookups from another address on the TV's side in the last day, which the record does not hold
+    "tv_side_others": FAIL,
 }
 PROMOTED: frozenset[str] = frozenset()
 HELD = " (a FAIL once this check is promoted; a warning while it is new)"
@@ -1711,6 +1716,7 @@ BACKUP_MAX_AGE = 2 * 86400  # the daily copy (tvgw-backup.timer) has missed a da
 INGEST_WARN_AGE = 2 * 3600  # the hourly ingest (tvgw-analyze.timer, at :20) has missed a run
 INGEST_FAIL_AGE = 12 * 3600  # half a day of the TV's traffic is missing from the record
 INGEST_BOOT_GRACE = 3600  # up this long, a gateway has had its catch-up run (the timer is Persistent)
+TV_SIDE_DAY = 86400  # (bounds) how long the last count of lookups from another TV-side address is a finding
 NEIGH_STATES = frozenset({"REACHABLE", "STALE", "DELAY"})  # a device that answered on the port lately
 RT_TABLE = "100"  # tvgw-apply's table for the TV's traffic in direct mode
 # what the depth checks read from the store; (updates) and what the updates check reads
@@ -1719,6 +1725,8 @@ META_KEYS = ("last_run", "backup_ok_t", "backup_error", upd.META_SYSTEM, upd.MET
 META_KEYS += ("schema",)
 # (pause) the pause row the sentinels' check reads
 META_KEYS += (listpause.META_KEY,)
+# (bounds) the hourly ingest's count of lookups from another address on the TV's side
+META_KEYS += (ingest.OTHERS_KEY,)
 # what store_meta adds besides the meta table, under names the table never holds: the time of the first
 # check the store recorded (its verify table, which tvgw-verify.timer writes from minutes after the
 # install on) and of the newest copy in the backup directory, from its UTC name
@@ -1885,6 +1893,25 @@ def ingest_level(
     if age > INGEST_WARN_AGE:
         return WARN, f"the last ingest ran {_ago(age)} ago"
     return OK, f"the last ingest ran {_ago(age)} ago"
+
+
+def tv_side_level(meta: dict[str, str] | None, now: float) -> tuple[str, str]:
+    """(bounds) Lookups from another address on the TV's side, as the last ingest run that saw any counted
+    them (ingest.OTHERS_KEY): of FAIL level for TV_SIDE_DAY after that run. AdGuard answers them and the
+    record keeps none, so a second device on the TV's cable, or the TV under a second address, looks up
+    names nothing shows. The gateway's own address there and the probe's are never counted. Counts and an
+    age only: the store keeps no such address."""
+    if meta is None:
+        return WARN, "the store could not be read"
+    seen = _json(meta.get(ingest.OTHERS_KEY) or "")
+    seen = seen if isinstance(seen, dict) else {}
+    t = _number(seen.get("t"))
+    if t is None or now - t >= TV_SIDE_DAY:
+        return OK, "no lookup from another address on the TV's side in the last day"
+    return FAIL, (
+        f"{seen.get('lookups')} lookup(s) came from {seen.get('addresses')} other address(es) on the TV's"
+        f" side, counted {_ago(now - t)} ago; they are not in the record"
+    )
 
 
 def uplink_level(run: Runner, wan_if: str, exists: Callable[[str], bool]) -> tuple[str, str]:
@@ -2954,6 +2981,14 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Run sudo tvgw-apply, then sudo systemctl start tvgw-flowlog. "
         "Check again with sudo tvgw verify: this check needs root.",
     ),
+    # (bounds) a warning at most while it is new (FAIL_AFTER)
+    "tv_side_others": (
+        "Another device on the TV's cable, or the TV under a second address, looked up names through the "
+        "gateway in the last day. The record keeps none of those lookups.",
+        "Nothing on the TV. The daily brief does not show what that device or address looked up.",
+        "Check that only the TV is plugged in on the gateway's TV side. If it is, restart the TV, "
+        "so that it asks the gateway for its address again.",
+    ),
     # (depth) the gateway's blind spots, each a warning at most while it is new (FAIL_AFTER)
     # (reliability) a store a newer version wrote, after a downgrade
     "store_version": (
@@ -3127,7 +3162,8 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "names_tap",  # (namebound)
         "mint_shadow",  # (mint)
     ),
-    "recording what the TV does": ("capture", "flowlog_events", "attention"),  # (attention)
+    # (attention) attention; (bounds) tv_side_others
+    "recording what the TV does": ("capture", "flowlog_events", "tv_side_others", "attention"),
     "every service is running": (
         "services",
         "store_version",  # (reliability)

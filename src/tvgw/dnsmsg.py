@@ -75,8 +75,11 @@ def rcode(msg: bytes) -> int:
     return msg[3] & 0x0F if len(msg) >= 4 else -1
 
 
-def decode_answers(message: bytes | str) -> list[Answer]:
-    """A/AAAA/CNAME answers of a DNS message (bytes or base64 text). Other types are skipped."""
+def decode_answers(message: bytes | str, limit: int | None = None) -> list[Answer]:
+    """A/AAAA/CNAME answers of a DNS message (bytes or base64 text). Other types are skipped. (bounds)
+    With `limit`, only the first `limit` records of the answer section are read, of any type, and
+    nothing after them: a 64 KB answer to a name an app controls holds thousands of records, each of
+    which can name a 253-character name through one pointer."""
     msg = base64.b64decode(message) if isinstance(message, str) else message
     if len(msg) < 12:
         raise DnsFormatError("short header")
@@ -88,7 +91,7 @@ def decode_answers(message: bytes | str) -> list[Answer]:
     if off > len(msg):
         raise DnsFormatError("truncated question")
     out: list[Answer] = []
-    for _ in range(an):
+    for _ in range(an if limit is None else min(an, limit)):
         _, off = read_name(msg, off)
         if off + 10 > len(msg):
             raise DnsFormatError("truncated record")

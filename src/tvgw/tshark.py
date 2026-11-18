@@ -22,6 +22,8 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import tempfile
+import threading
 from dataclasses import dataclass
 
 from tvgw import clienthello
@@ -78,6 +80,10 @@ REPEAT_WINDOW = 30.0  # seconds: the same connection's hello again within this i
 SANDBOX = "systemd-run"
 MEMORY_MAX = "512M"
 TASKS_MAX = 64  # tshark runs a handful of threads; a dissector that forks without end stops here
+TIMEOUT = 600  # seconds one tshark run may take; the sandbox's RuntimeMaxSec too
+# (bounds) the rows one file may print before the read stops: the reference's busiest hour held under
+# 6,000 packets, and a file of crafted hello-shaped segments printed 421 MB of rows
+ROW_LIMIT = 500_000
 
 
 # the transient unit's hardening, beyond the user drop: each property removes something a dissector
@@ -179,7 +185,7 @@ class Syn:
     dport: int
 
 
-def command(pcap: str, unprivileged: bool = False, timeout: int = 600) -> list[str]:
+def command(pcap: str, unprivileged: bool = False, timeout: int = TIMEOUT) -> list[str]:
     # the TV's requests to port 80 are captured whole; without the first preference their bodies
     # (POSTs, uploads) would be held in memory for reassembly, and the request line and headers are
     # all that is read. The other two keep a split hello's reassembly on (PREFS)
@@ -357,7 +363,7 @@ def dedupe(rows: list[TlsHello | HttpRequest | Syn]) -> list[TlsHello | HttpRequ
 
 
 def extract(
-    pcap: str, timeout: int = 600, unprivileged: bool | None = None, keep_repeats: bool = False
+    pcap: str, timeout: int = TIMEOUT, unprivileged: bool | None = None, keep_repeats: bool = False
 ) -> list[TlsHello | HttpRequest | Syn]:
     """Run tshark on one pcap. Raises RuntimeError on a real failure (not on 'cut short').
     `keep_repeats` skips `dedupe`, for comparing with an extractor that kept every repeat.
@@ -365,26 +371,58 @@ def extract(
     Rows are framed on newline alone: str.splitlines would also break on \\x0b, \\x0c, \\x1c-\\x1e,
     \\x85 and U+2028/9, any of which a URI or user agent from the TV may carry. `unprivileged`
     defaults to "when running as root", and root without systemd-run is refused rather than run the
-    dissectors as root on packets from the TV and the internet."""
+    dissectors as root on packets from the TV and the internet.
+
+    (bounds) Each row is parsed as tshark prints it, so a file's output is never held whole, as
+    subprocess.run held it, twice. Past ROW_LIMIT rows the read stops with RuntimeError; past `timeout`
+    seconds tshark is killed and TimeoutExpired raised, as subprocess.run raised it. stderr goes to a
+    temporary file, never a pipe nobody reads while stdout is read, and tshark is killed on every way
+    out, the ingest step's clock included."""
     if unprivileged is None:
         unprivileged = os.geteuid() == 0
         if unprivileged and shutil.which(SANDBOX) is None:
             raise RuntimeError(f"refusing to run tshark as root: {SANDBOX} not found")
-    out = subprocess.run(
-        command(pcap, unprivileged, timeout),
-        capture_output=True,
-        encoding="utf-8",  # text=True alone would use the parent's locale
-        errors="replace",
-        timeout=timeout,
-        cwd="/",
-        env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent", "LANG": "C.UTF-8"},
-    )
-    if out.returncode != 0 and not (out.returncode == CUT_SHORT_RC and CUT_SHORT_TEXT in out.stderr):
-        # a file it could not open also exits 2: never take that for an empty capture
-        raise RuntimeError(f"tshark rc={out.returncode}: {out.stderr.strip()[:200]}")
+    cmd = command(pcap, unprivileged, timeout)
     rows: list[TlsHello | HttpRequest | Syn] = []
-    for line in out.stdout.split("\n"):
-        rows.extend(parse_row(line))
+    late = threading.Event()
+    with (
+        tempfile.TemporaryFile() as err,
+        subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=err,
+            encoding="utf-8",  # text mode alone would use the parent's locale
+            errors="replace",
+            cwd="/",
+            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent", "LANG": "C.UTF-8"},
+        ) as proc,
+    ):
+
+        def stop() -> None:
+            late.set()
+            proc.kill()
+
+        watchdog = threading.Timer(timeout, stop)
+        watchdog.start()
+        try:
+            for n, line in enumerate(proc.stdout):
+                if late.is_set():  # killed at its timeout: a sandboxed tshark may print on until its own
+                    break
+                if n == ROW_LIMIT:
+                    raise RuntimeError(f"tshark printed more than {ROW_LIMIT:,} rows")
+                rows.extend(parse_row(line))
+            proc.wait()
+        finally:
+            watchdog.cancel()
+            watchdog.join()  # no thread outlives the call
+            proc.kill()  # nothing once it has exited
+        err.seek(0)
+        stderr = err.read().decode("utf-8", "replace")
+    if late.is_set():
+        raise subprocess.TimeoutExpired(cmd, timeout)
+    if proc.returncode != 0 and not (proc.returncode == CUT_SHORT_RC and CUT_SHORT_TEXT in stderr):
+        # a file it could not open also exits 2: never take that for an empty capture
+        raise RuntimeError(f"tshark rc={proc.returncode}: {stderr.strip()[:200]}")
     return rows if keep_repeats else dedupe(rows)
 
 

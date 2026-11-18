@@ -2,10 +2,13 @@
 
 import os
 import shutil
+import signal
 import subprocess
-import types
+import threading
+import tracemalloc
 
 import pytest
+from corpus import CORPORA
 
 from tvgw import tshark
 from tvgw.tshark import AGG, FIELDS, HttpRequest, Syn, TlsHello, command, parse_row
@@ -176,48 +179,52 @@ def test_quic_hello_uses_udp_ports_and_bad_ports_become_zero():
     assert parse_row(odd)[0].sport == 0
 
 
-def test_extract_distinguishes_cut_short_from_a_file_it_could_not_open(monkeypatch, tmp_path):
+@pytest.fixture()
+def scripted(monkeypatch, tmp_path):
+    """tshark replaced by `sh`, started by the real subprocess.Popen with the keywords `extract` passes:
+    `scripted(stdout, stderr, returncode)` has it print those and exit so, and `script=` gives it other
+    shell words ($1 and $2 are the files holding stdout and stderr). Returns the list each call's argv,
+    keywords and process are appended to."""
+    calls = []
+    popen = subprocess.Popen
+
+    def script(stdout="", stderr="", returncode=0, script='cat "$1"; cat "$2" >&2; exit "$3"'):
+        out, err = tmp_path / "stdout", tmp_path / "stderr"
+        out.write_bytes(stdout.encode("utf-8", "surrogateescape"))
+        err.write_bytes(stderr.encode("utf-8"))
+
+        def run(cmd, **kw):
+            proc = popen(["sh", "-c", script, "sh", str(out), str(err), str(returncode)], **kw)
+            calls.append((cmd, kw, proc))
+            return proc
+
+        monkeypatch.setattr(subprocess, "Popen", run)
+        return calls
+
+    return script
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stderr", "fails"),
+    [
+        (2, "appears to have been cut short in the middle of a packet", False),
+        (2, 'You don\'t have permission to read the file "a.pcap".', True),
+        (0, "", False),
+    ],
+    ids=["cut short", "no permission", "clean"],
+)
+def test_extract_distinguishes_cut_short_from_a_file_it_could_not_open(scripted, returncode, stderr, fails):
     """Both exit 2. A finished hourly pcap is 'cut short' (fine); a permission error must raise, or the
     pcap is marked done with zero rows (this happened in production on 2026-10-27)."""
-    import subprocess
-    import types
-
-    from tvgw import tshark
-
-    def fake_run(cmd, **kw):
-        return fake_run.result
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    fake_run.result = types.SimpleNamespace(
-        returncode=2, stdout="", stderr="appears to have been cut short in the middle of a packet"
-    )
-    assert tshark.extract(str(tmp_path / "a.pcap"), unprivileged=False) == []
-    fake_run.result = types.SimpleNamespace(
-        returncode=2, stdout="", stderr='You don\'t have permission to read the file "a.pcap".'
-    )
-    try:
-        tshark.extract(str(tmp_path / "a.pcap"), unprivileged=False)
-    except RuntimeError as e:
-        assert "permission" in str(e)
+    scripted(stderr=stderr, returncode=returncode)
+    if fails:
+        with pytest.raises(RuntimeError, match="tshark rc=2: You don't have permission"):
+            tshark.extract("/x.pcap", unprivileged=False)
     else:
-        raise AssertionError("a file tshark could not open must not look like an empty capture")
-    fake_run.result = types.SimpleNamespace(returncode=0, stdout="", stderr="")
-    assert tshark.extract(str(tmp_path / "a.pcap"), unprivileged=False) == []
+        assert tshark.extract("/x.pcap", unprivileged=False) == []
 
 
-def scripted_tshark(monkeypatch, returncode=0, stdout="", stderr=""):
-    """Replace subprocess.run; returns the list every call's (argv, kwargs) is appended to."""
-    calls = []
-
-    def run(cmd, **kw):
-        calls.append((cmd, kw))
-        return types.SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
-
-    monkeypatch.setattr(subprocess, "run", run)
-    return calls
-
-
-def test_extract_frames_rows_on_newline_only_and_rejects_a_shifted_row(monkeypatch):
+def test_extract_frames_rows_on_newline_only_and_rejects_a_shifted_row(scripted):
     """A form feed inside a URI is one row (str.splitlines would make two and lose both); a tab inside
     a URI shifts every later column, so that row is dropped and the next one still lands."""
     hello = row(
@@ -239,11 +246,12 @@ def test_extract_frames_rows_on_newline_only_and_rejects_a_shifted_row(monkeypat
     form_feed = row(**http, **{"http.request.uri": "/a\x0cb"})
     tabbed = row(**http, **{"http.request.uri": "/a\tb"})
     stdout = "\n".join([hello, syn, tabbed, form_feed, "partial\tli"])
-    calls = scripted_tshark(monkeypatch, returncode=2, stdout=stdout, stderr="appears to have been cut short")
+    calls = scripted(stdout, "appears to have been cut short", returncode=2)
     out = tshark.extract("/x.pcap", unprivileged=False)
     assert [type(r) for r in out] == [TlsHello, Syn, HttpRequest] and out[2].uri == "/a\x0cb"
-    ((cmd, kw),) = calls
+    ((cmd, kw, _proc),) = calls
     assert cmd[0] == "tshark" and (kw["encoding"], kw["errors"]) == ("utf-8", "replace")
+    assert kw["cwd"] == "/" and kw["env"]["HOME"] == "/nonexistent" and kw["env"]["LANG"] == "C.UTF-8"
 
 
 def test_a_tab_inside_the_server_name_yields_no_row():
@@ -296,20 +304,22 @@ def test_names_are_cut_at_the_longest_a_hostname_can_be():
         (1000, None, "tshark"),
     ],
 )
-def test_privileges_are_dropped_exactly_when_running_as_root(monkeypatch, euid, setpriv, first_word):
+def test_privileges_are_dropped_exactly_when_running_as_root(
+    monkeypatch, scripted, euid, setpriv, first_word
+):
     monkeypatch.setattr(os, "geteuid", lambda: euid)
     monkeypatch.setattr(shutil, "which", lambda name: setpriv)
-    calls = scripted_tshark(monkeypatch)
+    calls = scripted()
     assert tshark.extract("/x.pcap") == []
     assert calls[0][0][0] == first_word
 
 
-def test_root_without_setpriv_refuses_to_run_tshark(monkeypatch):
+def test_root_without_setpriv_refuses_to_run_tshark(monkeypatch, scripted):
     """Fail closed: the dissectors parse packets from the TV and the internet, so a missing setpriv is
     one ingest warning per hour, not a silent run as root."""
     monkeypatch.setattr(os, "geteuid", lambda: 0)
     monkeypatch.setattr(shutil, "which", lambda name: None)
-    calls = scripted_tshark(monkeypatch)
+    calls = scripted()
     with pytest.raises(RuntimeError, match="systemd-run not found"):
         tshark.extract("/x.pcap")
     assert calls == []
@@ -508,11 +518,98 @@ def test_dedupe_keeps_one_hello_per_attempt_and_prefers_the_whole_one():
     assert out == [syn, H(1.1), H(1.5, sport=2), H(1.6, transport="quic"), H(40.0)]
 
 
-def test_extract_dedupes_what_tshark_printed(monkeypatch):
+def test_extract_dedupes_what_tshark_printed(scripted):
     line = hello_fields()
-    scripted_tshark(monkeypatch, stdout="\n".join([line, line.replace("\t", "\t", 1)]) + "\n")
+    scripted("\n".join([line, line.replace("\t", "\t", 1)]) + "\n")
     assert len(tshark.extract("/x.pcap", unprivileged=False)) == 1
     assert len(tshark.extract("/x.pcap", unprivileged=False, keep_repeats=True)) == 2
+
+
+# ---- (bounds) tshark read as it prints ---------------------------------------------------------------------
+def printed_whole(output: bytes) -> list:
+    """What `extract` returned for `output` when it took tshark's whole output from subprocess.run: decoded
+    at once, its newlines translated as text mode translates them, split on newline."""
+    whole = output.decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "\n")
+    return tshark.dedupe([r for line in whole.split("\n") for r in tshark.parse_row(line)])
+
+
+ROWS = sorted((CORPORA / "rows").glob("*/*.rows"))
+
+
+@pytest.mark.parametrize("rows", ROWS, ids=[f"{p.parent.name}/{p.stem}" for p in ROWS])
+def test_extract_gives_every_corpus_file_the_rows_it_gave_when_it_read_the_output_whole(scripted, rows):
+    scripted(rows.read_text(encoding="utf-8"), "appears to have been cut short in the middle of a packet", 2)
+    threads = threading.active_count()
+    assert tshark.extract("/x.pcap", unprivileged=False) == printed_whole(rows.read_bytes()) != []
+    assert threading.active_count() == threads  # the watchdog is gone with the call
+
+
+def test_extract_holds_one_row_at_a_time_never_the_whole_output(scripted):
+    """subprocess.run held all of tshark's output, and str.split a second copy: 100,000 crafted rows of an
+    hour's file took the ingest's root process to 1,370 MB."""
+    scripted(("x" * 2000 + "\n") * 5000)  # 10 MB of rows that are not rows
+    tracemalloc.start()
+    try:
+        assert tshark.extract("/x.pcap", unprivileged=False) == []
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 1_000_000
+
+
+def test_the_row_limit_holds_the_busiest_real_hour_eighty_times_over():
+    """The reference's busiest hourly file held 5,792 packets, and a file of crafted hello-shaped segments
+    printed 421 MB of rows: the limit stops the second and never the first."""
+    assert tshark.ROW_LIMIT == 500_000
+
+
+class Clock(BaseException):
+    """What the ingest step's clock raises: no `except Exception` takes it."""
+
+
+# a tshark that prints $1's row for ever, from the shell's own printf: it ends at the first write after
+# its reader has gone, and leaves no process behind
+FOREVER = 'row=$(cat "$1"); while :; do printf "%s\\n" "$row"; done'
+
+
+@pytest.mark.parametrize(
+    ("limit", "ticks", "stops"),
+    [(3, 99, RuntimeError), (99, 3, Clock)],
+    ids=["the row limit", "the step's clock"],
+)
+def test_a_tshark_that_prints_without_end_is_stopped_and_killed(monkeypatch, scripted, limit, ticks, stops):
+    calls = scripted(hello_fields(), script=FOREVER)
+    monkeypatch.setattr(tshark, "ROW_LIMIT", limit)
+    parse, seen = tshark.parse_row, []
+
+    def ticking(line):
+        seen.append(line)
+        if len(seen) == ticks:
+            raise Clock
+        return parse(line)
+
+    monkeypatch.setattr(tshark, "parse_row", ticking)
+    with pytest.raises(stops):
+        tshark.extract("/x.pcap", unprivileged=False)
+    assert len(seen) == min(limit, ticks)
+    ((_cmd, _kw, proc),) = calls
+    assert proc.returncode == -signal.SIGKILL  # killed, and reaped
+
+
+@pytest.mark.parametrize(
+    "script",
+    ["exec sleep 30", f"({FOREVER}) & wait"],
+    ids=["silent", "printing on in a process of its own, as a sandboxed tshark does"],
+)
+def test_a_tshark_past_its_timeout_is_killed_and_read_no_further_as_subprocess_run_did(scripted, script):
+    """systemd-run hands its pipe to tshark in a unit of its own: killing systemd-run at the timeout leaves
+    tshark printing into the pipe until the unit's own limit, and the rows must stop being read there."""
+    calls = scripted(hello_fields(), script=script)
+    threads = threading.active_count()
+    with pytest.raises(subprocess.TimeoutExpired):
+        tshark.extract("/x.pcap", timeout=0.3, unprivileged=False)
+    ((_cmd, _kw, proc),) = calls
+    assert proc.returncode == -signal.SIGKILL and threading.active_count() == threads
 
 
 def test_summary_counts_the_tvs_hellos_by_what_could_be_read():

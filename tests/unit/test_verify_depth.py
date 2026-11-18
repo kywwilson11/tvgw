@@ -16,7 +16,7 @@ import pytest
 from conftest import NOW, ROOT, UNITS
 from test_verify import INPATH_TABLE, ROUTER, S, gateway, resolver, vfs
 
-from tvgw import autoblock, backup, health, inpath, ledger, probe, scrub, status, verify
+from tvgw import autoblock, backup, health, ingest, inpath, ledger, probe, scrub, status, verify
 
 NEW = (
     "disk",
@@ -40,6 +40,7 @@ NEW = (
     "attention",  # (attention) design decision 69: its own tests are in test_attention.py
     "updates",  # (updates) design decision 77: its own tests are in test_updates.py
     "jobs",  # (decision 92) the timers' services: below
+    "tv_side_others",  # (bounds) design decision 107: below
 )
 TV_MAC = "00:00:5e:00:53:17"  # documentation MACs (RFC 7042)
 OTHER_MAC = "00:00:5e:00:53:99"
@@ -173,6 +174,8 @@ def broken_host():
                 }
             ),
             "update_check": json.dumps({"t": NOW - 86400, "ok": False, "why": "x", "failures": 5}),
+            # (bounds) another address on the TV's side looked names up an hour ago
+            ingest.OTHERS_KEY: json.dumps({"t": NOW - 3600, "lookups": 40, "addresses": 1}),
         },
     }
 
@@ -372,6 +375,39 @@ def test_ingest_fresh_waits_out_a_power_cut_before_it_is_of_fail_level(lg):
     )
 
 
+# ---- tv_side_others (bounds, design decision 107) -------------------------------------------------------
+def counted(t: float) -> dict[str, str]:
+    """The record of an ingest run at `t` that counted 40 lookups from one other address on the TV's side."""
+    return {ingest.OTHERS_KEY: json.dumps({"t": t, "lookups": 40, "addresses": 1})}
+
+
+QUIET = "no lookup from another address on the TV's side in the last day"
+
+
+@pytest.mark.parametrize(
+    ("meta", "found", "detail"),
+    [
+        ({}, "ok", QUIET),
+        (
+            counted(NOW - 3600),
+            "fail",
+            "40 lookup(s) came from 1 other address(es) on the TV's side, counted 60 minutes ago;"
+            " they are not in the record" + verify.HELD,
+        ),
+        (counted(NOW - 86400 + 1), "fail", None),
+        (counted(NOW - 86400), "ok", QUIET),
+        ({ingest.OTHERS_KEY: "[40]"}, "ok", QUIET),
+        ("unreadable", "warn", "the store could not be read"),
+    ],
+    ids=["none counted", "an hour ago", "a day but a second", "a day ago", "unreadable row", "no store"],
+)
+def test_tv_side_others_holds_a_count_from_the_last_day_and_names_no_address(lg, meta, found, detail):
+    """(bounds) The ingest stores none of these lookups, so the check says so for a day after the run that
+    counted them: of FAIL level, held while the check is new, in counts and an age."""
+    c = one("tv_side_others", lg, meta=meta)
+    assert level(c) == found and (detail is None or c.detail == detail)
+
+
 def test_store_meta_reads_the_store_read_only_and_never_raises(tmp_path):
     from tvgw import db
 
@@ -381,9 +417,15 @@ def test_store_meta_reads_the_store_read_only_and_never_raises(tmp_path):
     conn = db.connect(str(path))
     db.set_meta(conn, "last_run", "1793026000.0")
     db.set_meta(conn, "schema", "9")
+    db.set_meta(conn, ingest.OTHERS_KEY, "{}")  # (bounds) for tv_side_others
     conn.commit()
     # (reliability) the recorded version comes too, for store_version
-    assert verify.store_meta(str(path)) == {"last_run": "1793026000.0", "schema": "9"}
+    assert verify.store_meta(str(path)) == {
+        "last_run": "1793026000.0",
+        "schema": "9",
+        ingest.OTHERS_KEY: "{}",
+    }
+    conn.execute("DELETE FROM meta WHERE key = ?", (ingest.OTHERS_KEY,))
     for t in (1793020000.5, 1793010000.25, 1793030000.0):
         conn.execute("INSERT INTO verify(t, ok, failures) VALUES (?, 1, '[]')", (t,))
     conn.commit()

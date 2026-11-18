@@ -186,6 +186,8 @@ def test_a_day_the_record_does_not_cover_is_left_out_and_says_why(store, tmp_pat
     a = queries_day("2026-11-10")  # its runs from 04:00 gone, one at 10:20 warning of lost lines
     store.conn.execute("DELETE FROM ingest_runs WHERE t >= ? AND t < ?", (a + 4 * HOUR, a + DAY))
     runs(store, a + 10 * HOUR, a + 11 * HOUR, ["flows: 12 malformed line(s) skipped"])
+    # (bounds) an answer stored to its first 64 records lost no lookup: its day is written
+    runs(store, a + DAY + 10 * HOUR, a + DAY + 11 * HOUR, ["dns: 1 answer(s) held more than 64 records; cut"])
     b = queries_day("2026-11-12")
     store.conn.execute("DELETE FROM ingest_runs WHERE t >= ? AND t < ?", (b, b + DAY))
     store.conn.commit()
