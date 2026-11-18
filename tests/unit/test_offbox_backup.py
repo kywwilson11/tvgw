@@ -190,8 +190,14 @@ def test_a_copy_whose_times_are_not_times_fails_the_drill_and_leaves_nothing(tmp
     assert os.listdir(tmp_path) == ["odd.db"]  # the scratch went with the failure
 
 
-def space(free: int):
-    return lambda path: os.statvfs_result((4096, 4096, 10**6, free // 4096, free // 4096, 0, 0, 0, 0, 255))
+def space(free: int, asked: list | None = None):
+    """A statvfs with `free` bytes available, that notes in `asked` which directory it was asked about."""
+
+    def statvfs(path: str) -> os.statvfs_result:
+        (asked if asked is not None else []).append(path)
+        return os.statvfs_result((4096, 4096, 10**6, free // 4096, free // 4096, 0, 0, 0, 0, 255))
+
+    return statvfs
 
 
 def test_the_scratch_copy_is_made_beside_the_file_where_a_copy_has_room(tmp_path, copies, monkeypatch):
@@ -200,9 +206,9 @@ def test_the_scratch_copy_is_made_beside_the_file_where_a_copy_has_room(tmp_path
     _, copy = copies
     made, real = [], tempfile.mkdtemp
     monkeypatch.setattr(backup.tempfile, "mkdtemp", lambda **kw: made.append(kw["dir"]) or real(**kw))
-    need = os.path.getsize(copy) + backup.HEADROOM
-    assert backup.restore_check(copy, statvfs=space(need)).ok
-    assert made == [os.path.dirname(copy)] and os.listdir(made[0]) == [os.path.basename(copy)]
+    need, asked = os.path.getsize(copy) + backup.HEADROOM, []
+    assert backup.restore_check(copy, statvfs=space(need, asked)).ok
+    assert made == asked == [os.path.dirname(copy)] and os.listdir(made[0]) == [os.path.basename(copy)]
     short = backup.restore_check(copy, statvfs=space(need - 4096))
     assert not short.ok and short.lines == [
         f"{(need - 4096) // 4096 * 4096 / 2**20:.0f} MiB free beside {os.path.basename(copy)}; its check needs"
@@ -228,10 +234,12 @@ def test_a_copy_that_cannot_be_written_fails_the_drill_and_leaves_nothing(tmp_pa
 
 def test_a_scratch_directory_that_cannot_be_made_fails_the_drill(tmp_path, copies):
     _, copy = copies
-    drill = backup.restore_check(copy, scratch_root=str(tmp_path / "gone"), statvfs=space(1 << 40))
+    asked = []
+    drill = backup.restore_check(copy, scratch_root=str(tmp_path / "gone"), statvfs=space(1 << 40, asked))
     assert drill.lines == [
         f"cannot make a scratch directory beside {os.path.basename(copy)}: No such file or directory"
     ]
+    assert asked == [str(tmp_path / "gone")]  # the room is measured where the scratch goes
 
 
 def test_restore_check_needs_no_settings_and_exits_by_its_verdict(tmp_path, copies, capsys, monkeypatch):

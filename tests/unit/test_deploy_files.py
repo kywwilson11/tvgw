@@ -165,7 +165,7 @@ def test_install_takes_only_the_first_backup(tmp_path):
 LONG_RUNNING = ("tvgw-pcap", "tvgw-flowlog", "tvgw-dnsgate")
 
 
-def restart_changed(tmp_path, tv_ip="10.10.10.17", fail="", tv_if="eth0", mode="source", ring="170 9252"):
+def restart_changed(tmp_path, tv_ip="10.10.10.17", fail="", tv_if="eth0", mode="source", ring="338 4653"):
     """Run install.sh's restart_changed for the three long-running units against copies of their unit
     files, a settings file and a package tree under tmp_path, with a fake systemctl (which fails to
     restart `fail`); returns the units it restarted. `mode` is install.sh's MODE, source or package;

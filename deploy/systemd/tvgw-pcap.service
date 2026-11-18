@@ -53,9 +53,10 @@ ExecStartPre=/bin/sh -c 'test -x /usr/bin/dumpcap || { echo "tvgw-pcap: /usr/bin
 # tv_<YYYYmmddHHMMSS>_<nnnnn>.pcap (-b nametimenum:2: the time first, so names sort in time order
 # across restarts, which restart the number at 00001). Retention is `tvgw prune-pcaps`.
 # (edges) The ring bounds the writer itself (design decision 108): a new file also once one reaches
-# PCAP_RING_KB, and the run's oldest file removed once there are PCAP_RING_FILES (`tvgw pcap-ring`,
-# PCAP_DAYS of hours plus two, each an equal share of PCAP_MAX_GB). An ordinary hour stays far below
-# the share, so files still turn on the hour and outlive retention; a flood fills the ring, never the disk.
+# PCAP_RING_KB, and the run's oldest file removed once there are PCAP_RING_FILES (`tvgw pcap-ring`:
+# twice PCAP_DAYS of hours plus two, each an equal share of PCAP_MAX_GB). An ordinary hour stays far
+# below the share, so files still turn on the hour and outlive retention, read or unread; a flood fills
+# the ring, never the disk.
 # (packaging) The TV port, the TV subnet and the gateway's address on it are TV_IF, TV_NET and GW_IP
 # from the settings, which install.sh writes into the drop-in tvgw-pcap.service.d/tv-side.conf with
 # the ring; systemd reads it as root, since this user cannot read the settings file, and fills them in below

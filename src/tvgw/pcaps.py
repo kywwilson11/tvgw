@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import contextlib
 import glob
-import itertools
 import os
 import re
 import shutil
@@ -40,7 +39,9 @@ FREE_FLOOR = 1 << 30  # bytes that must stay free where the pcaps live, whatever
 # install.sh restarts the unit, so for a few seconds the new ingest runs beside the old tcpdump) and
 # for a Pi rolled back to an older checkout, which runs tcpdump again
 WRITERS = frozenset({"dumpcap", "tcpdump"})
-# (edges) the ring: PCAP_DAYS of hourly files, plus the live one and one spare
+# (edges) the ring: twice PCAP_DAYS of hourly files, plus the live one and one spare. Twice, because
+# prune keeps an unread file that long: a stopped ingest must cost a fortnight of warnings, as before,
+# and never a file the ring removes unread and unsaid
 RING_SPARE = 2
 # a file is cut at no less than 1 MB (the reference gateway's largest hour is 0.8 MB): a small PCAP_MAX_GB
 # must not turn an ordinary hour into many files, each one more run of tshark for the ingest
@@ -127,12 +128,12 @@ class Ring(NamedTuple):
 
 
 def ring(max_gb: float, days: int) -> Ring:
-    """The ring for PCAP_MAX_GB and PCAP_DAYS: PCAP_DAYS of hourly files plus RING_SPARE, each cut at an
-    equal share of PCAP_MAX_GB. An ordinary hour stays far below that share, so the ring turns on the
-    hour and holds longer than retention keeps a file; a flood turns it on size, and the ring then holds
-    at most PCAP_MAX_GB. The share is in units of 1,024 bytes: a dumpcap that counts a kB as 1,000 bytes
-    cuts each file a little smaller, and the ring stays within the cap either way."""
-    files = min(days * 24 + RING_SPARE, DUMPCAP_FILES_MAX)
+    """The ring for PCAP_MAX_GB and PCAP_DAYS: twice PCAP_DAYS of hourly files plus RING_SPARE, each cut
+    at an equal share of PCAP_MAX_GB. An ordinary hour stays far below that share, so the ring turns on
+    the hour and holds longer than retention keeps any file, read or not; a flood turns it on size, and
+    the ring then holds at most PCAP_MAX_GB. The share is in units of 1,024 bytes: a dumpcap that counts a
+    kB as 1,000 bytes cuts each file a little smaller, and the ring stays within the cap either way."""
+    files = min(2 * days * 24 + RING_SPARE, DUMPCAP_FILES_MAX)
     share = int(max_gb * 2**30) // files // 1024
     return Ring(files, min(max(share, RING_FLOOR_KB), DUMPCAP_KB_MAX))
 
@@ -140,10 +141,12 @@ def ring(max_gb: float, days: int) -> Ring:
 def overwritten(names: Iterable[str], now: float, window: float) -> int:
     """How many ring files went before ingest read them, from the gaps in the ring's numbers. `names` are
     the files on disk and the files the store has a mark for. dumpcap numbers a run's files from 00001 in
-    the order it opens them and starts again at every start; a file opened after another closes after it,
-    so its mark, had it been read, would be in the store as long as the file before it opened less than
-    `window` seconds before `now`. Each number missing after such a file is a file never read: in the
-    middle of a run, or at the start of the next one."""
+    the order it opens them and starts again at every start. In time order, a file belongs to the run
+    whose last number is the largest below its own, or starts a run: a capture that restarted with its
+    clock behind still sorts into its own run, not into a gap of the one before. A file opened after
+    another closes after it, so its mark, had it been read, would be in the store as long as the file
+    before it opened less than `window` seconds before `now`. Each number missing after such a file is a
+    file never read: in the middle of a run, or at the start of a new one."""
     runs: dict[str, list[tuple[str, int]]] = {}
     for name in names:
         if m := RING_NAME.fullmatch(name):
@@ -151,9 +154,21 @@ def overwritten(names: Iterable[str], now: float, window: float) -> int:
     since = time.strftime("%Y%m%d%H%M%S", time.gmtime(now - window))  # the names' own UTC stamps
     lost = 0
     for files in runs.values():
-        for (stamp, before), (_, number) in itertools.pairwise(sorted(files)):
-            if stamp >= since:
-                lost += number - before - 1 if number > before else max(number - 1, 0)
+        ends: list[tuple[int, str]] = []  # each run's last number so far, and when that file opened
+        prior = ""  # when the file before this one, in time, opened; "" sorts before every stamp
+        for stamp, number in sorted(files):
+            fits = [i for i, (last, _) in enumerate(ends) if last < number]
+            if fits:
+                i = max(fits, key=lambda i: ends[i][0])
+                before, opened = ends[i]
+                missing = number - before - 1
+            else:  # a start, its files before this one gone; or the number wrapped
+                i, opened, missing = len(ends), prior, max(number - 1, 0)
+                ends.append((0, ""))
+            if opened >= since:
+                lost += missing
+            ends[i] = (number, stamp)
+            prior = stamp
     return lost
 
 

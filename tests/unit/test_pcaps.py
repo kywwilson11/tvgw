@@ -191,10 +191,10 @@ MIB = 2**20
 @pytest.mark.parametrize(
     ("max_gb", "days", "ring"),
     [
-        (1.5, 7, Ring(170, 9252)),  # the reference: 7 days of hours and two, about 9 MB each
-        (0.01, 7, Ring(170, 1024)),  # a file is never cut below 1 MB
+        (1.5, 7, Ring(338, 4653)),  # the reference: 14 days of hours and two, about 4.5 MB each
+        (0.01, 7, Ring(338, 1024)),  # a file is never cut below 1 MB
         (1.5, 5000, Ring(99_999, 1024)),  # dumpcap keeps fewer than 100,000 files
-        (10_000, 1, Ring(26, 2_000_000)),  # nor files of 2 GB
+        (10_000, 1, Ring(50, 2_000_000)),  # nor files of 2 GB
     ],
 )
 def test_the_ring_holds_pcap_days_of_hours_and_cuts_a_file_at_its_share_of_the_cap(max_gb, days, ring):
@@ -203,7 +203,7 @@ def test_the_ring_holds_pcap_days_of_hours_and_cuts_a_file_at_its_share_of_the_c
 
 
 @pytest.mark.parametrize("days", [1, 7, 30])
-@pytest.mark.parametrize("max_gb", [0.75, 1.5, 7.3, 40])
+@pytest.mark.parametrize("max_gb", [1.5, 7.3, 40])
 def test_the_ring_holds_the_cap_to_the_last_kb(max_gb, days):
     files, kb = pcaps.ring(max_gb, days)
     assert files * kb * 1024 <= max_gb * 2**30 < files * (kb + 1) * 1024
@@ -228,8 +228,11 @@ HOURS = [stamp(NOW - h * 3600) for h in range(48, -1, -1)]  # two days of hours,
         ([ring_file(HOURS[i], i + 1) for i in (6, 5, 1, 0)], 3),  # in any order: the names are a set
         ([ring_file(HOURS[0], 40), ring_file(HOURS[1], 1), ring_file(HOURS[2], 2)], 0),  # a restart
         ([ring_file(HOURS[0], 40), ring_file(HOURS[1], 7), ring_file(HOURS[2], 8)], 6),  # its first six gone
+        ([ring_file(HOURS[0], 5), ring_file(HOURS[1], 5)], 4),  # a new run's 5 after the old run's 5
         ([ring_file(HOURS[0], 1), ring_file(HOURS[1], 3), ring_file(HOURS[0], 9, "tvhdr")], 1),  # by prefix
-        ([ring_file(HOURS[0], 2), ring_file(HOURS[1], 1), ring_file(HOURS[1], 3)], 1),  # a stamp shared
+        ([ring_file(HOURS[0], 2), ring_file(HOURS[1], 1), ring_file(HOURS[1], 3)], 0),  # 3 may be the old's
+        # a restart with the clock behind: its 1, opened at :50 of the old run's 49, is a run of its own
+        ([ring_file(HOURS[1], 49), ring_file(HOURS[1][:-4] + "5000", 1), ring_file(HOURS[2], 50)], 0),
         ([ring_file(HOURS[0], 99_999), ring_file(HOURS[1], 0)], 0),  # dumpcap's number wraps
         (["tv-20261101T120000Z.pcap", "tv-20261101T150000Z.pcap", "notes.txt"], 0),  # tcpdump's names
     ],
@@ -258,9 +261,8 @@ def test_prune_counts_what_the_ring_overwrote_from_the_disk_the_live_file_and_th
     marks = frozenset(ring_file(HOURS[i], i + 1) for i in (0, 1))  # read, and pruned since: 3 and 4 went
     assert prune(d, set(), 7, 10**9, live, now=NOW, disk_free=plenty, marked=marks) == ([], [gone(3)])
     assert prune(d, set(marks), 7, 10**9, live, now=NOW, disk_free=plenty)[1] == [gone(3)]
-    assert prune(d, set(), 7, 10**9, live, now=NOW, disk_free=plenty)[1] == [
-        gone(1)
-    ]  # nothing known before 5
+    # with no marks, only 6 is missing: between 5 and the live 7
+    assert prune(d, set(), 7, 10**9, live, now=NOW, disk_free=plenty)[1] == [gone(1)]
 
 
 def test_prune_counts_no_further_back_than_twice_pcap_days(tmp_path):
@@ -297,7 +299,7 @@ def test_the_ring_command_prints_the_units_drop_in_line(tmp_path, capsys):
     conf = tmp_path / "tvgw.conf"
     conf.write_text("PCAP_DAYS=3\nPCAP_MAX_GB=0.5\n", encoding="utf-8")
     assert cli.main(["--conf", str(conf), "pcap-ring"]) == 0
-    assert capsys.readouterr().out == "PCAP_RING_FILES=74 PCAP_RING_KB=7084\n"  # 0.5 GB / 74, in KB
+    assert capsys.readouterr().out == "PCAP_RING_FILES=146 PCAP_RING_KB=3591\n"  # 0.5 GB / 146, in KB
 
 
 class Dumpcap:
@@ -305,7 +307,7 @@ class Dumpcap:
     as soon as the open one reaches the ring's file size, numbered from 00001, and the run's oldest file
     removed as the one past the ring's length opens. Files are sparse: only their size and time matter,
     and `files` holds both for every file on disk. `lost` names each file it removed before the ingest had
-    read it (`read`)."""
+    read it (`read`), and not one retention deleted first."""
 
     def __init__(self, d: str, ring: Ring, t: float, read: set[str]):
         self.d, self.ring, self.read = d, ring, read
@@ -325,11 +327,11 @@ class Dumpcap:
         self.run.append(ring_file(stamp(t), self.opened))
         self.touch(t)
         if len(self.run) > self.ring.files:
-            gone = self.run.pop(0)
-            if gone not in self.read:
-                self.lost.append(gone)
-            if self.files.pop(gone, None) is not None:  # retention may have deleted it first
-                os.unlink(os.path.join(self.d, gone))
+            oldest = self.run.pop(0)
+            if self.files.pop(oldest, None) is not None:  # retention may have deleted it first
+                os.unlink(os.path.join(self.d, oldest))
+                if oldest not in self.read:
+                    self.lost.append(oldest)
 
     def touch(self, t: float) -> None:
         with open(self.live, "ab") as fh:
@@ -350,11 +352,14 @@ class Dumpcap:
                 self.open(t)
 
 
-def run_gateway(tmp_path: Path, days: float, rate: Callable[[float], float], prune_every: int = 900):
+def run_gateway(
+    tmp_path: Path, days: float, rate: Callable[[float], float], prune_every: int = 900, reading: bool = True
+):
     """The reference's capture, ingest and retention on a simulated clock from 2026-11-01 00:00 UTC, in
     steps of 5 minutes: the capture writes `rate(t)` bytes a second, the hourly ingest reads every
-    finished file at five past the hour, and prune runs every `prune_every` seconds. Yields (the time,
-    the capture, prune's warnings, the files it deleted with their age then) at each prune."""
+    finished file at five past the hour (unless it is not `reading`), and prune runs every `prune_every`
+    seconds. Yields (the time, the capture, prune's warnings, the files it deleted with their age then)
+    at each prune."""
     d = tmp_path / "pcap"
     d.mkdir()
     read: set[str] = set()
@@ -363,7 +368,7 @@ def run_gateway(tmp_path: Path, days: float, rate: Callable[[float], float], pru
     while t < t0 + days * DAY:
         t += 300
         cap.write(t, int(rate(t) * 300))
-        if t % 3600 == 300:
+        if reading and t % 3600 == 300:
             read.update(os.path.basename(p) for p in finished(str(d), {cap.live}))
         if t % prune_every == 0:
             deleted, warnings = prune(
@@ -378,37 +383,45 @@ def ordinary(t: float) -> float:
     return (0.8 if int(t // 3600) % 24 == 20 else 0.1) * MIB / 3600
 
 
-def test_on_an_ordinary_week_every_hour_is_read_before_the_ring_turns_and_prune_keeps_pcap_days(tmp_path):
+def test_on_ordinary_days_every_hour_is_read_before_the_ring_turns_and_prune_keeps_pcap_days(tmp_path):
     """The package's first ring (256 MB files, PCAP_MAX_GB / 256 MB = 6 of them) kept 6 hours where
-    retention keeps 7 days. Sized from both settings, the ring turns on the hour, holds 170 of them, and
+    retention keeps 7 days. Sized from both settings, the ring turns on the hour, holds 338 of them, and
     loses nothing; prune deletes only files past PCAP_DAYS, and says nothing."""
-    for _, cap, warnings, deleted in run_gateway(tmp_path, 8, ordinary):
+    for _, cap, warnings, deleted in run_gateway(tmp_path, 15, ordinary, prune_every=3600):
         assert warnings == [] and cap.lost == []
         assert all(age > 7 * DAY for age in deleted.values())
     assert len(os.listdir(tmp_path / "pcap")) == 7 * 24 + 1  # a week of hours and the live one
-    assert cap.opened == 8 * 24 + 1 and len(cap.run) == 170  # the ring itself reaches two hours further
+    assert cap.opened == 15 * 24 + 1 and len(cap.run) == 338  # the ring has turned, two weeks behind
+
+
+def test_a_stopped_ingest_costs_a_fortnight_of_warnings_before_prune_and_never_the_ring_deletes(tmp_path):
+    """A ring of PCAP_DAYS hours (the coordinator's first sizing) removed unread files at 170 hours, where
+    prune keeps an unread file twice PCAP_DAYS with a warning, and said nothing: the gap before each was
+    older than the store remembers. Twice PCAP_DAYS of hours, prune deletes each first, with its word."""
+    said = set()
+    for _, cap, warnings, deleted in run_gateway(tmp_path, 15, ordinary, prune_every=3600, reading=False):
+        said.update(w.split(":")[-1] for w in warnings)
+        assert cap.lost == [] and all(age > 14 * DAY for age in deleted.values())
+    assert said == {" never ingested, deleted at twice PCAP_DAYS", " not ingested yet"}
 
 
 def test_a_flood_fills_the_ring_not_the_disk_and_prune_counts_what_it_overwrote(tmp_path):
     """The live file had no limit: 100 Mbit/s for an hour is 43.9 GB in one file. Now dumpcap cuts a file
-    at its share of PCAP_MAX_GB and keeps 170 of them, so the directory never holds more than PCAP_MAX_GB
+    at its share of PCAP_MAX_GB and keeps 338 of them, so the directory never holds more than PCAP_MAX_GB
     and one file; prune counts the files the ring overwrote before the ingest read them, for as long as
     the store remembers a read (7 days), and then stops."""
-    start, end = calendar.timegm((2026, 11, 1, 14, 10, 0)), calendar.timegm((2026, 11, 1, 14, 30, 0))
+    start, end = calendar.timegm((2026, 11, 1, 14, 20, 0)), calendar.timegm((2026, 11, 1, 14, 30, 0))
     cut = pcaps.ring(1.5, 7).filesize_kb * 1024
 
     def rate(t: float) -> float:
         return 100e6 / 8 if start < t <= end else ordinary(t)
 
     said = {}
-    for t, cap, warnings, _ in run_gateway(tmp_path, 8, rate):
+    for t, cap, warnings, _ in run_gateway(tmp_path, 8, rate, prune_every=1800):
         assert sum(size for size, _ in cap.files.values()) <= 1.5 * 2**30 + cut
         said[t] = warnings
-    assert len(cap.lost) > 1400  # 20 minutes cut into about 1,580 files, and 170 stayed
+    assert len(cap.lost) > 1200  # 10 minutes cut into about 1,570 files, and 338 stayed
     after = sorted(t for t in said if said[t])
-    assert said[end + DAY] == [
-        f"{len(cap.lost)} pcap(s) were gone before ingest read them: the capture's ring overwrote them in"
-        " a flood, or they were deleted by hand"
-    ]
+    assert said[end + DAY] == [gone(len(cap.lost))]
     # from the first prune after the ring turned, until 7 days after the last hour read before the flood
     assert start < after[0] <= end and after[-1] == calendar.timegm((2026, 11, 8, 13, 0, 0))

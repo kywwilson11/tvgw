@@ -23,9 +23,10 @@ def reply(
     return head + (asked[12:] if echoed is None else echoed) + record
 
 
-def serve(script: Callable[[bytes], list[tuple[bool, bytes]]]) -> int:
-    """The port of a server that reads one question and sends `script(question)` in order: each
-    (from the server's own socket, datagram), or from another socket when the flag is False."""
+def serve(script: Callable[[bytes], list[tuple[bool, bytes]]], after: float = 0.0) -> int:
+    """The port of a server that reads one question and, `after` seconds later, sends `script(question)`
+    in order: each (from the server's own socket, datagram), or from another socket when the flag is
+    False."""
     srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     srv.bind(("127.0.0.1", 0))
     srv.settimeout(5)
@@ -33,6 +34,7 @@ def serve(script: Callable[[bytes], list[tuple[bool, bytes]]]) -> int:
     def run() -> None:
         with srv:
             asked, client = srv.recvfrom(4096)
+            time.sleep(after)
             for own, data in script(asked):
                 if own:
                     srv.sendto(data, client)
@@ -83,6 +85,14 @@ def test_a_wrong_datagram_alone_is_no_answer(spoiled):
 def test_the_name_may_come_back_in_another_letter_case():
     port = serve(lambda q: [(True, reply(q, echoed=q[12:-4].upper() + q[-4:]))])
     assert dnsq.query("Must-Allow.example", "127.0.0.1", 3.0, port) is not None
+
+
+def test_a_wrong_datagram_late_in_the_wait_does_not_lengthen_it():
+    """Each read waits only what is left of the one timeout, however many wrong datagrams come."""
+    port = serve(lambda q: [SPOILED["another id"](q)], after=0.8)
+    started = time.monotonic()
+    assert dnsq.query("must-allow.example", "127.0.0.1", 1.0, port) is None
+    assert time.monotonic() - started < 1.5  # a fresh timeout per read would wait until 1.8 s
 
 
 def test_a_closed_port_is_no_answer_at_once():

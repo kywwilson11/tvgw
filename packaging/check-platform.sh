@@ -52,7 +52,7 @@ DHCP_FIRST=10.10.10.10 DHCP_LAST=10.10.10.20 TV_IP=10.10.10.17 TV_NAME=tv TV_MAC
 WAN_GW=198.51.100.1 URL_FILTER_RESOLVER=1.1.1.1
 # (edges) the capture's ring as install.sh's drop-ins give it for the default PCAP_DAYS and PCAP_MAX_GB
 # (`tvgw pcap-ring`); tests/unit/test_check_platform.py keeps the two numbers equal to pcaps.ring()
-RING_FILES=170 RING_KB=9252
+RING_FILES=338 RING_KB=4653
 RING="PCAP_RING_FILES=$RING_FILES PCAP_RING_KB=$RING_KB"
 # what `tvgw-apply --check` is run with, beside the template: name and settings. Between them every
 # switch takes each of its values (tests/virtual checks every combination on the runner's own nft)
