@@ -15,7 +15,7 @@ import subprocess
 import pytest
 import test_apply
 from conftest import ROOT
-from test_apply import CONF, run_apply, scripts
+from test_apply import CONF, listing, run_apply, scripts
 from test_apply_check import checked, run_check
 
 from tvgw import attention, config, verify
@@ -49,8 +49,12 @@ def test_the_script_says_no_to_refuse_and_its_copy_is_the_only_change():
     assert SUPPORTED != APPLY and SUPPORTED.replace("SUPPORTED=yes", "SUPPORTED=no", 1) == APPLY
 
 
+# (inplace) an old table, as `list tables` names it: only a table that stands is taken away (decision 110)
+OLD = listing("inet tvgw_attn")
+
+
 def test_where_the_live_reading_is_off_no_table_stands_and_an_old_one_goes(tmp_path):
-    out = run_apply(tmp_path)
+    out = run_apply(tmp_path, stubs={"nft": OLD})
     assert out.returncode == 0, out.stderr
     assert attention_load(tmp_path) is None
     assert "delete table inet tvgw_attn" in nft_calls(tmp_path)
@@ -58,7 +62,7 @@ def test_where_the_live_reading_is_off_no_table_stands_and_an_old_one_goes(tmp_p
 
 @pytest.mark.parametrize("extra", ["ATTENTION_WALL=off\n", "PROFILE=generic-tv\n", "PROFILE=samsung-tizen\n"])
 def test_off_or_another_profile_loads_nothing_even_with_the_live_reading_on(tmp_path, extra):
-    out = run_apply(tmp_path, conf=LIVE + extra)
+    out = run_apply(tmp_path, conf=LIVE + extra, stubs={"nft": OLD})
     assert out.returncode == 0, out.stderr
     assert attention_load(tmp_path) is None and "delete table inet tvgw_attn" in nft_calls(tmp_path)
 

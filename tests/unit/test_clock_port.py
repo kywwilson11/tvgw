@@ -259,8 +259,10 @@ def test_resolved_without_the_in_path_set_falls_back_to_any(tmp_path, monkeypatc
 
 
 def test_leaving_resolved_takes_its_chain_and_its_set_while_the_queue_is_quiet(tmp_path, monkeypatch):
-    """The stub says an earlier apply left the in-path half: its cleanup takes the clock chain too (a hook),
-    flushed and deleted in one transaction, and its set unless this apply builds resolved again."""
+    """The stub says an earlier apply left the in-path half and the clock chain: an apply that no longer
+    builds resolved takes the chain (a hook) once the queue is quiet, flushed and deleted in one
+    transaction, and its set. (inplace) One that builds resolved again keeps both, its servers admitted,
+    and the clock load replaces the chain's rules in place, so the queue stays live (decision 110)."""
     run_apply(tmp_path / "any", conf=CONF + "DNSGATE_FILL=inpath\n")
     calls = nft_calls(tmp_path / "any")
     gone = calls.index("flush chain inet tvgw_gate clock; delete chain inet tvgw_gate clock")
@@ -272,8 +274,7 @@ def test_leaving_resolved_takes_its_chain_and_its_set_while_the_queue_is_quiet(t
         tmp_path / "again", monkeypatch, CONF + "CLOCK_PORT=resolved\nDNSGATE_FILL=inpath\n", text=supported()
     )
     again = nft_calls(tmp_path / "again")
-    assert "flush chain inet tvgw_gate clock; delete chain inet tvgw_gate clock" in again
-    assert "delete set inet tvgw_gate ntp_ok4" not in again  # its servers stay admitted
+    assert not [c for c in again if c.startswith("flush chain inet tvgw_gate") or c.startswith("delete ")]
 
 
 # ---- the switch itself -----------------------------------------------------------------------------------

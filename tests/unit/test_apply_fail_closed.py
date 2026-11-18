@@ -64,10 +64,14 @@ def test_an_apply_that_fails_leaves_the_tv_dark_unless_an_earlier_filter_holds(
 
 def test_an_apply_that_loads_its_filter_never_looks_for_it_and_forwards(tmp_path):
     """The look is for an apply that ends before its own load. One that loaded its filter knows, makes no
-    call more than before, and switches forwarding on last, as ever."""
+    call more than before, and switches forwarding on last, as ever. (inplace) Its loads look at which
+    tables stand (design decision 110), before the counters are listed after them; the look for a filter
+    would come after everything."""
     out = run_apply(tmp_path, preset={FORWARDING: "1"})
     assert out.returncode == 0, out.stderr
-    assert "list tables" not in (tmp_path / "stub" / "nft.calls").read_text(encoding="utf-8").splitlines()
+    calls = (tmp_path / "stub" / "nft.calls").read_text(encoding="utf-8").splitlines()
+    counted = max(i for i, call in enumerate(calls) if call.startswith("-j -t list table "))
+    assert "list tables" not in calls[counted:]
     assert switch(tmp_path, FORWARDING) == "1" and "no filter is loaded" not in out.stderr
 
 

@@ -449,8 +449,8 @@ def test_the_script_and_the_filler_agree_on_every_name():
     assert f"add set inet {inpath.TABLE} {inpath.LIVE_SET} {{ type inet_service; }}" in APPLY
     assert APPLY.count(f"sport @{inpath.LIVE_SET}") == 2 and inpath.LIVE_KEY == b"\x00\x35"
     # (ports) two more: the clock port's resolved rule reads the filler's set (design decision 71); (revert) one
-    # more quiets the queue before a held apply's restore
-    assert len(BLOCK.findall(APPLY)) == 6 and len(APPLIED_LINE.findall(APPLY)) == 1
+    # more quiets the queue before a held apply's restore; (inplace) and one before a hook goes (decision 110)
+    assert len(BLOCK.findall(APPLY)) == 7 and len(APPLIED_LINE.findall(APPLY)) == 1
     # no rule of the block can refuse or change a packet: it counts, logs and queues with bypass
     (rules,) = re.findall(
         r"add table inet tvgw_gate\nadd set inet tvgw_gate resolved4_inpath.*?\nEOF", APPLY, re.S
@@ -460,7 +460,10 @@ def test_the_script_and_the_filler_agree_on_every_name():
     assert verify.GATE_SIZE == 65536
 
 
-QUIET = [  # inpath_quiet's commands where an earlier apply left the in-path half, in order
+# (inplace) inpath_quiet's looks, each a status the stub gives as 0: the in-path half and the clock port's
+# chain stand, left by an earlier apply (design decision 110)
+LOOKS = ["list chain inet tvgw_gate forward_inpath", "list chain inet tvgw_gate clock"]
+QUIET = [  # the drain's commands, before a hook goes where an earlier apply left the in-path half, in order
     "list chain inet tvgw_gate forward_inpath",
     # one transaction: no answer is offered to the queue any more, and the filler cannot switch on again
     "flush chain inet tvgw_gate answers; delete set inet tvgw_gate inpath_live",
@@ -516,11 +519,12 @@ def test_inpath_loads_its_block_last_and_leaves_the_gates_load_alone(tmp_path):
     for key in verify.APPLY_RECORDS:  # the records beside the keys: the router, (ports) the clock port
         used.pop(key)
     assert used == verify.apply_settings(CONF + "DNSGATE_FILL=inpath\n")
-    # before the first load (the stub says an earlier apply left the switch): the switch off, the queue
-    # rules and the set away, and nothing of the second count, which this apply keeps
+    # before the first load: the clock chain the stub says stands goes, a hook, so the switch goes first,
+    # the queue rules and the set away; nothing of the second count, which this apply keeps
     calls = nft_calls(tmp_path / "inpath")
-    at = calls.index(QUIET[0])
-    assert calls[at : at + len(QUIET)] == QUIET and at < calls.index("-f -")
+    at = calls.index(LOOKS[0])
+    assert calls[at : at + len(LOOKS) + len(QUIET) + len(CLOCK)] == [*LOOKS, *QUIET, *CLOCK]
+    assert at < calls.index("-f -")
     assert not [c for c in calls if any(rest == c for rest in REST)]
     # with the headers capture, whose load deletes a table, the block still comes last
     out = run_apply(tmp_path / "headers", conf=CONF + "DNSGATE_FILL=inpath\nCAPTURE_MODE=headers\n")
@@ -549,7 +553,7 @@ def test_passive_is_byte_for_byte_the_script_without_the_blocks(tmp_path, monkey
             assert run_apply(before, conf=conf).returncode == 0
         assert nft_scripts(now) == nft_scripts(before)
         calls = nft_calls(now)
-        left_over = [*QUIET, *CLOCK, *REST]
+        left_over = [*LOOKS, *QUIET, *CLOCK, *REST]
         at = calls.index(left_over[0])
         assert calls[at : at + len(left_over)] == left_over and at < calls.index("-f -")
         assert calls[:at] + calls[at + len(left_over) :] == nft_calls(before)

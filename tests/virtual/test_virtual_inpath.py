@@ -13,9 +13,10 @@ What only a kernel can say, and this module asks it:
 - a filler that is killed, stopped (SIGSTOP), or left with no table costs no later lookup: the kernel
   passes the answers itself. A stopped filler traps at most MAXLEN answers; under systemd, with the
   shipped unit's watchdog settings, it is killed and lookups answer again within seconds;
-- the kernel drops what waits in a queue when any hook is removed, by anyone; tvgw-apply, which
-  removes hooks at every run, takes the filler's switch away first, so three re-applies under load
-  lose no lookup, and the filler switches itself on again within seconds;
+- the kernel drops what waits in a queue when any hook is removed, by anyone; tvgw-apply removes none
+  where its tables stand as its last apply left them (design decision 110), so three re-applies under
+  load lose no lookup, the filler's switch stays on through them, and a filler stopped through each of
+  them loses none of what it holds;
 - a clean stop loses no lookup at all, and DNSGATE_FILL=passive takes the rules and sets away.
 
 The stand-in resolver of the gateway namespace answers a name `ip-A-B-C-D.<anything>` with A.B.C.D
@@ -32,6 +33,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -223,7 +225,8 @@ def fresh_stats(net, filler: Filler, received_at_least: int, wait: float = 15.0)
 
 
 def apply(net, settings: dict[str, str], tag: str) -> subprocess.CompletedProcess:
-    out = net.apply(net.gw, vnet.render_conf(settings))
+    """One apply, keeping /run/tvgw from the module's last, as a gateway keeps it between applies."""
+    out = net.apply(net.gw, vnet.render_conf(settings), run_dir=net.inpath_run)
     net.save(f"inpath/apply-{tag}.log", out.stdout + out.stderr)
     assert out.returncode == 0, out.stderr
     return out
@@ -235,6 +238,7 @@ def gw(net):
     is ended, and the `direct` scenario put back, when the module is done."""
     if shutil.which("modprobe"):  # both modules load on demand too; a container has no modprobe
         subprocess.run(["modprobe", "-a", "nfnetlink_queue", "nft_queue"], capture_output=True, check=False)
+    net.inpath_run = Path(tempfile.mkdtemp(dir=net.sandbox))
     out = apply(net, INPATH, "inpath")
     if "in-path gate rules not loaded" in out.stderr:
         unable(f"this kernel does not load the queue rules: {out.stderr.strip()[-300:]}")
@@ -662,10 +666,10 @@ def test_a_hook_removed_by_anyone_drops_what_waits_and_the_filler_carries_on(gw)
 
 
 def test_a_reapply_under_a_live_filler_keeps_the_set_and_loses_no_lookup(gw, filler):
-    """Every apply removes hooks (`delete table inet tvgw`), and the kernel drops what waits in a queue
-    when one goes. tvgw-apply takes the filler's switch away first and waits for the queue to empty, so
-    three applies under load lose nothing; while one runs, answers pass unheld, and the filler switches
-    itself on again when the last load has made its set anew."""
+    """The kernel drops what waits in a queue when a hook goes. Pass 6, L4-15: every apply removed hooks,
+    so it took the filler's switch away first and waited for the queue to empty, and one lookup in a run
+    of this test was lost now and then at the first apply. An apply changes the tables in place now and
+    removes no hook, so three applies under load lose nothing and the filler holds every answer."""
     net = gw
     assert lookup(net, "203.0.113.85") == "answer:203.0.113.85"
     load = ask_in_background(net, "--seconds", "8", "--interval", "0.003", "--timeout", "1")
@@ -676,12 +680,15 @@ def test_a_reapply_under_a_live_filler_keeps_the_set_and_loses_no_lookup(gw, fil
     out, _ = load.communicate(timeout=60)
     got = json.loads(out)
     # what the gateway saw, read before anything is judged, so that a lost lookup comes with its own
-    # numbers: what the queue dropped, and what the filler held, answered late or found gone
-    seen = {"queue": queues(net)[inpath.QUEUE], "filler": fresh_stats(net, filler, 1)}
+    # numbers: what the queue dropped, and what the filler held, answered late or found gone, once its
+    # status has caught up with every answer
+    seen = {"queue": queues(net)[inpath.QUEUE], "filler": fresh_stats(net, filler, got["answered"])}
     # as JSON: pytest shortens a long tuple, and the numbers are the whole of what a failure leaves
     assert got["lost"] == 0 and got["wrong"] == 0 and got["answered"] > 300, json.dumps(
         [got, seen], default=str
     )
+    # every answer went through the filler, those of the applies' seconds too: the switch never went off
+    assert seen["filler"]["received"] >= got["answered"], json.dumps([got, seen], default=str)
     assert "203.0.113.85" in elements(net, inpath.SET)  # `add set` kept what the filler had put in
     wait_switch(net)
     assert lookup(net, "203.0.113.86") == "answer:203.0.113.86"
@@ -689,6 +696,43 @@ def test_a_reapply_under_a_live_filler_keeps_the_set_and_loses_no_lookup(gw, fil
     q = queues(net)[inpath.QUEUE]
     assert q["dropped"] == q["user_dropped"] == 0, q
     assert fresh_stats(net, filler, 1)["verdict_errors"] == 0  # no verdict found its packet gone
+
+
+DRAIN_S = int(re.search(r"^INPATH_DRAIN_S=(\d+)", vnet.APPLY.read_text(encoding="utf-8"), re.M)[1])
+
+
+def test_a_filler_stopped_through_each_of_three_applies_loses_no_lookup(gw, filler):
+    """Pass 6, L4-14: an apply removed hooks, so it took the filler's switch away first and waited
+    INPATH_DRAIN_S seconds at most (a second more as the shell counts) for the queue to empty, then removed
+    the hook, and the kernel dropped the answer a stalled filler still held. Stopped (SIGSTOP) longer than
+    that through each of three applies, the filler now finds what it held still there when it goes on,
+    and the lookup waiting on it is answered; the switch stays on through every apply."""
+    net = gw
+    stop = DRAIN_S + 2.0
+    load = ask_in_background(
+        net, "--seconds", str(3 * (stop + 1.5)), "--interval", "0.003", "--timeout", str(stop + 2)
+    )
+    time.sleep(0.5)
+    outs, switch = [], []
+    for n in range(3):
+        filler.send(signal.SIGSTOP)
+        stopped = time.monotonic()
+        try:
+            outs.append(apply(net, INPATH, f"stopped-{n}").stdout)
+            switch.append(elements(net, "inpath_live"))
+            time.sleep(max(0.0, stopped + stop - time.monotonic()))
+        finally:
+            filler.send(signal.SIGCONT)
+        time.sleep(1.0)
+    out, _ = load.communicate(timeout=120)
+    got = json.loads(out)
+    seen = {"queue": queues(net)[inpath.QUEUE], "filler": fresh_stats(net, filler, 1)}
+    net.save("inpath/stopped-through-applies.json", json.dumps([got, seen], default=str))
+    # the loss first: it is what the apply that removes hooks shows, and its numbers come with it
+    assert got["lost"] == 0 and got["wrong"] == 0, json.dumps([got, seen], default=str)
+    assert seen["filler"]["verdict_errors"] == 0 and seen["queue"]["dropped"] == 0, json.dumps(seen)
+    assert switch == [{"53": 0}] * 3
+    assert all("tvgw: load: in place" in o for o in outs), outs
 
 
 def test_a_clean_stop_under_load_loses_no_lookup(gw):

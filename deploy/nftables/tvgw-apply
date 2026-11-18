@@ -376,9 +376,9 @@ FILL_INPUT="DNSGATE_FILL=$DNSGATE_FILL" # (revert) one of the apply's inputs, be
 # answer is offered to the queue, and the filler cannot put its port back, since the set is gone. Then
 # INPATH_DRAIN_S seconds, and up to one more since the shell counts whole seconds, for the filler to
 # release what it held, and the chain, the first hook to go, goes; answers still held then are dropped
-# with it, and the apply says how many. inpath_quiet
-# below runs it before an apply's loads, and (revert) a held apply before its restore, which deletes
-# and makes tables too. Status 1 where there is no in-path half (or under --check).
+# with it, and the apply says how many. quiet_queue below runs it before the first hook an apply
+# removes, and (revert) a held apply before its restore, which deletes and makes tables too. Status 1
+# where there is no in-path half (or under --check).
 INPATH_DRAIN_S=2 # the filler's own verdict deadline is far under it; an empty queue costs no wait at all
 inpath_waiting() { # WAITING: the answers queue $INPATH_QUEUE still holds, the third field of its line
 	local queue _
@@ -405,6 +405,27 @@ inpath_drain() {
 	return 0
 }
 # ---- (inpath) end ----
+# ---- (inplace) begin: only an apply that removes a hook quiets the queue, once (design decision 110) ----
+# An apply that loads every table in place removes no hook, and the filler's queue rules stay live through
+# it. quiet_queue is called before anything that removes one: a table remade or taken away, a chain of
+# the in-path half deleted.
+QUIET=no
+quiet_queue() {
+	[ "$QUIET" = no ] || return 0
+	QUIET=yes
+	# ---- (inpath) begin: the filler's queue, the one this script fills (design decision 64) ----
+	inpath_drain || true
+	# ---- (inpath) end ----
+}
+drop_table() { # $1 $2: a table this apply does not load. Where it stands it goes, the queue quieted first
+	local tables
+	if tables=$(nft list tables 2>/dev/null) && ! grep -qxF "table $1 $2" <<<"$tables"; then
+		return 0 # not there: nothing to remove, and no reason to quiet the queue
+	fi
+	quiet_queue
+	nft delete table "$1" "$2" 2>/dev/null || true
+}
+# ---- (inplace) end ----
 # ---- (mint) begin: MINT, checked before anything is loaded (design decision 96) ----
 # off, the default and what a conf without the key means: no table, as before the key existed. shadow:
 # the mint table below copies the first packet of each new connection the TV makes to NFLOG group
@@ -947,6 +968,7 @@ ntp_load() {
 		grep -Eq "^[[:space:]]*size $NTP_SIZE$NFT_COUNT\$" <<<"$ntp_have" &&
 		grep -Eq "^[[:space:]]*timeout $NTP_TIMEOUT\$" <<<"$ntp_have" &&
 		grep -Eq '^[[:space:]]*flags (dynamic,timeout|timeout,dynamic)$' <<<"$ntp_have"; }; then
+		quiet_queue # (inplace) its chain's hook goes with it
 		nft delete table inet tvgw_ntp 2>/dev/null || true
 		echo "tvgw: inet tvgw_ntp held a set of other properties; it is made again, and its counts start at zero" >&2
 	fi
@@ -1210,27 +1232,29 @@ counters() {
 install -d -m 755 /run/tvgw
 [ "$CHECK_ONLY" = yes ] || counters >/run/tvgw/counters.before-apply.tmp # (virtual) --check writes nothing
 
-# ---- (inpath) begin: nothing waits in the in-path filler's queue while hooks go (design decision 64) ----
+# ---- (inpath) begin: what of the in-path filler's half a setting took away (design decisions 64 and 110) ----
 # The kernel drops every packet waiting in any netfilter queue the moment any hook is removed
-# (nf_queue_nf_hook_drop), and the loads below remove hooks: each `delete table` does. So where an
-# earlier apply left the in-path filler's half, its switch goes first. One transaction empties the queue
-# rules' chain and deletes the set inpath_live: from then on no DNS answer is offered to the queue, and
-# the filler cannot put its port back, since the set is gone (two commands would leave it a moment to).
-# The apply waits, INPATH_DRAIN_S seconds at most, until the filler has released what it held, and only
-# then removes the chain, the first hook to go. The last load of this apply makes the chain and the
-# set anew (the in-path block, after the capture's). With DNSGATE_FILL=passive, or the gate off, the
-# second count's sets and chain go here too, the chain last, since it is what the next apply looks for.
-# Plain commands, never a load, and none of it under --check: a passive conf renders what it always
-# rendered, and a gateway that never had the in-path half pays one listing. A function, so that anything
-# added later that removes a hook after the in-path block can call it first.
+# (nf_queue_nf_hook_drop). (inplace) The loads below remove none where they load in place, so the
+# filler's queue rules stay live through an apply. What a setting took away goes here, before them, each
+# hook only after quiet_queue has quieted the queue: with DNSGATE_FILL=passive, or the gate off, the
+# second count's sets and chain, the chain last, since it is what the next apply looks for; with the
+# clock port no longer narrowed, its chain and the set of the servers it admitted. Plain commands, never
+# a load, and none of it under --check: a passive conf renders what it always rendered, and a gateway
+# that never had the in-path half pays one listing.
 inpath_quiet() {
-	inpath_drain || return 0 # (revert) defined with the setting, so that a held apply can quiet the queue too
-	# (ports) the clock port's resolved chain lives beside the in-path sets and is made again by the in-path
-	# load when CLOCK_USED=resolved; it is a hook too, so it goes here, while the queue is quiet
-	nft 'flush chain inet tvgw_gate clock; delete chain inet tvgw_gate clock' 2>/dev/null || true
-	[ "$CLOCK_USED" = resolved ] || nft delete set inet tvgw_gate ntp_ok4 2>/dev/null || true # its addresses go with it
+	[ "$CHECK_ONLY" = no ] && nft list chain inet tvgw_gate forward_inpath >/dev/null 2>&1 || return 0
+	if [ "$CLOCK_USED" != resolved ]; then
+		# (ports) the clock port's resolved chain lives beside the in-path sets; with CLOCK_USED=resolved
+		# the clock load replaces its rules in place
+		if nft list chain inet tvgw_gate clock >/dev/null 2>&1; then
+			quiet_queue
+			nft 'flush chain inet tvgw_gate clock; delete chain inet tvgw_gate clock' 2>/dev/null || true
+		fi
+		nft delete set inet tvgw_gate ntp_ok4 2>/dev/null || true # its addresses go with it
+	fi
 	if [ "$DNSGATE" != count ] || [ "$DNSGATE_FILL" != inpath ]; then
-		nft delete set inet tvgw_gate inpath_live 2>/dev/null || true # where the transaction found no chain
+		quiet_queue # the queue rules' chain and inpath_live go first
+		nft delete set inet tvgw_gate inpath_live 2>/dev/null || true # where the drain found no chain
 		nft flush chain inet tvgw_gate forward_inpath 2>/dev/null || true
 		nft delete set inet tvgw_gate resolved4_inpath 2>/dev/null || true
 		nft delete set inet tvgw_gate seen4_inpath 2>/dev/null || true
@@ -1239,6 +1263,88 @@ inpath_quiet() {
 }
 inpath_quiet
 # ---- (inpath) end ----
+# ---- (inplace) begin: a table that stands is changed in place, and no hook goes (design decision 110) ----
+# Five tables are each loaded by one text that begins `table T` and `delete table T`: the filter, its IPv6
+# drop at the wire, and, where their settings ask for them, the tables of the headers capture, the name
+# count and the mint shadow. Deleting a table removes every hook it holds, and the kernel then drops
+# what waits in every netfilter queue. So load_table changes a table that stands in place wherever that
+# ends where a fresh load ends, object for object: one transaction empties each of its chains and
+# declares them again with their rules, and no hook goes. That holds only when the table holds exactly
+# what the load defines: the same chains, with their hooks, priorities and policies, and the same sets,
+# with their properties and the addresses the apply puts in them. So each load leaves a record,
+# LOADED.<family>-<table>: a hash of what the load defined (its text without its rules) and a hash of nft's listing of
+# the table right after it, counters left out. A table is changed in place only when its record holds
+# what this load defines and nft lists it as it listed it then: nothing was added to it, taken from it or
+# changed in it since. Its sets then hold what the load would put in them, and the change in place does
+# not touch them: it rests neither on how nft merges the intervals it adds with those it has read nor on
+# how the kernel compares a set declared again. Otherwise the table is remade as before, the queue
+# quieted first, and the apply says why. A table that is not there is made as rendered, which removes
+# nothing. These five tables hold no set a daemon fills, only sets the apply fills: an address list that
+# changed (the daily DoH list) changes what the load defines, and that apply remakes the table. The sets
+# the daemons fill live in the gate's, the attention's and the NTP count's tables, which load with `add`
+# statements and keep them, as before.
+LOADED=/run/tvgw/loaded # files beside the apply's other records, root's alone
+REMADE="" # (ledger) "; <table> (<why>)" for each table this apply remade
+load_text() { # $1: shape, body or flushes; $2 $3: the table; stdin: its load as rendered. Read by nesting:
+	# the table's block holds chains and sets, a chain its `type` line and its rules, a set its properties
+	# and its elements. shape: all but the rules, which is what the load defines; body: all but the sets
+	# and the first two lines, which is the change in place; flushes: a flush of each chain
+	awk -v want="$1" -v table="$2 $3" '
+		{ line = $0; opens = gsub(/\{/, "{", line); closes = gsub(/\}/, "}", line); at = depth; depth += opens - closes }
+		at == 1 && opens > closes { kind = $1 }
+		{ command = $1 " " $2 }
+		at == 0 { rule = ($1 == "insert" || command == "add rule"); ofset = (command == "add element" || command == "add set") }
+		at == 1 { rule = 0; ofset = ($1 == "set") }
+		at > 1 { rule = (kind == "chain" && $1 != "type"); ofset = (kind == "set") }
+		want == "shape" && !rule && $0 !~ /^[ \t]*(#|$)/ { print }
+		want == "body" && NR > 2 && !ofset { print }
+		want == "flushes" && at == 1 && $1 == "chain" { print "flush chain " table " " $2 }
+		want == "flushes" && at == 0 && command == "add chain" { print "flush chain " table " " $5 }'
+}
+loaded() { # $1 $2: the table just loaded; $3: the hash of what its load defined. The record the next load
+	# reads. A load nft refused changed nothing, so the record before it still says what the table holds
+	local listed
+	listed=$(nft -s list table "$1" "$2" 2>/dev/null | digest) || return 0
+	{ (umask 077; printf '%s\n%s\n' "$3" "$listed" >"$LOADED.$1-$2.tmp" && mv -f "$LOADED.$1-$2.tmp" "$LOADED.$1-$2"); } \
+		2>/dev/null || true
+}
+load_table() { # $1 $2: the table; stdin: its load as rendered, `table T` and `delete table T` first. Status
+	# 1 when nft refused it. Under --check the load as rendered is what nft -c judges, whatever stands
+	local family=$1 table=$2 text shape tables listed was_shape="" was_listed="" why=""
+	text=$(cat && echo .)
+	text=${text%.}
+	if [ "$CHECK_ONLY" = yes ]; then
+		nft -f - < <(printf '%s' "$text")
+		return
+	fi
+	shape=$(load_text shape "$family" "$table" <<<"$text" | digest)
+	{ read -r was_shape && read -r was_listed; } 2>/dev/null <"$LOADED.$family-$table" || true
+	if ! tables=$(nft list tables 2>/dev/null); then
+		why="the tables could not be listed"
+	elif ! grep -qxF "table $family $table" <<<"$tables"; then
+		: # not there: made as rendered, which removes nothing
+	elif [ -z "$was_shape" ]; then
+		why="no record of its last load"
+	elif [ "$was_shape" != "$shape" ]; then
+		why="this load defines other chains, sets or addresses"
+	elif ! listed=$(nft -s list table "$family" "$table" 2>/dev/null | digest); then
+		why="it could not be listed"
+	elif [ "$listed" != "$was_listed" ]; then
+		why="it was changed after its last load"
+	elif nft -f - < <(load_text flushes "$family" "$table" <<<"$text"; load_text body "$family" "$table" <<<"$text"); then
+		loaded "$family" "$table" "$shape"
+		return 0
+	else
+		why="nft refused the change in place"
+	fi
+	if [ -n "$why" ]; then
+		REMADE+="; $family $table ($why)"
+		quiet_queue # the remake deletes the table, and every hook in it
+	fi
+	nft -f - < <(printf '%s' "$text") || return 1
+	loaded "$family" "$table" "$shape"
+}
+# ---- (inplace) end ----
 
 # (probe) the table's text, rendered before it is loaded, so that the probe's rules can be made from it.
 # What it prints is byte for byte what the here-document handed nft before the probe existed
@@ -1504,14 +1610,15 @@ if [ "$PROBE" = on ]; then
 fi
 # The TV's table never waits on the probe's rules: when nft refuses the transaction that carries them,
 # the table is loaded as it was before the probe existed (a refused transaction changes nothing).
+# (inplace) load_table changes it in place where it can (design decision 110).
 if [ -n "$PROBE_RULES" ]; then
-	nft -f - < <(printf '%s%s\n' "$INET_RULES" "$PROBE_RULES") || {
+	load_table inet tvgw < <(printf '%s%s\n' "$INET_RULES" "$PROBE_RULES") || {
 		echo "tvgw: nft refused the probe's rules; the probe is off for this apply" >&2
 		PROBE=off
-		nft -f - < <(printf '%s' "$INET_RULES")
+		load_table inet tvgw < <(printf '%s' "$INET_RULES")
 	}
 else
-	nft -f - < <(printf '%s' "$INET_RULES")
+	load_table inet tvgw < <(printf '%s' "$INET_RULES")
 fi
 # ---- (probe) end ----
 FILTER_LOADED=yes # (fail closed) this apply's own load went in: on_exit need not look for the table
@@ -1520,8 +1627,9 @@ FILTER_LOADED=yes # (fail closed) this apply's own load went in: on_exit need no
 [ -z "$CT_EVENTS" ] || sysctl -q -w net.netfilter.nf_conntrack_events=0 ||
 	echo "tvgw: nf_conntrack_events not set; tvgw-flowlog still hears every connection on the box" >&2
 
-# IPv6 is disabled on the TV side; drop it at the wire too (this counter ticking is ND/MLD noise, not a breach)
-nft -f - <<EOF || echo "tvgw: netdev IPv6 guard not loaded ($TV_IF down?)" >&2
+# IPv6 is disabled on the TV side; drop it at the wire too (this counter ticking is ND/MLD noise, not a breach).
+# (inplace) load_table changes it in place where it can (design decision 110)
+load_table netdev tvgw_l2 <<EOF || echo "tvgw: netdev IPv6 guard not loaded ($TV_IF down?)" >&2
 table netdev tvgw_l2
 delete table netdev tvgw_l2
 table netdev tvgw_l2 {
@@ -1551,7 +1659,7 @@ flush chain inet tvgw_gate forward
 add rule inet tvgw_gate forward iifname "$TV_IF" ip saddr $TV_NET ct state new ip daddr != $TV_ADDR ip daddr != @resolved4 ip saddr . ip daddr . meta l4proto . th sport . th dport != @seen4 add @seen4 { ip saddr . ip daddr . meta l4proto . th sport . th dport } counter limit rate 6/minute log prefix "tvgw-gate: " comment "TV to an address DNS never returned"
 EOF
 else
-	nft delete table inet tvgw_gate 2>/dev/null || true
+	drop_table inet tvgw_gate # (inplace) the queue quieted first, where the table stands
 fi
 
 # ---- (ntp) begin: the clock servers the TV sends NTP to, counted by address (design decision 17, its
@@ -1658,12 +1766,13 @@ attn_sets_ok() { # every set of the table as attn_rules writes it, or the table 
 if [ "$ATTN" != off ]; then
 	ATTN_RULES=$(attn_rules "$ATTN")
 	if [ "$CHECK_ONLY" = no ] && ! attn_sets_ok; then
+		quiet_queue # (inplace) its chain's hook goes with it
 		nft delete table inet tvgw_attn 2>/dev/null || true
 		echo "tvgw: inet tvgw_attn held a set of other properties; it is made again, and its essentials and samples start empty" >&2
 	fi
 	nft -f - <<<"$ATTN_RULES" || echo "tvgw: attention count table not loaded; it stays as it was, and the next apply tries again" >&2
 else
-	nft delete table inet tvgw_attn 2>/dev/null || true
+	drop_table inet tvgw_attn # (inplace) the queue quieted first, where the table stands
 fi
 # ---- (attention) end ----
 
@@ -1688,7 +1797,7 @@ CAPTURE_GROUP=7
 CAPTURE_PACKETS=8
 CAPTURE_SNAPLEN=4096
 if [ "$CAPTURE_MODE" = headers ]; then
-	nft -f - <<EOF || echo "tvgw: capture table not loaded; tvgw-pcap-headers records nothing" >&2
+	load_table inet tvgw_capture <<EOF || echo "tvgw: capture table not loaded; tvgw-pcap-headers records nothing" >&2
 table inet tvgw_capture
 delete table inet tvgw_capture
 table inet tvgw_capture {
@@ -1700,7 +1809,7 @@ table inet tvgw_capture {
 }
 EOF
 else
-	nft delete table inet tvgw_capture 2>/dev/null || true
+	drop_table inet tvgw_capture # (inplace) the queue quieted first, where the table stands
 fi
 # ---- (capture) end ----
 # ---- (namebound) begin: the live name count's copies, NAME_BINDING=count (design decision 70) ----
@@ -1724,7 +1833,7 @@ NAMES_PACKETS=8
 NAMES_SNAPLEN=4096
 if [ "$NAME_BINDING" = count ]; then
 	modprobe -a nfnetlink_log nft_log 2>/dev/null || true # both load on demand too; this says so early
-	nft -f - <<EOF || echo "tvgw: names table not loaded; the live name count reads nothing" >&2
+	load_table inet tvgw_names <<EOF || echo "tvgw: names table not loaded; the live name count reads nothing" >&2
 table inet tvgw_names
 delete table inet tvgw_names
 table inet tvgw_names {
@@ -1742,7 +1851,7 @@ EOF
 elif [ "$(sed -n 's/^NAME_BINDING=//p' "$APPLIED" 2>/dev/null | head -n 1 || true)" = count ]; then
 	# only where the last apply loaded it: a gateway that never asked for the count runs no nft command
 	# more than before the setting existed (the table, like /run, is gone after a reboot)
-	nft delete table inet tvgw_names 2>/dev/null || true
+	drop_table inet tvgw_names
 fi
 # ---- (namebound) end ----
 # ---- (mint) begin: the minted-address shadow's copies, MINT=shadow (design decision 96) ----
@@ -1758,7 +1867,7 @@ fi
 MINT_SNAPLEN=64
 if [ "$MINT_USED" = shadow ]; then
 	modprobe -a nfnetlink_log nft_log 2>/dev/null || true # both load on demand too; this says so early
-	nft -f - <<EOF || echo "tvgw: mint table not loaded; the minted-address shadow counts no connection" >&2
+	load_table inet tvgw_mint <<EOF || echo "tvgw: mint table not loaded; the minted-address shadow counts no connection" >&2
 table inet tvgw_mint
 delete table inet tvgw_mint
 table inet tvgw_mint {
@@ -1770,7 +1879,7 @@ table inet tvgw_mint {
 EOF
 elif [ "$(sed -n 's/^MINT=//p' "$APPLIED" 2>/dev/null | head -n 1 || true)" = shadow ]; then
 	# only where the last apply was asked for it, as for the names table
-	nft delete table inet tvgw_mint 2>/dev/null || true
+	drop_table inet tvgw_mint
 fi
 # ---- (mint) end ----
 # ---- (inpath) begin: the gate's set filled in the path of the answer, DNSGATE_FILL=inpath (design decision 64) ----
@@ -1837,6 +1946,10 @@ EOF
 fi
 # ---- (inpath) end ----
 [ "$CHECK_ONLY" = no ] || end "$CHECK_RC" # (virtual) --check stops here, before anything is published
+# (inplace) how the tables went in, in one line and in the change ledger's: in place, or which were remade and why
+LOAD="in place"
+[ -z "$REMADE" ] || LOAD="remade: ${REMADE#; }"
+echo "tvgw: load: $LOAD"
 counters >/run/tvgw/counters.after-apply.tmp
 mv -f /run/tvgw/counters.before-apply.tmp /run/tvgw/counters.before-apply
 mv -f /run/tvgw/counters.after-apply.tmp /run/tvgw/counters.after-apply
@@ -1936,9 +2049,9 @@ elif [ -n "$have_rule" ]; then
 	ip rule del priority 60 2>/dev/null || true
 fi
 echo "tvgw: applied (uplink=$UPLINK via $OUT_IF, quic_block=$BLOCK_QUIC, strict_ports=$STRICT_PORTS, adtech_wall=$ADTECH_PORT_WALL, dnsgate=$DNSGATE, doh4=$(tr ',' '\n' <<<"$DOH4" | grep -c . || true) entries, tv_pin=${TV_PIN:-none})"
-# (ledger) one line in the change ledger's spool: who ran the apply and whether it touched routing
-# (design decision 48). It is the last step and may fail without failing the apply.
-{ (umask 027; printf '%s\tapply\t%s\t%s\n' "$(date +%s)" "$(ps -o comm= -p "$PPID" 2>/dev/null | tr -c 'A-Za-z0-9_.:+\n-' _ || echo unknown)" "$ROUTING" >>"$STATE/changes.spool"); } 2>/dev/null || true
+# (ledger) one line in the change ledger's spool: who ran the apply, whether it touched routing (design
+# decision 48) and (inplace) how its tables went in. It is the last step and may fail without failing the apply.
+{ (umask 027; printf '%s\tapply\t%s\t%s\tload: %s\n' "$(date +%s)" "$(ps -o comm= -p "$PPID" 2>/dev/null | tr -c 'A-Za-z0-9_.:+\n-' _ || echo unknown)" "$ROUTING" "$LOAD" >>"$STATE/changes.spool"); } 2>/dev/null || true
 # ---- (probe) begin: APPLY_CONFIRM, after everything is applied (design decision 65) ----
 # pass, or unknown (the uplink is down, the probe could not run): the timer is cancelled and the apply
 # stands; an unknown never undoes anything. A failure counts only when the probe passed before this apply

@@ -441,11 +441,22 @@ def test_each_protocol_has_its_own_expected_ports(tmp_path, strict, verdict):
     ]
 
 
-def test_full_mode_loads_no_capture_table_and_removes_a_left_over_one(tmp_path):
-    assert run_apply(tmp_path).returncode == 0
+def listing(*tables: str) -> str:
+    """The nft stub, with `list tables` naming these tables, as left by an earlier apply."""
+    names = "\\n".join(f"table {t}" for t in tables)
+    return STUBS["nft"].replace(
+        'case "$*" in\n', f'case "$*" in\n"list tables") printf \'{names}\\n\' ;;\n', 1
+    )
+
+
+@pytest.mark.parametrize("left", [(), ("inet tvgw_capture",)], ids=["none", "left over"])
+def test_full_mode_loads_no_capture_table_and_removes_a_left_over_one(tmp_path, left):
+    """(inplace) Taken away where it stands, and only there: a delete of a table that is not there would
+    quiet the in-path queue for nothing (design decision 110)."""
+    assert run_apply(tmp_path, stubs={"nft": listing(*left)}).returncode == 0
     assert not [s for s in scripts(tmp_path) if "tvgw_capture" in s]
     calls = (tmp_path / "stub" / "nft.calls").read_text(encoding="utf-8").splitlines()
-    assert "delete table inet tvgw_capture" in calls
+    assert ("delete table inet tvgw_capture" in calls) == bool(left)
 
 
 def test_headers_mode_loads_the_capture_table_after_the_filter_and_changes_nothing_in_it(tmp_path):

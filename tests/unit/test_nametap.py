@@ -21,7 +21,7 @@ import pytest
 import test_apply
 from conftest import NOW, ROOT, UNITS
 from corpus import build
-from test_apply import CONF, STUBS, nft_changes, run_apply
+from test_apply import CONF, STUBS, listing, nft_changes, run_apply
 from test_apply import scripts as nft_scripts
 from test_apply_check import checked
 from test_apply_check import run_check as apply_check
@@ -520,11 +520,12 @@ def test_off_is_the_script_without_the_blocks_but_one_settings_line(tmp_path, mo
 
 @needs_bash
 def test_off_after_count_takes_the_table_away_once(tmp_path):
-    assert run_apply(tmp_path, conf=CONF + "NAME_BINDING=count\n").returncode == 0
+    stood = listing("inet tvgw_names")  # (inplace) only a table that stands is taken away (decision 110)
+    assert run_apply(tmp_path, conf=CONF + "NAME_BINDING=count\n", stubs={"nft": stood}).returncode == 0
     assert DELETE not in calls(tmp_path)  # the load deletes and makes it inside its own script
-    assert run_apply(tmp_path, conf=CONF).returncode == 0  # the key taken out: off
+    assert run_apply(tmp_path, conf=CONF, stubs={"nft": stood}).returncode == 0  # the key taken out: off
     assert calls(tmp_path).count(DELETE) == 1
-    assert run_apply(tmp_path, conf=CONF).returncode == 0  # off again: nothing left to take away
+    assert run_apply(tmp_path, conf=CONF, stubs={"nft": stood}).returncode == 0  # off again: nothing to take
     assert calls(tmp_path).count(DELETE) == 1
 
 

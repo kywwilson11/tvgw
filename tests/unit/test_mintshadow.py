@@ -19,7 +19,7 @@ import time
 import pytest
 import test_apply
 from conftest import NOW, ROOT
-from test_apply import CONF, nft_changes, run_apply
+from test_apply import CONF, listing, nft_changes, run_apply
 from test_apply import scripts as nft_scripts
 from test_apply_check import checked
 from test_apply_check import run_check as apply_check
@@ -761,9 +761,10 @@ def test_shadow_loads_a_table_that_only_copies_and_off_takes_it_away_once(tmp_pa
     )
     used = config.parse_conf((tmp_path / "run" / "tvgw" / "settings.applied").read_text(encoding="utf-8"))
     assert used["MINT"] == "shadow" and DELETE not in calls(tmp_path)
-    assert run_apply(tmp_path, conf=CONF + INPATH).returncode == 0  # the key taken out: off
+    stood = listing("inet tvgw_mint")  # (inplace) only a table that stands is taken away (decision 110)
+    assert run_apply(tmp_path, conf=CONF + INPATH, stubs={"nft": stood}).returncode == 0  # the key taken out
     assert calls(tmp_path).count(DELETE) == 1
-    assert run_apply(tmp_path, conf=CONF + INPATH).returncode == 0  # off again: nothing left to take away
+    assert run_apply(tmp_path, conf=CONF + INPATH, stubs={"nft": stood}).returncode == 0  # off again
     assert calls(tmp_path).count(DELETE) == 1
 
 
