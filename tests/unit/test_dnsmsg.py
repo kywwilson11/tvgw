@@ -5,7 +5,15 @@ import struct
 
 import pytest
 
-from tvgw.dnsmsg import DnsFormatError, answers_text, decode_answers, is_blocked_answer, rcode, read_name
+from tvgw.dnsmsg import (
+    Answer,
+    DnsFormatError,
+    answers_text,
+    decode_answers,
+    is_blocked_answer,
+    rcode,
+    read_name,
+)
 
 # AAAA for aic.recommend.lgtvcommon.com answered :: (blocked)
 BLOCKED_AAAA = (
@@ -151,3 +159,17 @@ def test_aaaa_text_form_ttl_sign_and_skipped_types():
     assert a.ttl == 2147483648  # unsigned
     assert decode_answers(header(1, 1) + Q + rr(0x8001, bytes(4))) == []
     assert decode_answers(header(0, 0)) == []
+
+
+def test_a_limit_reads_that_many_records_of_any_type_and_nothing_after_them():
+    """(bounds) A 64 KB answer to a name an app controls held 4,661 records, decoded whole at 400 ms and
+    1.2 MB of store a lookup. With a limit the decoder stops at it: the junk past the cut, which fails a
+    whole decode, is never looked at, and a skipped type counts toward the limit."""
+    records = rr(16, b"\x01x") + b"".join(rr(1, bytes([198, 51, 100, i])) for i in range(70))
+    msg = header(1, 4000) + Q + records + b"\xff"  # claims 4,000 records; the 72nd is a byte of junk
+    with pytest.raises(DnsFormatError):
+        decode_answers(msg)
+    assert [a.value for a in decode_answers(msg, limit=64)] == [f"198.51.100.{i}" for i in range(63)]
+    assert (
+        decode_answers(header(1, 2) + Q + rr(1, bytes(4)) * 2, limit=64) == [Answer("A", "0.0.0.0", 30)] * 2
+    )

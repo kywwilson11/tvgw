@@ -14,13 +14,16 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import hashlib
+import ipaddress
 import json
 import os
 import re
+import signal
 import sqlite3
 import subprocess
+import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import asdict, dataclass, field
 
 from tvgw import (
@@ -62,6 +65,18 @@ PCAP_BUDGET = (
 )  # seconds of tshark per run: the unit allows 45 min; tvcheck and the reports need the rest
 PCAP_HEADER = 24  # bytes of a pcap global header: a shorter file was never a capture
 SYN_CHECK = 20  # connection attempts to :443 in one file that must have produced at least one hello
+# (bounds) a pcap's `pcaps_done.error` while tshark reads it, committed before tshark starts; a run that
+# finds one left over knows that read never ended, and says so with STOPPED
+IN_PROGRESS = "in progress"
+STOPPED = "the run stopped while reading it"
+# (bounds) seconds one step may run before its clock stops it: the longest whole run on the reference
+# took 40 s (the mean is under a second). The pcaps step has its own budget, and may start a tshark run
+# just before the budget ends
+STEP_LIMIT = 300.0
+STEP_LIMITS = {"pcaps": PCAP_BUDGET + tshark.TIMEOUT}
+# (bounds) meta: the lookups from another address on the TV's side the last run that saw any counted,
+# `{t, lookups, addresses}`, counts only (verify's `tv_side_others` reads it)
+OTHERS_KEY = "dns_other_clients"
 
 
 class SourceMissing(Exception):
@@ -72,6 +87,52 @@ class SourceSkipped(Exception):
     """A source whose input exists but of which nothing could be read this run (the pcaps, when it
     cannot be told which file the capture is writing or every pending file failed): it has warned why,
     and the run must not stamp it as read."""
+
+
+class StepTimeout(BaseException):
+    """(bounds) A step ran past its clock. A BaseException, so no `except Exception` inside a step can
+    take it for a failure of its own and carry on: only `run()`'s step catches it."""
+
+
+class _Clock:
+    """(bounds) The run's clock for its steps: one SIGALRM timer, armed for one step at a time and
+    cleared when that step ends, however it ends. Only the main thread receives a signal, so off it (no
+    caller of `run` does that) the steps run without a clock. `restore()` puts back the handler that was
+    there before `install()`."""
+
+    def __init__(self) -> None:
+        self.step: str | None = None  # the step the timer is armed for; None between steps
+        self.installed = False
+        self.before: Callable | int | None = None
+
+    def install(self) -> None:
+        if threading.current_thread() is threading.main_thread():
+            self.before = signal.signal(signal.SIGALRM, self._expired)
+            self.installed = True
+
+    def restore(self) -> None:
+        if self.installed:  # every step cleared its own timer as it ended
+            signal.signal(signal.SIGALRM, signal.SIG_DFL if self.before is None else self.before)
+            self.installed = False
+
+    def _expired(self, signum: int, frame: object) -> None:
+        if self.step is not None:  # a signal handled after its step ended stops nothing
+            raise StepTimeout(self.step)
+
+    @contextlib.contextmanager
+    def on(self, name: str, seconds: float) -> Iterator[None]:
+        """`name`'s clock, `seconds` long, for the block; no clock before `install()` or off the main
+        thread."""
+        if not self.installed:
+            yield
+            return
+        self.step = name
+        signal.setitimer(signal.ITIMER_REAL, seconds)
+        try:
+            yield
+        finally:
+            self.step = None
+            signal.setitimer(signal.ITIMER_REAL, 0)
 
 
 @dataclass
@@ -277,26 +338,58 @@ def _lost_events(
     _save_state(conn, "flowlog", TailState(0, 0), last_t=now)
 
 
+def _tv_side_other(s: Settings) -> Callable[[object], bool]:
+    """(bounds) Whether a query-log client is another address on the TV's side: inside TV_NET, and not
+    TV_IP, the gateway's own address there (GW_IP) or the probe's (TV_PROBE_IP), whose lookups are the
+    gateway's by design."""
+    net = ipaddress.IPv4Network(s.tv_net)
+    ours = {s.tv_ip, s.gw_ip, s.tv_probe_ip}
+
+    def other(client: object) -> bool:
+        if not isinstance(client, str) or client in ours:
+            return False
+        try:
+            return ipaddress.IPv4Address(client) in net
+        except ValueError:
+            return False
+
+    return other
+
+
 def ingest_dns(
     conn: sqlite3.Connection,
     s: Settings,
     warn: Callable[[str], None] = print,
     names: minimize.NameHasher | None = None,  # (record) title-bearing names tagged before insert
 ) -> int:
-    bad = 0
+    """AdGuard's query log: one `dns` row for each of TV_IP's lookups. A line that is not a record, or
+    (bounds) one holding a value SQLite cannot bind, is counted as malformed and skipped, and the
+    cursor moves past it. An answer is stored to its first `adguard.ANSWER_RECORDS` records, and the
+    lookups whose answer held more are counted. Another address on the TV's side has its lookups
+    counted, never stored, and the run's count so far is kept in meta (OTHERS_KEY) with the batch that
+    saw them. Each count is one warning a run."""
+    bad = cut = elsewhere = 0
+    addresses: set[str] = set()  # held for the run's count of them, never stored
+    other = _tv_side_other(s)
     tag = names or minimize.NameHasher((), "")
     namebound.mark_start(conn, time.time())  # (namebound) the stored lookups before this are the backfill's
 
     def insert(lines: list[str]) -> int:
-        nonlocal bad
-        n = 0
+        nonlocal bad, cut, elsewhere
+        n, before = 0, elsewhere
         for line in lines:
             try:
-                r = adguard.parse_querylog_line(line, client=s.tv_ip)
+                e = adguard.querylog_entry(line)
+                if e.get("IP") != s.tv_ip:  # another client's, read no further
+                    if other(e.get("IP")):
+                        elsewhere += 1
+                        addresses.add(e["IP"])
+                    continue
+                r = adguard.querylog_record(e)
             except ValueError:  # not a record (a torn or NUL-filled line): counted, never fatal to the hour
                 bad += 1
                 continue
-            if r:
+            try:
                 answers = tag.answers(r.answers, r.t)  # (record)
                 cur = conn.execute(
                     "INSERT INTO dns(t,qname,qtype,answers,blocked,reason,rule,filter_id,upstream,cached,"
@@ -315,15 +408,29 @@ def ingest_dns(
                         r.elapsed_ms,
                     ),
                 )
-                # (namebound) the addresses the answer named, keyed to its row, with its lifetime
-                namebound.record(conn, cur.lastrowid, r.t, answers, r.a_ttl)
-                n += 1
+            except (OverflowError, ValueError):  # (bounds) unbindable: an id past 64 bits, a lone surrogate
+                bad += 1
+                continue
+            # (namebound) the addresses the answer named, keyed to its row, with its lifetime
+            namebound.record(conn, cur.lastrowid, r.t, answers, r.a_ttl)
+            cut += r.cut
+            n += 1
+        if elsewhere > before:
+            counted = {"t": time.time(), "lookups": elsewhere, "addresses": len(addresses)}
+            db.set_meta(conn, OTHERS_KEY, json.dumps(counted))
         return n
 
     # state key "adguard" predates this name: renaming it would re-read the whole query log
     n = _tail(conn, "adguard", s.adguard_querylog, insert, warn)
     if bad:
         warn(f"dns: {bad} malformed query-log record(s) skipped")
+    if cut:
+        warn(f"dns: {cut} answer(s) held more than {adguard.ANSWER_RECORDS} records; cut")
+    if elsewhere:
+        warn(
+            f"dns: {elsewhere} lookup(s) came from {len(addresses)} other address(es) on the TV's side;"
+            " they are not in the record"
+        )
     return n
 
 
@@ -369,7 +476,10 @@ def ingest_pcaps(
     `budget` seconds of wall time wait for the next run, so a backlog of slow files cannot starve
     the steps after this one. Returns (files, tls rows, http rows, lan-probe rows); raises
     SourceSkipped, having warned, when nothing could be read: the live file unknown, or every
-    pending file failed."""
+    pending file failed. (bounds) A file's attempt is counted and committed before tshark starts
+    (IN_PROGRESS), so a read that the process dies in counts as one: a file that killed the job every
+    hour used to stop the pcaps and every step after them for 14 days, until retention deleted it. The
+    next run records such a read as STOPPED, and says so once the file is given up."""
     if not os.path.isdir(s.pcap_dir):
         raise SourceMissing(s.pcap_dir)
     # the directory is listed before /proc is asked, never after: a file the capture opened in between
@@ -386,6 +496,18 @@ def ingest_pcaps(
         r[0]: (r[1], r[2] or 0, r[3] or 0.0)
         for r in conn.execute("SELECT name, error, attempts, done_at FROM pcaps_done")
     }
+    n_files = n_tls = n_http = n_lan = gave_up = 0
+    # (bounds) a read still in progress never ended: the unit's time limit, the memory killer or the step's
+    # clock stopped the run inside it. Its attempt was counted when it began, and its hour is kept
+    stopped = sorted(name for name, mark in marks.items() if mark[0] == IN_PROGRESS)
+    if stopped:
+        conn.execute("UPDATE pcaps_done SET error=? WHERE error=?", (STOPPED, IN_PROGRESS))
+        conn.commit()
+    for name in stopped:
+        marks[name] = (STOPPED, *marks[name][1:])
+        if marks[name][1] >= PCAP_MAX_ATTEMPTS:
+            gave_up += 1
+            warn(f"{name}: {STOPPED}; recorded as unreadable after {marks[name][1]} attempts")
 
     def settled(name: str) -> bool:  # read, or given up on
         mark = marks.get(name)
@@ -396,30 +518,33 @@ def ingest_pcaps(
     ]
     deadline = clock() + budget
     tag = names or minimize.NameHasher((), "")  # (record)
-    n_files = n_tls = n_http = n_lan = gave_up = 0
     failed: list[str] = []
     for i, path in enumerate(pending):
         if clock() >= deadline:
             warn(f"pcaps: {len(pending) - i} file(s) deferred to the next run (time budget)")
             break
         name = os.path.basename(path)
-        attempts = marks[name][1] if name in marks else 0
+        mark = marks.get(name)
+        attempts = mark[1] if mark else 0
         size = os.path.getsize(path)
         if size < PCAP_HEADER:
             _mark_pcap(conn, name, error=f"not a capture file ({size} bytes)", attempts=PCAP_MAX_ATTEMPTS)
             conn.commit()
             warn(f"{name}: not a capture file ({size} bytes)")
             continue
+        counted = attempts
+        if mark is None or int(mark[2] // 3600) != int(time.time() // 3600):
+            counted += 1  # a second failure in the same hour is the same attempt
+        _mark_pcap(conn, name, error=IN_PROGRESS, attempts=counted)  # (bounds) committed before tshark
+        conn.commit()
         try:
             rows = extract(path)
         except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as e:
-            if name not in marks or int(marks[name][2] // 3600) != int(time.time() // 3600):
-                attempts += 1  # a second failure in the same hour is the same attempt
-            _mark_pcap(conn, name, error=str(e)[:200], attempts=attempts)
+            _mark_pcap(conn, name, error=str(e)[:200], attempts=counted)
             conn.commit()
-            if attempts >= PCAP_MAX_ATTEMPTS:
+            if counted >= PCAP_MAX_ATTEMPTS:
                 gave_up += 1
-                warn(f"{name}: {e}; recorded as unreadable after {attempts} attempts")
+                warn(f"{name}: {e}; recorded as unreadable after {counted} attempts")
             else:
                 failed.append(f"{name}: {e}")
             continue
@@ -1069,15 +1194,26 @@ def run(
     t0 = time.time()
     conn = db.connect(s.db_path)
     warn = stats.warnings.append
+    clock = _Clock()  # (bounds)
 
     def step(name: str, fn: Callable[[], None]) -> None:
         """One source, one transaction; a source that fails, has no input or could read none of it
         is not stamped as read, so coverage calls it not assessed rather than an empty hour (design
-        decision 14)."""
+        decision 14). (bounds) Each step runs on its clock (STEP_LIMIT, or its own in STEP_LIMITS): one
+        that runs past it is stopped, its transaction rolled back and named in one warning, and the
+        steps after it still run. What it committed before stays, with the cursor that covers it, so
+        the next run reads on from there: nothing skipped, nothing stored twice."""
+        limit = STEP_LIMITS.get(name, STEP_LIMIT)
         try:
-            fn()
+            with clock.on(name, limit):
+                fn()
             conn.commit()
             read[name] = t0
+        except StepTimeout:
+            conn.rollback()
+            warn(
+                f"{name}: stopped at its limit of {limit:g} s; what it had not stored waits for the next run"
+            )
         except Exception as e:
             conn.rollback()
             if isinstance(e, SourceMissing):
@@ -1107,6 +1243,7 @@ def run(
         stats.rules_added, stats.rules_removed = ingest_rules(conn, current, readable)
 
     try:
+        clock.install()  # (bounds)
         try:
             read = json.loads(db.get_meta(conn, "sources_read") or "{}")
         except ValueError:
@@ -1183,6 +1320,7 @@ def run(
         conn.commit()
         conn.execute("PRAGMA optimize")
     finally:
+        clock.restore()  # (bounds)
         conn.close()
         if lock_fh:
             lock_fh.close()

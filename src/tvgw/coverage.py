@@ -49,11 +49,12 @@ AWAKE = ("Active", "Screen Off", "Screen Saver")  # queries.AWAKE, the readings 
 
 # What a run of the ingest did with a log, read from its warnings (`ingest_runs.warnings`): each of a
 # source's warnings begins with its step's name or its log's tail key; one with a LOSS word says a stretch of
-# the log was lost before the run; a SKIPPED line costs that line only; any other is the step failing, and
-# the next run reads on from the same cursor.
+# the log was lost before the run; one with a SKIPPED word speaks of lines the run read (a malformed line
+# skipped; (bounds) an answer cut, lookups from another address on the TV's side counted); any other is the
+# step failing, and the next run reads on from the same cursor.
 PREFIXES = {"dns": ("dns: ", "adguard: "), "flows": ("flows: ",)}
 LOSS = ("log rotated or truncated", "conntrack lost events", "event socket dropped")
-SKIPPED = "malformed"
+SKIPPED = ("malformed", "records; cut", "on the TV's side")
 READ, LOST = "read", "lost"
 
 WHY_LOST = "the ingest found lines of the log lost"
@@ -99,7 +100,7 @@ def _verdict(source: str, raw: str | None) -> str | None:
     mine = [w for w in said if isinstance(w, str) and w.startswith(PREFIXES[source])]
     if any(word in w for w in mine for word in LOSS):
         return LOST
-    return None if any(SKIPPED not in w for w in mine) else READ
+    return None if any(not any(word in w for word in SKIPPED) for w in mine) else READ
 
 
 def _logs(conn: sqlite3.Connection, source: str, a: float, b: float, now: float) -> list[Gap]:

@@ -1,10 +1,13 @@
 """Ingest behaviours the first suite never pinned: persisted keys, cursors, limits, boundaries, locking."""
 
+import contextlib
 import fcntl
 import json
 import os
+import signal
 import sqlite3
 import subprocess
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,7 +24,7 @@ from conftest import (
     fake_oddport,
 )
 
-from tvgw import db, ingest, queries
+from tvgw import adguard, db, ingest, queries, tshark
 from tvgw.adguard import parse_time
 from tvgw.ingest import journal_flowlog_lines  # the real one: conftest swaps the module's for a quiet fake
 from tvgw.tshark import HttpRequest, Syn, TlsHello
@@ -368,6 +371,53 @@ def test_a_file_that_fails_twice_then_reads_keeps_its_attempt_count_and_no_error
     assert len(warnings) == 2 and all("will retry" in w for w in warnings)
 
 
+def killed(path):
+    raise SystemExit("killed inside tshark's read")  # what the unit's time limit or the memory killer does
+
+
+def test_a_read_the_run_dies_in_counts_an_attempt_an_hour_and_is_given_up_after_24(gateway, lg, clock):
+    """(bounds) The attempt was counted only once tshark had returned, so a run killed inside the read
+    counted nothing: one file that killed the job every hour stopped the pcaps and every step after them
+    for 14 days, until retention deleted the file as never read."""
+    finished_pcaps(gateway, "tv-1.pcap")
+    conn = db.connect(gateway.db_path)
+
+    def dies() -> tuple[str, int]:
+        with pytest.raises(SystemExit):
+            ingest.ingest_pcaps(conn, gateway, killed, print, none_live)
+        conn.rollback()  # the process died: only what it committed is left
+        return conn.execute("SELECT error, attempts FROM pcaps_done").fetchone()
+
+    assert dies() == dies() == (ingest.IN_PROGRESS, 1)  # a second run in the same hour is the same attempt
+    for hour in range(2, ingest.PCAP_MAX_ATTEMPTS + 1):
+        clock.now += 3600
+        assert dies() == (ingest.IN_PROGRESS, hour)
+    clock.now += 3600
+    warnings = []
+    with pytest.raises(ingest.SourceSkipped):  # nothing read: the hours the file covers are unknown
+        ingest.ingest_pcaps(conn, gateway, killed, warnings.append, none_live)
+    assert warnings == [
+        "tv-1.pcap: the run stopped while reading it; recorded as unreadable after 24 attempts"
+    ]
+    assert conn.execute("SELECT error, attempts FROM pcaps_done").fetchone() == (ingest.STOPPED, 24)
+    assert ingest.deletable_pcaps(conn) == {"tv-1.pcap"}
+    warnings.clear()
+    assert ingest.ingest_pcaps(conn, gateway, killed, warnings.append, none_live) == (0, 0, 0, 0)
+    assert warnings == []  # said once, and never read again
+
+
+def test_a_file_a_run_died_in_and_then_read_keeps_its_attempts_as_a_failed_one_does(gateway, lg, clock):
+    finished_pcaps(gateway, "tv-1.pcap")
+    conn = db.connect(gateway.db_path)
+    with pytest.raises(SystemExit):
+        ingest.ingest_pcaps(conn, gateway, killed, print, none_live)
+    conn.rollback()
+    clock.now += 3600
+    hello = [TlsHello(1793020100.0, TV, 40001, "1.2.3.4", 443, "h.example")]
+    assert ingest.ingest_pcaps(conn, gateway, lambda path: hello, print, none_live) == (1, 1, 0, 0)
+    assert conn.execute("SELECT error, attempts, tls_rows FROM pcaps_done").fetchone() == (None, 1, 1)
+
+
 def test_pcaps_past_the_time_budget_wait_for_the_next_run(gateway, lg):
     """A backlog of slow files used to run the step into the unit's timeout, and the sources after it
     were skipped every hour until it cleared."""
@@ -405,6 +455,112 @@ def test_the_cheap_sources_are_read_before_the_pcaps(gateway, lg, monkeypatch):
         gateway, lg, extract=extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
     )
     assert order == ["oddport", "pcaps"]
+
+
+# ---- (bounds) every step on a clock (design decision 107) ---------------------------------------------------
+def hourly(gateway, lg) -> ingest.Stats:
+    return ingest.run(
+        gateway, lg, extract=fake_extract, oddport_lines=fake_oddport, gate_lines=no_kernel_lines, lock=False
+    )
+
+
+def test_a_step_past_its_clock_is_rolled_back_and_named_and_the_steps_after_it_still_run(
+    gateway, lg, monkeypatch
+):
+    """A lists step that hung (a list line its model could not finish) held .ingest.lock every hour and
+    took threats, prune and the run's own row with it, so nothing recorded that the runs had stopped."""
+    handler = signal.getsignal(signal.SIGALRM)
+    after = []
+
+    def hung(conn, s, profile, now):
+        db.set_meta(conn, "list_guard", "half a scan")
+        with contextlib.suppress(Exception):  # a step that takes every error for one of its own still stops
+            time.sleep(30)
+
+    monkeypatch.setitem(ingest.STEP_LIMITS, "lists", 0.1)
+    monkeypatch.setattr(ingest.listguard, "run", hung)
+    monkeypatch.setattr(ingest.threats, "step", lambda *_: after.append("threats") or [])
+    monkeypatch.setattr(ingest, "prune", lambda *_, **__: after.append("prune") or 0)
+    st = hourly(gateway, lg)
+    assert st.warnings == [
+        "lists: stopped at its limit of 0.1 s; what it had not stored waits for the next run"
+    ]
+    conn = db.connect(gateway.db_path, readonly=True)
+    assert db.get_meta(conn, "list_guard") is None  # rolled back
+    assert after == ["threats", "prune"] and db.get_meta(conn, "last_run") == str(NOW)
+    assert conn.execute("SELECT COUNT(*) FROM ingest_runs").fetchone() == (1,)
+    assert signal.getsignal(signal.SIGALRM) is handler and signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+
+
+def test_a_dns_step_stopped_by_its_clock_keeps_what_it_committed_and_the_next_run_reads_on(
+    gateway, lg, monkeypatch
+):
+    """Nothing skipped, nothing stored twice: the batches committed before the clock ran out stay, with
+    the cursor that covers them and the count of another address on the TV's side they held; the batch
+    in flight rolls back, and the next run reads on from the cursor."""
+    log = [{"QH": f"n{i}.example", "IP": TV} for i in range(6)]
+    log[1]["IP"] = "10.10.10.99"
+    Path(gateway.adguard_querylog).write_text(
+        "".join(json.dumps({"T": f"2026-10-26T09:10:0{i}-05:00", **e}) + "\n" for i, e in enumerate(log))
+    )
+    monkeypatch.setattr(ingest, "BATCH", 2)
+    monkeypatch.setitem(ingest.STEP_LIMITS, "dns", 1.0)  # its first batch takes milliseconds
+    record = adguard.querylog_record
+    slow = lambda e: time.sleep(30) if e["QH"] == "n3.example" else record(e)  # noqa: E731
+    monkeypatch.setattr(adguard, "querylog_record", slow)
+    assert (
+        "dns: stopped at its limit of 1 s; what it had not stored waits for the next run"
+        in hourly(gateway, lg).warnings
+    )
+    conn = db.connect(gateway.db_path)
+    assert conn.execute("SELECT qname FROM dns").fetchall() == [("n0.example",)]
+    assert "dns" not in json.loads(db.get_meta(conn, "sources_read"))  # not read: coverage says so
+    assert json.loads(db.get_meta(conn, ingest.OTHERS_KEY))["lookups"] == 1
+    monkeypatch.setattr(adguard, "querylog_record", record)
+    assert hourly(gateway, lg).dns == 4
+    names = [q for (q,) in conn.execute("SELECT qname FROM dns ORDER BY t")]
+    assert names == ["n0.example", "n2.example", "n3.example", "n4.example", "n5.example"]
+
+
+def test_a_step_has_seven_times_the_references_longest_run_and_the_pcaps_their_budget_and_a_tshark_run():
+    """The clock must never stop a normal day: the longest whole run on the reference took 40 s, and the
+    pcaps step may start one tshark run just before its own budget ends."""
+    assert ingest.STEP_LIMIT == 300 and ingest.STEP_LIMITS == {"pcaps": ingest.PCAP_BUDGET + tshark.TIMEOUT}
+    assert tshark.TIMEOUT == 600
+
+
+def test_the_clock_is_cleared_after_its_step_however_the_step_ends_and_the_handler_put_back():
+    def theirs(signum, frame):  # a handler the caller had set before the run
+        raise AssertionError("the caller's alarm")
+
+    before = signal.signal(signal.SIGALRM, theirs)
+    clock = ingest._Clock()
+    clock.install()
+    try:
+        with clock.on("quick", 5):
+            assert 0 < signal.getitimer(signal.ITIMER_REAL)[0] <= 5
+        assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+        with pytest.raises(ZeroDivisionError), clock.on("failing", 5):
+            1 / 0  # noqa: B018
+        assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+        with pytest.raises(ingest.StepTimeout, match="slow"), clock.on("slow", 0.05):
+            time.sleep(30)
+        clock._expired(signal.SIGALRM, None)  # a signal handled after its step ended stops nothing
+    finally:
+        clock.restore()
+        put_back = signal.signal(signal.SIGALRM, before)
+    assert put_back is theirs and signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+
+
+def test_off_the_main_thread_a_run_has_no_clock_and_still_runs(gateway, lg):
+    """A signal reaches the main thread only, and there alone can its handler be set: no caller of
+    ingest.run runs it elsewhere, but one that did would get a whole run with no clock, not a failure."""
+    handler, done = signal.getsignal(signal.SIGALRM), []
+    worker = threading.Thread(target=lambda: done.append(hourly(gateway, lg)))
+    worker.start()
+    worker.join()
+    assert done[0].warnings == [] and done[0].dns == 2
+    assert signal.getsignal(signal.SIGALRM) is handler
 
 
 def test_coverage_counts_only_the_pcaps_that_were_read(tmp_path):
